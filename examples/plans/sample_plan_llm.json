@@ -1,0 +1,10 @@
+{
+  "plan_id": "sample-plan-llm",
+  "description": "SAMPLE: 위 계획에 로컬 LLM 준비 확인을 켠 예시. 수동확인 항목은 LLM 분석 대상이 아니다(규칙 항목이 있을 때만 사용)",
+  "checklist_id": "fsec-2026-1-server",
+  "checklist_version": "2026-1",
+  "targets": [
+    "sample-server"
+  ],
+  "use_llm": true
+}

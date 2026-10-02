@@ -1,0 +1,27 @@
+/.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+
+# 실제 증거, 보고서, DB, 로컬 설정, 비밀 정보는 커밋하지 않는다
+/data/
+/reports/
+*.db
+*.sqlite
+/config/*.local.json
+.env
+
+# 가이드 원본 문서(배포 제한 가능성)
+/checklist/sources/
+
+# Playwright MCP 가 만드는 임시 폴더(콘솔 로그/스냅샷)
+/.playwright-mcp/
+
+# 공식 문서에서 파생된 체크리스트와 상태 파일: 각자 원본에서 `checklist import` 로 만든다(재배포 제한 가능성)
+/checklist/manifest.json
+/checklist/versions/
+
+# 회사 보고서 템플릿과 보안권고안: 각자 templates/word/ 에 넣는다
+/templates/word/*.docx
+/templates/excel/*.xlsx

@@ -1,0 +1,16 @@
+{
+  "checklists": [
+    {
+      "checklist_id": "sample-local-config",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "path": "versions/sample-local-config/0.1.0.json",
+          "status": "active",
+          "sha256": "ce21fe806aa831558c3156a6a592903908bb2f466a57959f881ca615f762660d",
+          "activated_at": "2026-10-02T01:57:26+00:00"
+        }
+      ]
+    }
+  ]
+}

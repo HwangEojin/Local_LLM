@@ -1,0 +1,10 @@
+{
+  "plan_id": "sample-plan-001",
+  "description": "SAMPLE: 공식 서버 체크리스트(LINUX)를 예시 대상에 적용 (LLM 미사용). 항목은 모두 수동확인으로 시작한다",
+  "checklist_id": "fsec-2026-1-server",
+  "checklist_version": "2026-1",
+  "targets": [
+    "sample-server"
+  ],
+  "use_llm": false
+}

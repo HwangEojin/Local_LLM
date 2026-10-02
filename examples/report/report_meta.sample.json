@@ -1,0 +1,68 @@
+{
+  "customer": "SAMPLE 고객사",
+  "project": "SAMPLE 2026 웹 모의해킹",
+  "revisions": [
+    {
+      "version": "1.0",
+      "date": "2026-01-01",
+      "reason": "최초작성",
+      "content": "",
+      "author": "작성자"
+    }
+  ],
+  "targets": [
+    {
+      "target_id": "web01",
+      "name": "SAMPLE 웹사이트",
+      "url": "https://web.example.test/",
+      "kind": "WEB"
+    },
+    {
+      "target_id": "web02",
+      "name": "SAMPLE 출입등록서버",
+      "url": "https://visit.example.test/",
+      "kind": "WEB"
+    }
+  ],
+  "schedule": {
+    "overall": {
+      "start": "2026-01-01",
+      "end": "2026-01-31"
+    },
+    "phases": [
+      {
+        "name": "진단 대상 파악",
+        "start": "2026-01-01",
+        "end": "2026-01-05"
+      },
+      {
+        "name": "모의해킹 수행",
+        "start": "2026-01-06",
+        "end": "2026-01-20"
+      },
+      {
+        "name": "결과 보고서 작성",
+        "start": "2026-01-21",
+        "end": "2026-01-27"
+      },
+      {
+        "name": "결과 보고서 제출",
+        "start": "2026-01-28",
+        "end": "2026-01-31"
+      }
+    ]
+  },
+  "staff": [
+    {
+      "company": "SAMPLE 회사",
+      "person": "홍길동 수석 컨설턴트",
+      "place": "고객사 사무실"
+    }
+  ],
+  "business_name": "SAMPLE 고객사 웹 모의해킹",
+  "purpose": "(SAMPLE) 사업 목적 문장을 프로젝트에 맞게 작성한다. 생략하면 템플릿 문구를 쓴다.",
+  "scope": [
+    "(SAMPLE) 한국인터넷진흥원, OWASP top 10 항목을 기준으로 취약점 진단 및 대응 방안 도출",
+    "(SAMPLE) 모의해킹 취약점 분석∙평가 결과 보고서 작성 및 제출"
+  ]
+}
