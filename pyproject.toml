@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-audit"
+version = "0.1.0"
+description = "로컬 LLM 기반 모듈형 보안 취약점 진단 워크스테이션"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp==1.27.0",
+    "python-docx==1.2.0",
+    "openpyxl==3.1.5",
+]
+
+[project.scripts]
+audit = "audit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

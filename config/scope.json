@@ -1,0 +1,23 @@
+{
+  "engagement_id": "SAMPLE-ENGAGEMENT-001",
+  "approved_by": "SAMPLE - 실제 진단 전 승인자 이름으로 교체",
+  "valid_until": "2026-12-31",
+  "allowed_risks": [
+    "read"
+  ],
+  "targets": [
+    {
+      "target_id": "sample-app",
+      "type": "path",
+      "value": "examples/target_app",
+      "description": "테스트용 예시 대상 디렉터리"
+    },
+    {
+      "target_id": "sample-server",
+      "type": "host",
+      "value": "sample-server.example.test",
+      "platform": "LINUX",
+      "description": "SAMPLE 예시 서버 (실제 진단 전 실제 대상으로 교체)"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "model": "qwen2.5:7b-instruct",
+    "timeout_s": 120,
+    "max_request_bytes": 65536,
+    "max_response_bytes": 65536,
+    "max_calls_per_run": 200,
+    "max_retries": 2
+  },
+  "external_api": {"enabled": false},
+  "paths": {
+    "db": "data/audit.db",
+    "evidence_dir": "data/evidence",
+    "reports_dir": "reports",
+    "checklist_dir": "checklist",
+    "templates_dir": "templates"
+  },
+  "limits": {
+    "max_tool_calls_per_run": 500,
+    "run_timeout_s": 3600,
+    "max_evidence_bytes": 1048576
+  }
+}

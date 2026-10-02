@@ -1,0 +1,41 @@
+{
+  "improvements": [
+    {
+      "title": "(SAMPLE) 사용자 입력 값 검증",
+      "text": "(SAMPLE) 이용자 단에서 전송되는 모든 데이터는 조작될 수 있으므로 서버단에서 필터링 되어야 한다."
+    }
+  ],
+  "findings": [
+    {
+      "check_id": "WEB-SER-001",
+      "target_id": "web01",
+      "result": "(SAMPLE) 검색 파라미터에서 SQL 인젝션이 가능하다.",
+      "path": "(SAMPLE) 1) 메인페이지 > 검색 / https://web.example.test/search?q=",
+      "notes": "특이사항 없음",
+      "cases": [
+        {
+          "title": "(SAMPLE) 검색 기능 SQL 인젝션",
+          "steps": [
+            {
+              "text": "(SAMPLE) 검색어에 조건식을 삽입한다.",
+              "code": [
+                "삽입 구문 : ' OR 1=1 --"
+              ],
+              "image": null,
+              "caption": "(SAMPLE) 조건식 삽입"
+            },
+            {
+              "text": "(SAMPLE) 전체 게시글이 조회된다.",
+              "image": null,
+              "caption": "(SAMPLE) 응답 확인"
+            }
+          ]
+        }
+      ],
+      "recommendation": "(SAMPLE) 입력값 검증 및 Prepared Statement 사용",
+      "recommendation_titles": [
+        "SQL Injection"
+      ]
+    }
+  ]
+}

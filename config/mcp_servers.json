@@ -1,0 +1,1090 @@
+{
+  "servers": {
+    "burp": {
+      "enabled": true,
+      "description": "Burp Suite MCP (PortSwigger 'MCP Server' 확장). Burp 를 실행하고 확장의 서버 주소를 확인해 url 을 맞출 것. 결과는 진단 범위 안의 요청만 증거로 저장한다(scope_filter). 프록시 이력 등은 Burp 화면에서 사용자 승인이 필요할 수 있어 timeout_s 를 길게 둔다.",
+      "transport": "sse",
+      "url": "http://127.0.0.1:9876/",
+      "timeout_s": 180,
+      "allowed_tools": {
+        "get_proxy_http_history": {
+          "risk": "read",
+          "scope_filter": "burp",
+          "args_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "count",
+              "offset"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "get_proxy_http_history_regex": {
+          "risk": "read",
+          "scope_filter": "burp",
+          "args_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "count",
+              "offset",
+              "regex"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "regex": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            }
+          }
+        },
+        "get_organizer_items": {
+          "risk": "read",
+          "scope_filter": "burp",
+          "args_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "count",
+              "offset"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "get_scanner_issues": {
+          "risk": "read",
+          "scope_filter": "burp",
+          "args_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "count",
+              "offset"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "send_http1_request": {
+          "risk": "write",
+          "scope_args": {
+            "targetHostname": "host"
+          }
+        }
+      }
+    },
+    "ghidra": {
+      "enabled": false,
+      "description": "[템플릿] 이 PC 에 맞는 command/args 를 config/mcp_servers.local.json 에 같은 서버 이름으로 작성하고 enabled 를 true 로 둔다 (그 파일은 Git 에 올라가지 않는다). GhidraMCP 브리지(stdio). Ghidra 에서 분석할 프로그램을 열고 GhidraMCP 플러그인(http://127.0.0.1:8091/)을 켜 둬야 호출이 성공한다. 도구는 열려 있는 프로그램에 작용하므로 어떤 바이너리가 열렸는지는 scope 로 검증할 수 없다(운영자 책임). rename_/set_ 도구는 Ghidra 프로젝트를 수정하므로 write.",
+      "transport": "stdio",
+      "command": "python",
+      "persistent": false,
+      "timeout_s": 120,
+      "args": [
+        "C:/path/to/ghidra/mcp/bridge_mcp_ghidra.py",
+        "--ghidra-server",
+        "http://127.0.0.1:8091/"
+      ],
+      "allowed_tools": {
+        "list_methods": {
+          "risk": "read"
+        },
+        "list_classes": {
+          "risk": "read"
+        },
+        "decompile_function": {
+          "risk": "read"
+        },
+        "rename_function": {
+          "risk": "write"
+        },
+        "rename_data": {
+          "risk": "write"
+        },
+        "list_segments": {
+          "risk": "read"
+        },
+        "list_imports": {
+          "risk": "read"
+        },
+        "list_exports": {
+          "risk": "read"
+        },
+        "list_namespaces": {
+          "risk": "read"
+        },
+        "list_data_items": {
+          "risk": "read"
+        },
+        "search_functions_by_name": {
+          "risk": "read"
+        },
+        "rename_variable": {
+          "risk": "write"
+        },
+        "get_function_by_address": {
+          "risk": "read"
+        },
+        "get_current_address": {
+          "risk": "read"
+        },
+        "get_current_function": {
+          "risk": "read"
+        },
+        "list_functions": {
+          "risk": "read"
+        },
+        "decompile_function_by_address": {
+          "risk": "read"
+        },
+        "disassemble_function": {
+          "risk": "read"
+        },
+        "set_decompiler_comment": {
+          "risk": "write"
+        },
+        "set_disassembly_comment": {
+          "risk": "write"
+        },
+        "rename_function_by_address": {
+          "risk": "write"
+        },
+        "set_function_prototype": {
+          "risk": "write"
+        },
+        "set_local_variable_type": {
+          "risk": "write"
+        },
+        "get_xrefs_to": {
+          "risk": "read"
+        },
+        "get_xrefs_from": {
+          "risk": "read"
+        },
+        "get_function_xrefs": {
+          "risk": "read"
+        },
+        "list_strings": {
+          "risk": "read"
+        }
+      },
+      "error_patterns": [
+        "^\\s*Request failed:",
+        "^\\s*Error\\b"
+      ]
+    },
+    "frida": {
+      "enabled": false,
+      "description": "[템플릿] 이 PC 에 맞는 command/args 를 config/mcp_servers.local.json 에 같은 서버 이름으로 작성하고 enabled 를 true 로 둔다 (그 파일은 Git 에 올라가지 않는다). Frida MCP(stdio). 장치/프로세스 조회는 read, attach/spawn/hook/실행/종료는 dangerous(scope 의 allowed_risks 에 dangerous 가 있고 호출마다 사람이 승인해야 실행). 세션 id 를 호출 간에 쓰므로 persistent 연결을 쓴다. 대상 프로세스/기기는 scope 로 검증할 수 없다(운영자 책임).",
+      "transport": "stdio",
+      "command": "frida-mcp",
+      "args": [],
+      "persistent": true,
+      "timeout_s": 120,
+      "allowed_tools": {
+        "list_processes": {
+          "risk": "read"
+        },
+        "enumerate_processes": {
+          "risk": "read"
+        },
+        "enumerate_devices": {
+          "risk": "read"
+        },
+        "get_device": {
+          "risk": "read"
+        },
+        "get_usb_device": {
+          "risk": "read"
+        },
+        "get_process_by_name": {
+          "risk": "read"
+        },
+        "attach_to_process": {
+          "risk": "dangerous"
+        },
+        "create_simple_hook": {
+          "risk": "dangerous"
+        },
+        "spawn_process": {
+          "risk": "dangerous"
+        },
+        "resume_process": {
+          "risk": "dangerous"
+        },
+        "kill_process": {
+          "risk": "dangerous"
+        },
+        "create_interactive_session": {
+          "risk": "dangerous"
+        },
+        "execute_in_session": {
+          "risk": "dangerous"
+        }
+      }
+    },
+    "jadx": {
+      "enabled": false,
+      "description": "[템플릿] 이 PC 에 맞는 command/args 를 config/mcp_servers.local.json 에 같은 서버 이름으로 작성하고 enabled 를 true 로 둔다 (그 파일은 Git 에 올라가지 않는다). JADX-AI-MCP(stdio, uv). JADX GUI 에 분석할 APK 를 열고 플러그인을 켜 둬야 호출이 성공한다. 어떤 앱이 열렸는지는 scope 로 검증할 수 없다(운영자 책임). rename_*/clear_cache 는 write.",
+      "transport": "stdio",
+      "command": "uv",
+      "persistent": false,
+      "timeout_s": 120,
+      "args": [
+        "--directory",
+        "C:/path/to/jadx-mcp-server",
+        "run",
+        "jadx_mcp_server.py"
+      ],
+      "allowed_tools": {
+        "fetch_current_class": {
+          "risk": "read"
+        },
+        "get_selected_text": {
+          "risk": "read"
+        },
+        "get_method_by_name": {
+          "risk": "read"
+        },
+        "get_all_classes": {
+          "risk": "read"
+        },
+        "get_class_source": {
+          "risk": "read"
+        },
+        "search_method_by_name": {
+          "risk": "read"
+        },
+        "get_methods_of_class": {
+          "risk": "read"
+        },
+        "search_classes_by_keyword": {
+          "risk": "read"
+        },
+        "get_fields_of_class": {
+          "risk": "read"
+        },
+        "get_smali_of_class": {
+          "risk": "read"
+        },
+        "get_manifest_component": {
+          "risk": "read"
+        },
+        "get_android_manifest": {
+          "risk": "read"
+        },
+        "get_strings": {
+          "risk": "read"
+        },
+        "get_all_resource_file_names": {
+          "risk": "read"
+        },
+        "get_resource_file": {
+          "risk": "read"
+        },
+        "get_main_application_classes_names": {
+          "risk": "read"
+        },
+        "get_main_application_classes_code": {
+          "risk": "read"
+        },
+        "get_main_activity_class": {
+          "risk": "read"
+        },
+        "get_package_tree": {
+          "risk": "read"
+        },
+        "get_cache_stats": {
+          "risk": "read"
+        },
+        "clear_cache": {
+          "risk": "write"
+        },
+        "rename_class": {
+          "risk": "write"
+        },
+        "rename_method": {
+          "risk": "write"
+        },
+        "rename_field": {
+          "risk": "write"
+        },
+        "rename_package": {
+          "risk": "write"
+        },
+        "rename_variable": {
+          "risk": "write"
+        },
+        "debug_get_stack_frames": {
+          "risk": "read"
+        },
+        "debug_get_threads": {
+          "risk": "read"
+        },
+        "debug_get_variables": {
+          "risk": "read"
+        },
+        "get_xrefs_to_class": {
+          "risk": "read"
+        },
+        "get_xrefs_to_method": {
+          "risk": "read"
+        },
+        "get_xrefs_to_field": {
+          "risk": "read"
+        }
+      },
+      "error_patterns": [
+        "^\\s*\\{\\s*\"error\"\\s*:"
+      ]
+    },
+    "playwright": {
+      "enabled": false,
+      "description": "[템플릿] 이 PC 에 맞는 command/args 를 config/mcp_servers.local.json 에 같은 서버 이름으로 작성하고 enabled 를 true 로 둔다 (그 파일은 Git 에 올라가지 않는다). Playwright MCP(@playwright/mcp 0.0.83, Chromium 헤드리스, 격리 프로필). 페이지 상태를 호출 간에 유지하므로 persistent. browser_navigate/browser_tabs 의 url 은 scope(host/url 대상)로 검사한다. 클릭/입력/업로드는 write, 스크립트 실행(browser_evaluate, browser_run_code_unsafe)은 dangerous. 로컬 파일을 쓰는 filename 인자는 허용하지 않는다. 링크를 따라 범위 밖으로 나가는 것은 도구 인자로 막을 수 없으니 필요하면 args 에 --allowed-origins \"https://대상\" 을 추가할 것.",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@0.0.83",
+        "--browser",
+        "chromium",
+        "--headless",
+        "--isolated"
+      ],
+      "persistent": true,
+      "timeout_s": 120,
+      "allowed_tools": {
+        "browser_snapshot": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "target": {
+                "description": "Exact target element reference from the page snapshot, or a unique element selector",
+                "type": "string"
+              },
+              "depth": {
+                "description": "Limit the depth of the snapshot tree",
+                "type": "number"
+              },
+              "boxes": {
+                "description": "Include each element's bounding box as [box=x,y,width,height] in the snapshot. Coordinates are viewport-relative, in CSS pixels (Element.getBoundingClientRect)",
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false,
+            "required": []
+          }
+        },
+        "browser_take_screenshot": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "element": {
+                "description": "Human-readable element description used to obtain permission to interact with the element",
+                "type": "string"
+              },
+              "target": {
+                "description": "Exact target element reference from the page snapshot, or a unique element selector",
+                "type": "string"
+              },
+              "type": {
+                "description": "Image format for the screenshot. If unset, inferred from the filename extension, otherwise png.",
+                "type": "string",
+                "enum": [
+                  "png",
+                  "jpeg",
+                  "webp"
+                ]
+              },
+              "fullPage": {
+                "description": "When true, takes a screenshot of the full scrollable page, instead of the currently visible viewport. Cannot be used with element screenshots.",
+                "type": "boolean"
+              },
+              "scale": {
+                "default": "css",
+                "description": "Image resolution scale. \"css\" produces a screenshot sized in CSS pixels (smaller, consistent across devices). \"device\" produces a high-resolution screenshot using device pixels (larger, accounts for the device pixel ratio). Default is css.",
+                "type": "string",
+                "enum": [
+                  "css",
+                  "device"
+                ]
+              }
+            },
+            "required": [
+              "scale"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_console_messages": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "default": "info",
+                "description": "Level of the console messages to return. Each level includes the messages of more severe levels. Defaults to \"info\".",
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info",
+                  "debug"
+                ]
+              },
+              "all": {
+                "description": "Return all console messages since the beginning of the session, not just since the last navigation. Defaults to false.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "level"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_network_requests": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "static": {
+                "default": false,
+                "description": "Whether to include successful static resources like images, fonts, scripts, etc. Defaults to false.",
+                "type": "boolean"
+              },
+              "filter": {
+                "description": "Only return requests whose URL matches this regexp (e.g. \"/api/.*user\").",
+                "type": "string"
+              }
+            },
+            "required": [
+              "static"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_network_request": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991,
+                "description": "1-based index of the request, as printed by browser_network_requests."
+              },
+              "part": {
+                "description": "Return only this part of the request. Omit to return full details.",
+                "type": "string",
+                "enum": [
+                  "request-headers",
+                  "request-body",
+                  "response-headers",
+                  "response-body"
+                ]
+              }
+            },
+            "required": [
+              "index"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_find": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "description": "Plain text to search for in the page snapshot (case-insensitive substring match). Provide either text or regex, not both.",
+                "type": "string"
+              },
+              "regex": {
+                "description": "Regular expression to search for in the page snapshot. Matching is case-sensitive by default; wrap the pattern in slashes to add flags, e.g. \"/error/i\" for case-insensitive. Provide either text or regex, not both.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": []
+          }
+        },
+        "browser_wait_for": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "time": {
+                "description": "The time to wait in seconds, at most 30",
+                "type": "number"
+              },
+              "text": {
+                "description": "The text to wait for",
+                "type": "string"
+              },
+              "textGone": {
+                "description": "The text to wait for to disappear",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "browser_close": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        "browser_navigate": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "The URL to navigate to"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
+          },
+          "scope_args": {
+            "url": "url"
+          }
+        },
+        "browser_navigate_back": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        "browser_tabs": {
+          "risk": "read",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "list",
+                  "new",
+                  "close",
+                  "select"
+                ],
+                "description": "Operation to perform"
+              },
+              "index": {
+                "description": "Tab index, used for close/select. If omitted for close, current tab is closed.",
+                "type": "number"
+              },
+              "url": {
+                "description": "URL to navigate to in the new tab, used for new.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          "scope_args": {
+            "url": "url"
+          }
+        },
+        "browser_click": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "element": {
+                "description": "Human-readable element description used to obtain permission to interact with the element",
+                "type": "string"
+              },
+              "target": {
+                "type": "string",
+                "description": "Exact target element reference from the page snapshot, or a unique element selector"
+              },
+              "doubleClick": {
+                "description": "Whether to perform a double click instead of a single click",
+                "type": "boolean"
+              },
+              "button": {
+                "description": "Button to click, defaults to left",
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right",
+                  "middle"
+                ]
+              },
+              "modifiers": {
+                "description": "Modifier keys to press",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "Alt",
+                    "Control",
+                    "ControlOrMeta",
+                    "Meta",
+                    "Shift"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "target"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_type": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "element": {
+                "description": "Human-readable element description used to obtain permission to interact with the element",
+                "type": "string"
+              },
+              "target": {
+                "type": "string",
+                "description": "Exact target element reference from the page snapshot, or a unique element selector"
+              },
+              "text": {
+                "type": "string",
+                "description": "Text to type into the element"
+              },
+              "submit": {
+                "description": "Whether to submit entered text (press Enter after)",
+                "type": "boolean"
+              },
+              "slowly": {
+                "description": "Whether to type one character at a time. Useful for triggering key handlers in the page. By default entire text is filled in at once.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "target",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_fill_form": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "element": {
+                      "description": "Human-readable element description used to obtain permission to interact with the element",
+                      "type": "string"
+                    },
+                    "target": {
+                      "type": "string",
+                      "description": "Exact target element reference from the page snapshot, or a unique element selector"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "Human-readable field name"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "textbox",
+                        "checkbox",
+                        "radio",
+                        "combobox",
+                        "slider"
+                      ],
+                      "description": "Type of the field"
+                    },
+                    "value": {
+                      "type": "string",
+                      "description": "Value to fill in the field. If the field is a checkbox, the value should be `true` or `false`. If the field is a combobox, the value should be the text of the option."
+                    }
+                  },
+                  "required": [
+                    "target",
+                    "name",
+                    "type",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Fields to fill in"
+              }
+            },
+            "required": [
+              "fields"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_press_key": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`"
+              }
+            },
+            "required": [
+              "key"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_select_option": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "element": {
+                "description": "Human-readable element description used to obtain permission to interact with the element",
+                "type": "string"
+              },
+              "target": {
+                "type": "string",
+                "description": "Exact target element reference from the page snapshot, or a unique element selector"
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Array of values to select in the dropdown. This can be a single value or multiple values."
+              }
+            },
+            "required": [
+              "target",
+              "values"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_hover": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "element": {
+                "description": "Human-readable element description used to obtain permission to interact with the element",
+                "type": "string"
+              },
+              "target": {
+                "type": "string",
+                "description": "Exact target element reference from the page snapshot, or a unique element selector"
+              }
+            },
+            "required": [
+              "target"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_drag": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "startElement": {
+                "description": "Human-readable source element description used to obtain the permission to interact with the element",
+                "type": "string"
+              },
+              "startTarget": {
+                "type": "string",
+                "description": "Exact target element reference from the page snapshot, or a unique element selector"
+              },
+              "endElement": {
+                "description": "Human-readable target element description used to obtain the permission to interact with the element",
+                "type": "string"
+              },
+              "endTarget": {
+                "type": "string",
+                "description": "Exact target element reference from the page snapshot, or a unique element selector"
+              }
+            },
+            "required": [
+              "startTarget",
+              "endTarget"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_drop": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "element": {
+                "description": "Human-readable element description used to obtain permission to interact with the element",
+                "type": "string"
+              },
+              "target": {
+                "type": "string",
+                "description": "Exact target element reference from the page snapshot, or a unique element selector"
+              },
+              "paths": {
+                "description": "Absolute paths to files to drop onto the element.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "data": {
+                "description": "Data to drop, as a map of MIME type to string value (e.g. {\"text/plain\": \"hello\", \"text/uri-list\": \"https://example.com\"}).",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "target"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_file_upload": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "paths": {
+                "description": "The absolute paths to the files to upload. Can be single file or multiple files. If omitted, file chooser is cancelled.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "browser_handle_dialog": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "accept": {
+                "type": "boolean",
+                "description": "Whether to accept the dialog."
+              },
+              "promptText": {
+                "description": "The text of the prompt in case of a prompt dialog.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "accept"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_resize": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "width": {
+                "type": "number",
+                "description": "Width of the browser window"
+              },
+              "height": {
+                "type": "number",
+                "description": "Height of the browser window"
+              }
+            },
+            "required": [
+              "width",
+              "height"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_emulate_media": {
+          "risk": "write",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "colorScheme": {
+                "description": "Emulates the prefers-color-scheme media feature",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "light",
+                      "dark"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reducedMotion": {
+                "description": "Emulates the prefers-reduced-motion media feature",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "reduce",
+                      "no-preference"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "forcedColors": {
+                "description": "Emulates the forced-colors media feature",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "none"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "contrast": {
+                "description": "Emulates the prefers-contrast media feature",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "more",
+                      "no-preference"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "media": {
+                "description": "Changes the CSS media type of the page",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "screen",
+                      "print"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "browser_evaluate": {
+          "risk": "dangerous",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "element": {
+                "description": "Human-readable element description used to obtain permission to interact with the element",
+                "type": "string"
+              },
+              "target": {
+                "description": "Exact target element reference from the page snapshot, or a unique element selector",
+                "type": "string"
+              },
+              "function": {
+                "type": "string",
+                "description": "() => { /* code */ } or (element) => { /* code */ } when element is provided"
+              }
+            },
+            "required": [
+              "function"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "browser_run_code_unsafe": {
+          "risk": "dangerous",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "description": "A JavaScript function containing Playwright code to execute. It will be invoked with a single argument, page, which you can use for any page interaction. For example: `async (page) => { await page.getByRole('button', { name: 'Submit' }).click(); return await page.title(); }`",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": []
+          }
+        }
+      }
+    }
+  }
+}
