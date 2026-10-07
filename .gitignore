@@ -25,3 +25,8 @@ dist/
 # 회사 보고서 템플릿과 보안권고안: 각자 templates/word/ 에 넣는다
 /templates/word/*.docx
 /templates/excel/*.xlsx
+
+# 백업/보관용 회사 템플릿 사본, 1회성 디버그 스크립트/페이로드(세션 쿠키 등 포함될 수 있음)
+/templates/word/archive/
+/examples/plans/_burp_args/
+/examples/plans/_pw_args/

@@ -1,9 +1,10 @@
 {
-  "engagement_id": "SAMPLE-ENGAGEMENT-001",
-  "approved_by": "SAMPLE - 실제 진단 전 승인자 이름으로 교체",
+  "engagement_id": "DEMO-BASELINE-2026-10",
+  "approved_by": "황어진 (대상 앱 소유자 본인, 자체 테스트용 데모)",
   "valid_until": "2026-12-31",
   "allowed_risks": [
-    "read"
+    "read",
+    "write"
   ],
   "targets": [
     {
@@ -18,6 +19,13 @@
       "value": "sample-server.example.test",
       "platform": "LINUX",
       "description": "SAMPLE 예시 서버 (실제 진단 전 실제 대상으로 교체)"
+    },
+    {
+      "target_id": "baseline-demo",
+      "type": "host",
+      "value": "localhost",
+      "platform": "WEB",
+      "description": "HwangEojin/demo 레포의 BASELINE 테스트 웹(Level1~5, docker-compose, localhost:8090 — Burp 프록시 리스너가 8080 을 쓰므로 충돌 방지차 포트 변경함)"
     }
   ]
 }
