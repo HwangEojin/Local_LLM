@@ -1,0 +1,8 @@
+{
+  "plan_id": "demo-baseline-web-001",
+  "checklist_id": "fsec-2026-1-web-mobile-hts",
+  "checklist_version": "2026-1",
+  "targets": ["baseline-demo"],
+  "check_ids": ["WEB-SER-001", "WEB-SER-041"],
+  "use_llm": true
+}

@@ -48,6 +48,24 @@ class CLITest(unittest.TestCase):
         (self.h.path / "config/scope.json").write_text("{}", encoding="utf-8")
         self.assertEqual(self.cli("plan", str(self.plan))[0], 1)  # scope 가 깨지면 fail-closed
 
+    def test_evidence_add_args_from_file(self):
+        # --args @file.json : PowerShell 등에서 JSON 인자의 따옴표가 깨지는 문제를 피하는 경로
+        rc, out = self.cli("run", str(self.plan))
+        run_id = out.split()[1]
+        args_file = self.h.path / "args.json"
+        args_file.write_text(json.dumps({"path": str(self.h.path / "examples" / "target_app")}), encoding="utf-8")
+        rc, out = self.cli("evidence", "add", run_id, "SAMPLE-001", "sample-app",
+                           "fs.list_dir", "--args", f"@{args_file}")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("증거 추가됨", out)
+
+    def test_evidence_add_bad_args_file_path(self):
+        rc, out = self.cli("run", str(self.plan))
+        run_id = out.split()[1]
+        rc, out = self.cli("evidence", "add", run_id, "SAMPLE-001", "sample-app",
+                           "fs.list_dir", "--args", "@no-such-file.json")
+        self.assertEqual(rc, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

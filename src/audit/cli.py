@@ -312,7 +312,13 @@ def cmd_evidence(ctx, args):
     from .manual_evidence import add_tool_evidence
     from .policy import interactive_approver
     try:
-        tool_args = json.loads(args.args) if args.args else {}
+        raw = args.args
+        if raw and raw.startswith("@"):  # --args @file.json : 쉘 따옴표 문제를 피하기 위한 파일 입력
+            raw = Path(raw[1:]).read_text(encoding="utf-8")
+        tool_args = json.loads(raw) if raw else {}
+    except OSError as e:
+        print(f"--args 파일을 읽을 수 없습니다: {e}", file=sys.stderr)
+        return 2
     except json.JSONDecodeError as e:
         print(f"--args 가 JSON 이 아닙니다: {e}", file=sys.stderr)
         return 2

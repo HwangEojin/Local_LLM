@@ -302,6 +302,8 @@ REPORT_META = {
         "business_name": {"type": "string"},  # 사업명(생략하면 '고객사 프로젝트')
         "purpose": {"type": "string"},  # 사업 목적 문단(생략하면 템플릿 문구)
         "scope": {"type": "array", "items": _STR},  # 사업 범위 항목(생략하면 템플릿 문구)
+        # 보호대책 '적용 방안' 예제 코드 중 남길 언어(대상 서비스에 맞는 것만). 생략하면 전부 유지.
+        "code_languages": {"type": "array", "items": _STR},
         "diagnostic_items": {"type": "array", "items": {  # 수행 방법의 '진단 항목' 표(생략하면 템플릿 표)
             "type": "object", "additionalProperties": False, "required": ["code", "name"],
             "properties": {"code": _STR, "name": _STR, "description": {"type": "string"}}}},
@@ -319,7 +321,8 @@ REPORT_META = {
             "phases": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False, "required": ["name", "start", "end"],
                 "properties": {"name": _STR, "start": _ISO_DATE, "end": _ISO_DATE,
-                               "note": {"type": "string"}}}}}},
+                               "note": {"type": "string"},
+                               "task": {"type": "string"}}}}}},  # '업무' 열(확장 템플릿에만 있음)이 있을 때만 쓰인다
         "staff": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["company", "person"],
             "properties": {"company": _STR, "person": _STR, "place": {"type": "string"}}}},
