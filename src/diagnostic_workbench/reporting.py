@@ -1,0 +1,167 @@
+"""보고서: 기존 audit.report / audit.pentest_report 를 수정 없이 재사용한다.
+
+LegacyStorage 가 PostgreSQL 기록을 기존 모듈이 읽는 형식(SQLite Storage 의 조회 메서드)으로 보여 준다.
+기존 양식에는 '미실행' 판정이 없어 NOT_RUN 은 진단불가(INCONCLUSIVE)로 싣고 사유에 미실행임을 적으며,
+실제 커버리지(NOT_RUN 포함)·작업 상태·차단 사유·도구 실패는 Excel 의 '커버리지' 시트에 따로 남긴다.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from audit.checklist_engine import Checklists
+from audit.evidence import EvidenceStore
+
+from . import db
+
+_TO_LEGACY = {"NEEDS_REVIEW": "MANUAL_REVIEW", "NOT_RUN": "INCONCLUSIVE"}
+_RESULTS = (
+    "SELECT rci.id, rci.run_id::text AS run_id, ci.check_id, ra.target_id, rci.verdict, rci.decided_by, rci.reason, "
+    "rci.rule_outcome, rci.llm_outcome, rci.updated_at, ci.body, cv.checklist_id, cv.version AS checklist_version, "
+    "COALESCE((SELECT array_agg(e.id::text ORDER BY e.collected_at) FROM evidence e "
+    "          WHERE e.run_checklist_item_id = rci.id), '{}') AS evidence_ids "
+    "FROM run_checklist_items rci JOIN checklist_items ci ON ci.id = rci.checklist_item_id "
+    "JOIN checklist_versions cv ON cv.id = ci.checklist_version_id "
+    "JOIN run_assets ra ON ra.run_id = rci.run_id AND ra.asset_id = rci.asset_id ")
+_EVIDENCE = (
+    "SELECT e.id::text AS evidence_id, e.run_id::text AS run_id, COALESCE(ci.check_id, '(탐색)') AS check_id, "
+    "ra.target_id, e.requirement_id, e.collected_at, a.kind || ':' || a.value AS target_ref, e.tool, e.tool_version, "
+    "e.args, e.rel_path, e.sha256, e.size, e.truncated, e.success, e.error "
+    "FROM evidence e JOIN assets a ON a.id = e.asset_id "
+    "JOIN run_assets ra ON ra.run_id = e.run_id AND ra.asset_id = e.asset_id "
+    "LEFT JOIN run_checklist_items rci ON rci.id = e.run_checklist_item_id "
+    "LEFT JOIN checklist_items ci ON ci.id = rci.checklist_item_id ")
+
+
+def _js(v):
+    return json.dumps(v, ensure_ascii=False) if v is not None else None
+
+
+class LegacyStorage:
+    def __init__(self, conn, evidence_dir: Path):
+        self.conn, self.evidence_dir = conn, Path(evidence_dir)
+
+    def get_run(self, run_id):
+        r = self.conn.execute(
+            "SELECT r.*, cv.checklist_id, cv.version AS checklist_version, cv.sha256 AS checklist_sha256 "
+            "FROM runs r JOIN checklist_versions cv ON cv.id = r.checklist_version_id WHERE r.id = %s",
+            (run_id,)).fetchone()
+        if r is None:
+            return None
+        created = json.loads(self.audit_events(run_id)[0]["details"])
+        return {"run_id": str(r["id"]), "plan_json": _js(created["plan"]), "plan_sha256": "",
+                "checklist_id": r["checklist_id"], "checklist_version": r["checklist_version"],
+                "checklist_sha256": r["checklist_sha256"], "engagement_id": r["engagement_id"],
+                "status": r["status"], "created_at": r["created_at"].isoformat(timespec="seconds"),
+                "updated_at": r["updated_at"].isoformat(timespec="seconds"), "error": r["stop_reason"]}
+
+    def _result(self, r):
+        not_run = r["verdict"] == "NOT_RUN"
+        return {"run_id": r["run_id"], "check_id": r["check_id"], "target_id": r["target_id"],
+                "verdict": _TO_LEGACY.get(r["verdict"], r["verdict"]),
+                "method": "manual_review" if r["decided_by"] == "reviewer" else r["body"]["verification_method"]["type"],
+                "reason": "미실행(NOT_RUN): 이 항목은 실행되지 않았음" if not_run else r["reason"],
+                "rule_outcome": _js(r["rule_outcome"]), "llm_outcome": _js(r["llm_outcome"]),
+                "evidence_ids": _js(r["evidence_ids"]), "checklist_id": r["checklist_id"],
+                "checklist_version": r["checklist_version"], "rule_version": r["body"]["rule_version"],
+                "decided_at": r["updated_at"].isoformat(timespec="seconds")}
+
+    def results(self, run_id):
+        return [self._result(r) for r in self.conn.execute(
+            _RESULTS + "WHERE rci.run_id = %s ORDER BY ci.check_id, ra.target_id", (run_id,))]
+
+    def get_result(self, run_id, check_id, target_id):
+        r = self.conn.execute(_RESULTS + "WHERE rci.run_id=%s AND ci.check_id=%s AND ra.target_id=%s",
+                              (run_id, check_id, target_id)).fetchone()
+        return self._result(r) if r else None
+
+    def _evidence(self, e):
+        args, rel = e.pop("args"), e.pop("rel_path")
+        return {**e, "collected_at": e["collected_at"].isoformat(timespec="seconds"), "args_json": _js(args),
+                "raw_path": str(self.evidence_dir / rel) if rel else None,
+                "truncated": int(e["truncated"]), "success": int(e["success"])}
+
+    def evidence(self, run_id=None, evidence_id=None):
+        if evidence_id:
+            e = self.conn.execute(_EVIDENCE + "WHERE e.id::text = %s", (evidence_id,)).fetchone()
+            return self._evidence(e) if e else None
+        return [self._evidence(e) for e in self.conn.execute(
+            _EVIDENCE + "WHERE e.run_id = %s ORDER BY e.collected_at, e.id", (run_id,))]
+
+    def history(self, run_id):
+        return [{**h, "old_verdict": _TO_LEGACY.get(h["old_verdict"], h["old_verdict"]),
+                 "new_verdict": _TO_LEGACY.get(h["new_verdict"], h["new_verdict"]),
+                 "changed_at": h["changed_at"].isoformat(timespec="seconds")} for h in self.conn.execute(
+            "SELECT vh.id, rci.run_id::text AS run_id, ci.check_id, ra.target_id, vh.old_verdict, vh.new_verdict, "
+            "vh.reason, vh.actor, vh.changed_at FROM verdict_history vh "
+            "JOIN run_checklist_items rci ON rci.id = vh.run_checklist_item_id "
+            "JOIN checklist_items ci ON ci.id = rci.checklist_item_id "
+            "JOIN run_assets ra ON ra.run_id = rci.run_id AND ra.asset_id = rci.asset_id "
+            "WHERE rci.run_id = %s ORDER BY vh.id", (run_id,))]
+
+    def audit_events(self, run_id):
+        return [{"id": e["id"], "run_id": str(e["run_id"]), "ts": e["ts"].isoformat(timespec="seconds"),
+                 "event": e["event"], "details": _js(e["details"])} for e in self.conn.execute(
+            "SELECT * FROM audit_events WHERE run_id = %s ORDER BY id", (run_id,))]
+
+    def model_calls(self, run_id):
+        return [{**c, "ok": int(c["ok"])} for c in self.conn.execute(
+            "SELECT * FROM model_calls WHERE run_id = %s ORDER BY id", (run_id,))]
+
+    def audit(self, run_id, event, details):
+        db.audit(self.conn, run_id, event, details)
+        self.conn.commit()
+
+
+def coverage(conn, run_id) -> dict:
+    """보고서 상태 표시용 사실: 실제 판정 분포, 작업 상태, 차단·실패 내역."""
+    q = lambda sql: conn.execute(sql, (run_id,)).fetchall()  # noqa: E731
+    return {
+        "verdicts": {r["verdict"]: r["n"] for r in q(
+            "SELECT verdict, count(*) AS n FROM run_checklist_items WHERE run_id=%s GROUP BY 1 ORDER BY 1")},
+        "backlog": {r["status"]: r["n"] for r in q(
+            "SELECT status, count(*) AS n FROM backlog_items WHERE run_id=%s GROUP BY 1 ORDER BY 1")},
+        "blocked": q("SELECT kind, reason, policy_class, blocked_reason FROM backlog_items WHERE run_id=%s "
+                     "AND status='BLOCKED' ORDER BY created_at"),
+        "tool_failures": q("SELECT tool, policy_decision, status, error FROM tool_invocations WHERE run_id=%s "
+                           "AND status <> 'SUCCEEDED' ORDER BY started_at"),
+        "explorations": q("SELECT state, payload->>'tool' AS tool, payload->>'rationale' AS rationale "
+                          "FROM exploration_nodes WHERE run_id=%s AND kind='intent' ORDER BY created_at"),
+    }
+
+
+def _add_coverage_sheet(xlsx: Path, cov: dict):
+    from openpyxl import load_workbook
+    wb = load_workbook(str(xlsx))
+    ws = wb.create_sheet("커버리지")
+    ws.append(["구분", "항목", "값", "비고"])
+    for v, n in cov["verdicts"].items():
+        ws.append(["판정(실제)", v, n, "NOT_RUN 은 판정결과 시트에서 INCONCLUSIVE(진단불가)로 표시됨" if v == "NOT_RUN" else ""])
+    for s, n in cov["backlog"].items():
+        ws.append(["작업 상태", s, n, ""])
+    for b in cov["blocked"]:
+        ws.append(["차단된 작업", b["reason"], b["policy_class"] or "", b["blocked_reason"] or ""])
+    for t in cov["tool_failures"]:
+        ws.append(["도구 실패/거부", t["tool"], f"{t['policy_decision']}/{t['status']}", t["error"] or ""])
+    for e in cov["explorations"]:
+        ws.append(["탐색(가설, 판정 아님)", e["tool"], e["state"], e["rationale"]])
+    wb.save(str(xlsx))
+
+
+def generate(cfg, conn, run: dict, kind=None, meta=None, findings=None) -> dict:
+    run_id = str(run["id"])
+    storage = LegacyStorage(conn, cfg.evidence_dir)
+    checklists = Checklists(cfg.settings.path("checklist_dir"))
+    cov = coverage(conn, run["id"])
+    if kind:  # 회사 템플릿 기반 모의해킹 결과보고서(Word)
+        from audit import pentest_report
+        res = pentest_report.generate(storage, run_id, checklists, cfg.settings, kind, meta, findings)
+    else:
+        from audit import report
+        res = report.generate(storage, run_id, checklists, cfg.settings, EvidenceStore(storage, cfg.evidence_dir))
+        _add_coverage_sheet(Path(res["xlsx"]), cov)
+        from openpyxl import load_workbook  # 다시 열어 시트 구성을 확인한다
+        sheets = load_workbook(res["xlsx"], read_only=True).sheetnames
+        if "커버리지" not in sheets or "판정결과" not in sheets:
+            res["problems"].append(f"xlsx: 예상 시트가 없음 {sheets}")
+    return {**res, "coverage": cov}

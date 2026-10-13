@@ -11,10 +11,12 @@ dependencies = [
     "mcp==1.27.0",
     "python-docx==1.2.0",
     "openpyxl==3.1.5",
+    "psycopg[binary]==3.2.13",
 ]
 
 [project.scripts]
 audit = "audit.cli:main"
+workbench = "diagnostic_workbench.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

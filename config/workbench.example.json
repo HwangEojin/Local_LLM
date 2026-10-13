@@ -1,0 +1,7 @@
+{
+  "exclude": ["admin.example.test", "C:/path/to/target/secrets"],
+  "lease_s": 300,
+  "max_attempts": 2,
+  "approval_ttl_h": 24,
+  "budget": {"max_tasks": 2000, "max_tool_calls": 500, "timeout_s": 3600, "max_explorations": 3}
+}

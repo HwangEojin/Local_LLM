@@ -4,6 +4,9 @@
 판정은 **등록된 도구로 수집한 증거 + 결정론적 규칙**으로 내리고, LLM은 참고 의견만 낸다.
 설계 원칙과 요구사항은 [CLAUDE.md](CLAUDE.md) 참고.
 
+> **PostgreSQL 작업 큐 기반의 새 실행 경로(`diagnostic_workbench`)**: 설치·사용법·구현 상태표는
+> [WORKBENCH.md](WORKBENCH.md). 이 문서는 기존 `audit`(SQLite) CLI 를 설명하며, 두 경로는 함께 쓸 수 있다.
+
 > 공식 평가기준(제2026-1호) xlsx 에서 변환한 체크리스트 12개를 사용한다(§5.1). 엔진 시험용 예시 체크리스트는
 > `tests/fixtures/` 에만 있으며 실제 진단에 쓰지 않는다.
 
