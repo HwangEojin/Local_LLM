@@ -6,7 +6,7 @@ from pathlib import Path
 
 from audit import config, schemas
 from audit.models import ConfigError
-from audit.storage import Storage
+from tests.fixtures.legacy_run.storage import Storage
 
 ROOT = Path(__file__).resolve().parents[2]
 

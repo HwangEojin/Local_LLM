@@ -8,7 +8,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from .models import now_iso
+from audit.models import now_iso
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -163,7 +163,7 @@ class Storage:
 
     # ---- 감사 기록 및 모델 사용량
     def audit(self, run_id, event, details: dict):
-        from .policy import mask_secrets  # 지연 import: policy 는 storage 를 import 하지 않는다
+        from audit.policy import mask_secrets  # 지연 import: policy 는 storage 를 import 하지 않는다
         self.db.execute("INSERT INTO audit_events (run_id, ts, event, details) VALUES (?,?,?,?)",
                         (run_id, now_iso(), event,
                          mask_secrets(json.dumps(details, ensure_ascii=False, default=str))))

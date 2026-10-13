@@ -4,14 +4,31 @@ from __future__ import annotations
 import hashlib
 import json
 
-from . import schemas
-from .checklist_engine import Checklists, is_applicable, platform_match, render_args
-from .models import ConfigError, PolicyDenied
-from .policy import Policy
+from audit import schemas
+from audit.schemas import _ID, _STR
+from audit.checklist_engine import Checklists, is_applicable, platform_match, render_args
+from audit.models import ConfigError, PolicyDenied
+from audit.policy import Policy
+
+PLAN = {
+    "type": "object", "additionalProperties": False,
+    "required": ["plan_id", "checklist_id", "checklist_version", "targets"],
+    "properties": {
+        "plan_id": _ID,
+        "description": {"type": "string"},
+        "checklist_id": _ID,
+        "checklist_version": _STR,
+        "targets": {"type": "array", "minItems": 1, "items": _ID},
+        "check_ids": {"type": "array", "items": _ID},
+        "use_llm": {"type": "boolean"},
+        # 정보용일 뿐 권한을 부여하지 않는다(권한은 정책 엔진이 결정한다).
+        "requires_approval": {"type": "boolean"},
+    },
+}
 
 
 def validate_plan(plan: dict, policy: Policy, checklists: Checklists, registry: dict) -> dict:
-    errs = schemas.validate(plan, schemas.PLAN)
+    errs = schemas.validate(plan, PLAN)
     if errs:
         raise ConfigError("계획이 유효하지 않음:\n  " + "\n  ".join(errs))
     checklist, sha = checklists.load(plan["checklist_id"], plan["checklist_version"])

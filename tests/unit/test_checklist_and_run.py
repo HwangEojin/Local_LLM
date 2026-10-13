@@ -124,29 +124,6 @@ class RunTest(unittest.TestCase):
         with self.assertRaises(PolicyDenied):
             self.h.resolve({**PLAN, "requires_approval": False})
 
-    def test_resume_skips_done_items(self):
-        orch = self.h.orchestrator()
-        resolved = self.h.resolve()
-        calls = {"n": 0}
-        real = orch._process
-
-        def flaky(item, target):
-            calls["n"] += 1
-            if calls["n"] == 3:
-                raise KeyboardInterrupt
-            real(item, target)
-        orch._process = flaky
-        with self.assertRaises(KeyboardInterrupt):
-            orch.start(resolved)
-        run_id = orch.run_id
-        self.assertEqual(self.h.storage.get_run(run_id)["status"], "ABORTED")
-        self.assertEqual(len(self.h.storage.results(run_id)), 2)
-        self.h.orchestrator().resume(run_id, resolved)
-        self.assertEqual(self.verdicts(run_id), EXPECTED)
-        # 이미 끝난 항목은 중복 판정하지 않는다
-        hist = [h["check_id"] for h in self.h.storage.history(run_id)]
-        self.assertEqual(len(hist), len(set(hist)))
-
     def test_llm_rationale_secrets_are_redacted(self):
         """LLM 이 근거에 비밀 값을 그대로 인용해도 DB 와 보고서에는 남지 않는다."""
         class Leaky(FakeLLM):

@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 
 from .models import ToolOutput, now_iso
-from .storage import Storage
 
 
 class EvidenceIntegrityError(Exception):
@@ -15,7 +14,7 @@ class EvidenceIntegrityError(Exception):
 
 
 class EvidenceStore:
-    def __init__(self, storage: Storage, evidence_dir: Path):
+    def __init__(self, storage, evidence_dir: Path):
         self.storage = storage
         self.dir = Path(evidence_dir)
 

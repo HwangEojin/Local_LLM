@@ -15,7 +15,6 @@ dependencies = [
 ]
 
 [project.scripts]
-audit = "audit.cli:main"
 workbench = "diagnostic_workbench.cli:main"
 
 [tool.setuptools.packages.find]

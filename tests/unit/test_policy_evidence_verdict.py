@@ -8,7 +8,7 @@ from audit.adapters.fs_tools import make_tools
 from audit.evidence import EvidenceIntegrityError, EvidenceStore
 from audit.models import ConfigError, PolicyDenied, Target, ToolOutput, ToolSpec, Verdict
 from audit.policy import Policy, mask_secrets
-from audit.storage import Storage
+from tests.fixtures.legacy_run.storage import Storage
 from audit.verdict import decide, evaluate_rule
 
 

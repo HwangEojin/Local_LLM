@@ -10,7 +10,7 @@ from pathlib import Path
 
 from audit import config, mcp_client
 from audit.adapters import build_registry
-from audit.manual_evidence import add_tool_evidence
+from tests.fixtures.legacy_run.manual_evidence import add_tool_evidence
 from audit.models import PolicyDenied
 from audit.policy import Policy
 from tests.helpers import PLAN, ROOT, Home
