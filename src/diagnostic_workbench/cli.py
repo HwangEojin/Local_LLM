@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from audit import config as audit_config
 from audit.models import AuditError
@@ -256,6 +257,68 @@ def cmd_evidence(args):
     return int(bad > 0)
 
 
+def cmd_collect(args):
+    """운영자가 고른 등록 도구를 실행해 체크리스트 항목에 증적으로 붙인다(주로 수동확인 항목).
+
+    자동 수집과 같은 경로(정책 판정 -> 실행 -> 증적 -> Activity)를 지나며 판정은 바꾸지 않는다.
+    --steps 는 브라우저처럼 앞 호출의 상태가 필요한 도구를 한 프로세스에서 차례로 부른다. 단계마다 따로 판정한다.
+    """
+    cfg, conn = _open(args)
+    run = db.resolve_run(conn, args.run)
+    if run["status"] == "CANCELLED":
+        raise AuditError("취소된 실행에는 증적을 추가할 수 없음")
+
+    def load(raw):
+        return json.loads(Path(raw[1:]).read_text(encoding="utf-8") if raw.startswith("@") else raw)
+    try:
+        steps = load(args.steps) if args.steps else [{"tool": args.tool, "args": load(args.args or "{}")}]
+        if not (isinstance(steps, list) and steps and all(isinstance(x, dict) and x.get("tool") for x in steps)):
+            raise ValueError('도구가 없음: <도구> 를 주거나 --steps 에 [{"tool": ..., "args": {...}}] 목록을 주세요')
+    except (OSError, ValueError) as e:
+        print(f"인자를 읽을 수 없습니다(JSON 또는 @파일): {e}", file=sys.stderr)
+        return 2
+    item = conn.execute(
+        "SELECT b.* FROM backlog_items b JOIN run_checklist_items rci ON rci.id = b.run_checklist_item_id "
+        "JOIN checklist_items ci ON ci.id = rci.checklist_item_id "
+        "JOIN run_assets ra ON ra.run_id = rci.run_id AND ra.asset_id = rci.asset_id "
+        "WHERE b.run_id=%s AND ci.check_id=%s AND ra.target_id=%s", (run["id"], args.check_id, args.target_id)).fetchone()
+    if item is None:
+        raise AuditError("그 항목/대상의 작업이 없음. 먼저 'run plan' 또는 'run start' 를 실행하세요")
+    ctx = runs.build_context(cfg, conn, run)
+    it = worker.load_item(ctx, item)
+    step_no = conn.execute("SELECT COALESCE(max(step_no), 0) AS n FROM tool_invocations WHERE backlog_item_id=%s",
+                           (item["id"],)).fetchone()["n"]
+    failed = 0
+    for st in steps:
+        tool, tool_args, step_no = st["tool"], st.get("args", {}), step_no + 1
+        if args.approve_as:  # 이 호출의 정확한 대상·도구·인자에 대해서만 승인을 기록한다
+            d = policy.decide(ctx, tool, tool_args, item["asset_id"])
+            if d.decision == policy.ALLOW_WITH_APPROVAL:
+                conn.execute("INSERT INTO approvals (run_id, asset_id, tool, args_sha256, approver, decision, expires_at) "
+                             "VALUES (%s,%s,%s,%s,%s,'APPROVED', now() + make_interval(hours => %s))",
+                             (run["id"], item["asset_id"], tool, policy.args_hash(d.args), args.approve_as,
+                              cfg.approval_ttl_h))
+                db.audit(conn, run["id"], "approval_recorded", {"backlog_item": str(item["id"]), "tool": tool,
+                                                                 "args": d.args, "approver": args.approve_as})
+        eid, out = worker.run_tool(ctx, it, None, step_no, f"manual:{tool}", tool, tool_args)
+        row = conn.execute("SELECT * FROM evidence WHERE id=%s", (eid,)).fetchone()
+        db.audit(conn, run["id"], "evidence_added", {"check_id": args.check_id, "target_id": args.target_id,
+                                                      "tool": tool, "evidence_id": str(eid), "success": row["success"],
+                                                      "operator": args.operator})
+        conn.commit()
+        if out is None:
+            failed += 1
+            print(f"수집 실패(기록됨) {tool} {eid}: {row['error']}")
+            continue
+        print(f"증적 추가됨: {tool} {eid}  {row['size']}B sha256={row['sha256'][:16]}… 도구버전={row['tool_version']}"
+              + ("  (잘림)" if row["truncated"] else ""))
+        sf = out.meta.get("scope_filter")
+        if sf:
+            print(f"  범위 필터: 수신 {sf['received']}건 → 저장 {sf['kept']}건 (범위 밖 {sf['dropped_out_of_scope']}건, "
+                  f"호스트 불명 {sf['dropped_unknown_host']}건 제외)")
+    return int(failed > 0)
+
+
 def cmd_trace(args):
     cfg, conn = _open(args)
     if args.action == "show":
@@ -361,6 +424,15 @@ def build_parser():
     rv.add_argument("--reviewer", required=True)
     ev = sub.add_parser("evidence", help="증적 목록과 파일 해시 대조")
     ev.add_argument("run")
+    c = sub.add_parser("collect", help="등록된 도구를 한 번 실행해 항목에 증적 추가(판정은 바꾸지 않음)")
+    c.add_argument("run")
+    c.add_argument("check_id")
+    c.add_argument("target_id")
+    c.add_argument("tool", nargs="?", help="등록된 도구 이름 (예: mcp:burp/get_proxy_http_history)")
+    c.add_argument("--args", help="도구 인자 JSON 또는 @파일.json")
+    c.add_argument("--steps", help='여러 호출을 한 프로세스에서 차례로: [{"tool": ..., "args": {...}}] JSON 또는 @파일.json')
+    c.add_argument("--operator", required=True)
+    c.add_argument("--approve-as", metavar="이름", help="읽기 전용이 아닌 도구일 때 이 호출을 승인하는 사람")
     t = sub.add_parser("trace", help="Worker Activity 검색(search) / 작업 단계 상세(show)")
     t.add_argument("action", choices=["search", "show"])
     t.add_argument("query", nargs="?", help="search: 검색어, show: 작업 ID")
@@ -380,7 +452,7 @@ def build_parser():
 
 COMMANDS = {"doctor": cmd_doctor, "migrate": cmd_migrate, "run": cmd_run, "backlog": cmd_backlog,
             "approve": cmd_approve, "retry": cmd_retry, "review": cmd_review, "evidence": cmd_evidence,
-            "trace": cmd_trace, "graph": cmd_graph, "report": cmd_report}
+            "collect": cmd_collect, "trace": cmd_trace, "graph": cmd_graph, "report": cmd_report}
 
 
 def main(argv=None) -> int:

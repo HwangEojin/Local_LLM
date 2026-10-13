@@ -130,22 +130,54 @@ def coverage(conn, run_id) -> dict:
     }
 
 
+COVERAGE_HEADER = ["구분", "항목", "값", "비고"]
+COVERAGE_TITLE = "커버리지 및 제한 사항"
+
+
+def _coverage_rows(cov: dict) -> list[list]:
+    note = "NOT_RUN 은 판정 결과 표에서 INCONCLUSIVE(진단불가)로 표시됨"
+    rows = [["판정(실제)", v, n, note if v == "NOT_RUN" else ""] for v, n in cov["verdicts"].items()]
+    rows += [["작업 상태", s, n, ""] for s, n in cov["backlog"].items()]
+    rows += [["차단된 작업", b["reason"], b["policy_class"] or "", b["blocked_reason"] or ""] for b in cov["blocked"]]
+    rows += [["도구 실패/거부", t["tool"], f"{t['policy_decision']}/{t['status']}", t["error"] or ""]
+             for t in cov["tool_failures"]]
+    rows += [["탐색(가설, 판정 아님)", e["tool"], e["state"], e["rationale"]] for e in cov["explorations"]]
+    return rows
+
+
+def _open_items(cov: dict) -> int:
+    return sum(cov["verdicts"].get(v, 0) for v in ("NOT_RUN", "NEEDS_REVIEW", "INCONCLUSIVE"))
+
+
 def _add_coverage_sheet(xlsx: Path, cov: dict):
     from openpyxl import load_workbook
     wb = load_workbook(str(xlsx))
     ws = wb.create_sheet("커버리지")
-    ws.append(["구분", "항목", "값", "비고"])
-    for v, n in cov["verdicts"].items():
-        ws.append(["판정(실제)", v, n, "NOT_RUN 은 판정결과 시트에서 INCONCLUSIVE(진단불가)로 표시됨" if v == "NOT_RUN" else ""])
-    for s, n in cov["backlog"].items():
-        ws.append(["작업 상태", s, n, ""])
-    for b in cov["blocked"]:
-        ws.append(["차단된 작업", b["reason"], b["policy_class"] or "", b["blocked_reason"] or ""])
-    for t in cov["tool_failures"]:
-        ws.append(["도구 실패/거부", t["tool"], f"{t['policy_decision']}/{t['status']}", t["error"] or ""])
-    for e in cov["explorations"]:
-        ws.append(["탐색(가설, 판정 아님)", e["tool"], e["state"], e["rationale"]])
+    ws.append(COVERAGE_HEADER)
+    for row in _coverage_rows(cov):
+        ws.append(row)
     wb.save(str(xlsx))
+
+
+def _add_coverage_section(docx: Path, cov: dict):
+    """기본 Word 보고서 끝에 실제 커버리지 표를 덧붙인다(미실행·검토 필요·도구 실패·차단)."""
+    from docx import Document
+    doc = Document(str(docx))
+    doc.add_paragraph().add_run(COVERAGE_TITLE).bold = True
+    n = _open_items(cov)
+    doc.add_paragraph(f"미확정 항목(미실행/검토 필요/진단불가) {n}건이 남아 있어 진단이 완전히 끝난 것이 아니다." if n
+                      else "미확정 항목 없음.")
+    rows = _coverage_rows(cov)
+    table = doc.add_table(rows=1 + len(rows), cols=len(COVERAGE_HEADER))
+    for r, row in enumerate([COVERAGE_HEADER] + rows):
+        for c, value in enumerate(row):
+            table.cell(r, c).text = _m_text(value)
+    doc.save(str(docx))
+
+
+def _m_text(v) -> str:
+    from audit.policy import mask_secrets
+    return mask_secrets("" if v is None else str(v))[:500]
 
 
 def generate(cfg, conn, run: dict, kind=None, meta=None, findings=None) -> dict:
@@ -160,8 +192,13 @@ def generate(cfg, conn, run: dict, kind=None, meta=None, findings=None) -> dict:
         from audit import report
         res = report.generate(storage, run_id, checklists, cfg.settings, EvidenceStore(storage, cfg.evidence_dir))
         _add_coverage_sheet(Path(res["xlsx"]), cov)
-        from openpyxl import load_workbook  # 다시 열어 시트 구성을 확인한다
+        _add_coverage_section(Path(res["docx"]), cov)
+        from docx import Document  # 다시 열어 덧붙인 내용이 실제로 들어갔는지 확인한다
+        from openpyxl import load_workbook
         sheets = load_workbook(res["xlsx"], read_only=True).sheetnames
         if "커버리지" not in sheets or "판정결과" not in sheets:
             res["problems"].append(f"xlsx: 예상 시트가 없음 {sheets}")
+        doc = Document(res["docx"])
+        if not any(p.text == COVERAGE_TITLE for p in doc.paragraphs) or                 [c.text for c in doc.tables[-1].rows[0].cells] != COVERAGE_HEADER:
+            res["problems"].append("docx: 커버리지 절이 없음")
     return {**res, "coverage": cov}
