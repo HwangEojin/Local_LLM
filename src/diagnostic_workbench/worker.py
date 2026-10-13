@@ -5,7 +5,10 @@
 """
 from __future__ import annotations
 
+import json
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from psycopg.types.json import Jsonb
 
@@ -49,7 +52,7 @@ def record_invocation(ctx, it, worker_run_id, step, tool, d: policy.Decision, st
     ctx.conn.execute(
         "INSERT INTO tool_invocations (run_id, worker_run_id, backlog_item_id, asset_id, step_no, tool, "
         "tool_version, args, policy_decision, policy_reason, status, error, evidence_id, started_at, ended_at) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())",
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,clock_timestamp())",
         (ctx.run["id"], worker_run_id, it["id"], it["asset_id"], step, tool, tool_version, db.masked(d.args),
          d.decision, d.reason, status, mask_secrets(error) if error else None, evidence_id,
          started or datetime.now(timezone.utc)))
@@ -90,6 +93,10 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
         return eid, None
     spec, err = ctx.registry[tool], None
     for _ in range(2 if spec.risk == "read" else 1):  # 상태를 바꾸는 도구는 재시도하지 않는다
+        wait = ctx.last_call + ctx.cfg.min_call_interval_ms / 1000 - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        ctx.last_call = time.monotonic()
         started = datetime.now(timezone.utc)
         try:
             out = spec.executor(d.args)
@@ -104,12 +111,35 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
         eid = evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, output=out, **common)
         record_invocation(ctx, it, worker_run_id, step, tool, d, "SUCCEEDED", started=started, evidence_id=eid,
                           tool_version=out.tool_version)
+        _observe_assets(ctx, it, tool, d.args, out, eid)
         ctx.conn.commit()
         return eid, out
     eid = evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, error=mask_secrets(err),
                          tool_version=spec.version, **common)
     ctx.conn.commit()
     return eid, None
+
+
+def _observe_assets(ctx, it, tool, args, out, evidence_id):
+    """도구가 실제로 관찰한 자산과 관계를 자산 그래프에 등록한다(출처·실행·증적을 남긴다).
+
+    ponytail: 구조가 확정된 fs.list_dir 출력만 다룬다. 다른 도구는 출력 형식을 실제로 확인한 뒤 추가한다.
+    """
+    if tool != "fs.list_dir" or out.truncated:
+        return
+    conn, run_id = ctx.conn, ctx.run["id"]
+
+    def asset(value):
+        return conn.execute(
+            "INSERT INTO assets (kind, value, source, verification, first_seen_run_id) "
+            "VALUES ('path', %s, %s, 'OBSERVED', %s) "
+            "ON CONFLICT (kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id",
+            (value, f"tool:{tool}", run_id)).fetchone()["id"]
+    parent = asset(args["path"])
+    for entry in json.loads(out.data)[:200]:
+        conn.execute("INSERT INTO asset_edges (src_id, dst_id, rel, run_id, source) VALUES (%s,%s,'contains',%s,%s) "
+                     "ON CONFLICT DO NOTHING",
+                     (parent, asset(str(Path(args["path"]) / entry["name"])), run_id, f"evidence:{evidence_id}"))
 
 
 def _analyze(ctx, body, target, ev: dict) -> dict:

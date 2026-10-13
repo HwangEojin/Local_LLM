@@ -122,7 +122,8 @@ def cmd_run(args):
         budget = config.validate_budget({k: v for k, v in (("max_tasks", args.max_tasks),
                                                            ("max_explorations", args.max_explorations)) if v is not None})
         run = runs.create_run(conn, cfg, cid, ver, args.targets.split(","), args.operator,
-                              args.check_ids.split(",") if args.check_ids else None, args.llm, budget)
+                              args.check_ids.split(",") if args.check_ids else None, args.llm, budget,
+                              args.tools.split(",") if args.tools else None)
         print(f"실행 생성됨: {run['id']}\n미리 보기: run plan {run['id']}   시작: run start {run['id']}")
         return 0
     if args.action == "list":
@@ -281,6 +282,10 @@ def cmd_graph(args):
     for a in conn.execute("SELECT ra.target_id, a.* FROM run_assets ra JOIN assets a ON a.id = ra.asset_id "
                           "WHERE ra.run_id=%s", (run["id"],)):
         print(f"  {str(a['id'])[:8]}  {a['target_id']:<16} {a['kind']}:{a['value']}  [{a['verification']}, 출처={a['source']}]")
+    for e in conn.execute("SELECT s.value AS src, e.rel, d.value AS dst, e.source FROM asset_edges e "
+                          "JOIN assets s ON s.id = e.src_id JOIN assets d ON d.id = e.dst_id WHERE e.run_id=%s "
+                          "ORDER BY d.value LIMIT 50", (run["id"],)):
+        print(f"  {e['src']} -{e['rel']}-> {e['dst']}  [{e['source'][:21]}]")
     print("탐색 그래프:")
     for n in conn.execute("SELECT * FROM exploration_nodes WHERE run_id=%s ORDER BY created_at", (run["id"],)):
         text = n["payload"].get("text") or n["payload"].get("rationale") or n["payload"].get("tool", "")
@@ -330,6 +335,7 @@ def build_parser():
     r.add_argument("--targets", help="scope.json 의 target_id 목록(쉼표 구분)")
     r.add_argument("--check-ids", help="일부 항목만 실행(쉼표 구분)")
     r.add_argument("--operator")
+    r.add_argument("--tools", help="이 실행에서 허용할 도구 이름(쉼표 구분). 생략하면 등록된 도구 전체")
     r.add_argument("--llm", action="store_true", help="로컬 LLM 참고 의견과 탐색 제안 사용")
     r.add_argument("--max-tasks", type=int)
     r.add_argument("--max-explorations", type=int)
