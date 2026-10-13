@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import socket
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -57,6 +59,15 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
         hit = _excluded(value, cfg.exclude)
         if hit:
             return Decision(DENY, f"제외 대상 '{hit}' 에 해당함: {value}", clean)
+        if cfg.exclude and target.type != "path":  # 이름은 범위 안이어도 해석된 주소가 차단 주소일 수 있다
+            host = urlsplit(value).hostname if "://" in value else value
+            try:
+                addrs = {a[4][0] for a in socket.getaddrinfo(host, None)}
+            except OSError:
+                return Decision(NEEDS_SCOPE_CONFIRMATION, f"'{host}' 의 주소를 해석할 수 없어 제외 대상 여부를 확인하지 못함", clean)
+            hit = next((ex for a in sorted(addrs) if (ex := _excluded(a, cfg.exclude))), None)
+            if hit:
+                return Decision(DENY, f"'{host}' 이(가) 제외 주소 '{hit}' 로 해석됨", clean)
     if spec.risk == "read":
         return Decision(ALLOW, "읽기 전용 도구, 범위 내", clean)
     row = ctx.conn.execute(
@@ -68,3 +79,36 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
     if row["decision"] != "APPROVED":
         return Decision(DENY, f"승인자 {row['approver']} 이(가) 거부함", clean)
     return Decision(ALLOW, f"승인됨 (승인자 {row['approver']})", clean)
+
+
+_PAGE_URL = re.compile(r"Page URL: (\S+)")
+
+
+def _texts(data: bytes) -> str:
+    """MCP 응답(JSON)의 text 내용. JSON 이 아니면 원문 그대로."""
+    raw = data.decode("utf-8", errors="replace")
+    try:
+        return "\n".join(c.get("text", "") for c in json.loads(raw).get("content", []) if isinstance(c, dict))
+    except (json.JSONDecodeError, AttributeError):
+        return raw
+
+
+def landed_out_of_scope(ctx, tool: str, data: bytes, asset_id) -> str | None:
+    """도구가 실제로 도착한 주소가 범위를 벗어났으면 그 설명을 돌려준다(리다이렉트로 인한 범위 이탈).
+
+    ponytail: 출력 형식을 실제로 확인한 Playwright MCP('Page URL: ...')만 본다. 다른 도구는 형식 확인 후 추가.
+    """
+    if not tool.startswith("mcp:playwright/"):
+        return None
+    target = ctx.targets[asset_id]
+    for url in _PAGE_URL.findall(_texts(data)):
+        if url.startswith("about:"):
+            continue
+        try:
+            ctx.policy.check_url(url, target)
+        except PolicyDenied as e:
+            return f"도구가 범위 밖 주소에 도착함: {e}"
+        hit = _excluded(url, ctx.cfg.exclude)
+        if hit:
+            return f"도구가 제외 대상 '{hit}' 에 도착함: {url}"
+    return None

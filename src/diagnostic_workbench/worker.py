@@ -108,6 +108,16 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
                               tool_version=spec.version)
             ctx.conn.commit()
             continue
+        escaped = policy.landed_out_of_scope(ctx, tool, out.data, it["asset_id"])
+        if escaped:  # 범위 밖 페이지의 내용은 증적으로 남기지 않는다. 재시도하지 않는다
+            record_invocation(ctx, it, worker_run_id, step, tool, d, "FAILED", started=started, error=escaped,
+                              tool_version=out.tool_version)
+            db.audit(ctx.conn, ctx.run["id"], "scope_violation", {"backlog_item": str(it["id"]), "tool": tool,
+                                                                   "reason": escaped})
+            eid = evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, error=f"범위 이탈: {escaped}",
+                                 tool_version=out.tool_version, **common)
+            ctx.conn.commit()
+            return eid, None
         eid = evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, output=out, **common)
         record_invocation(ctx, it, worker_run_id, step, tool, d, "SUCCEEDED", started=started, evidence_id=eid,
                           tool_version=out.tool_version)
