@@ -11,7 +11,12 @@ from audit.checklist_engine import Checklists, platform_match
 from audit.models import ConfigError, Target
 from audit.policy import Policy
 
-from . import db
+from . import db, tools
+
+
+def registry(cfg) -> dict:
+    """실행 가능한 도구 전체: 기존 audit 도구(fs, MCP) + 워크벤치 로컬 도구."""
+    return {**build_registry(cfg.settings, audit_config.load_mcp_servers(cfg.home)), **tools.make_tools(cfg)}
 
 
 def automation_level(item: dict) -> str:
@@ -60,10 +65,10 @@ def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str]
             raise ConfigError(f"알 수 없는 check_id: {unknown}")
         items = [i for i in items if i["check_id"] in set(check_ids)]
     if allowed_tools is not None:
-        registry = build_registry(cfg.settings, audit_config.load_mcp_servers(cfg.home))
-        unknown = sorted(set(allowed_tools) - set(registry))
+        known = registry(cfg)
+        unknown = sorted(set(allowed_tools) - set(known))
         if unknown:
-            raise ConfigError(f"등록되지 않은 도구: {unknown}. 등록된 도구: {sorted(registry)}")
+            raise ConfigError(f"등록되지 않은 도구: {unknown}. 등록된 도구: {sorted(known)}")
     platforms = sorted({p for i in items for p in i["body"].get("platforms") or []})
     for tid, t in targets:
         if platforms and t.platform not in platforms:
@@ -126,5 +131,4 @@ def build_context(cfg, conn, run: dict) -> RunContext:
         t: Target | None = policy.targets.get(r["target_id"])
         if t is not None and current.get(r["target_id"]) == t:  # 실행 후 범위에서 빠졌거나 바뀐 대상은 제외
             targets[r["asset_id"]] = t
-    registry = build_registry(cfg.settings, audit_config.load_mcp_servers(cfg.home))
-    return RunContext(cfg, conn, run, policy, registry, targets, target_ids)
+    return RunContext(cfg, conn, run, policy, registry(cfg), targets, target_ids)

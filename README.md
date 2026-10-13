@@ -224,11 +224,11 @@ platform별 항목이 있는 체크리스트를 실행하려면 `scope.json` 의
 # 1) 수동 검토로 취약 판정을 기록 (웹 체크리스트 항목은 모두 수동확인으로 시작한다)
 .venv\Scripts\python -m audit review <run_id> WEB-SER-001 web01 FAIL --reason "SQL 인젝션 확인" --reviewer 홍길동
 # 2) 고객/일정/대상 정보(meta)와 발견 내용(findings)을 작성한 뒤 보고서 생성
-.venv\Scripts\python -m audit report <run_id> --type web --meta examples\report\report_meta.sample.json --findings examples\report\findings.sample.json
+.venv\Scripts\python -m audit report <run_id> --type web --meta examples\report\report_meta.sample.json --findings <findings.json>
 ```
 
 - `report_meta.json`: 고객사, 프로젝트, 개정이력, 진단 대상(`target_id`, 이름, URL), 일정, 수행인력. 예시: `examples/report/report_meta.sample.json`
-- `findings.json`: 취약점별 `check_id` + `target_id`(DB의 **FAIL 판정과 반드시 일치**), 진단결과, 발생경로, 특이사항, 사례(CASE)와 단계(Step), 권고사항. 예시: `examples/report/findings.sample.json`
+- `findings.json`: 취약점별 `check_id` + `target_id`(DB의 **FAIL 판정과 반드시 일치**), 진단결과, 발생경로, 특이사항, 사례(CASE)와 단계(Step), 권고사항. 형식은 `src/audit/schemas.py` 의 `FINDINGS` 참고
   - 단계(Step)는 사용자가 작성한 참고 보고서처럼 쓴다: `text`(`[Step N]` 뒤 문장), `code`(코드 줄 목록 → 회색 음영 문단), `image`(캡처 파일), `caption`(`[그림 N]` 설명, 생략하면 `text`). 옛 `title` 도 `text` 로 인식한다.
   - `improvements`(최상위): 3.2 개선 방안을 주제별 제목+본문으로 직접 작성한다. 생략하면 취약점별 권고사항(없으면 권고안 조치 방안)으로 구성한다.
   - `report_meta.json` 의 선택 항목: `business_name`(사업명), `purpose`(사업 목적), `scope`(사업 범위 목록), `diagnostic_items`(수행 방법의 진단 항목 표: 코드/취약점명/설명). 생략하면 템플릿 문구를 쓴다.
