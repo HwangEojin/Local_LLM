@@ -45,6 +45,9 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
         return Decision(DENY, f"전체 중지 스위치가 켜져 있음 ({cfg.stop_file})", raw)
     if target is None:
         return Decision(NEEDS_SCOPE_CONFIRMATION, "대상이 현재 승인된 범위(scope.json)에서 확인되지 않음", raw)
+    allowed = ctx.run.get("allowed_tools")
+    if allowed is not None and tool not in allowed:
+        return Decision(DENY, f"도구 '{tool}' 은(는) 이 실행의 허용 도구 목록에 없음", raw)
     spec = ctx.registry.get(tool)
     try:
         clean = ctx.policy.authorize(spec, tool, args, target, dry_run=True)

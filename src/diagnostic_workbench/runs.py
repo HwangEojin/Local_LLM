@@ -46,7 +46,8 @@ def import_checklist(conn, checklists: Checklists, checklist_id: str, version: s
 
 
 def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str], operator: str,
-               check_ids: list[str] | None = None, use_llm: bool = False, budget: dict | None = None) -> dict:
+               check_ids: list[str] | None = None, use_llm: bool = False, budget: dict | None = None,
+               allowed_tools: list[str] | None = None) -> dict:
     scope = audit_config.load_scope(cfg.home)
     policy = Policy(scope, cfg.home)
     targets = [(tid, policy.target(tid)) for tid in dict.fromkeys(target_ids)]  # 범위 밖이면 PolicyDenied
@@ -58,6 +59,11 @@ def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str]
         if unknown:
             raise ConfigError(f"알 수 없는 check_id: {unknown}")
         items = [i for i in items if i["check_id"] in set(check_ids)]
+    if allowed_tools is not None:
+        registry = build_registry(cfg.settings, audit_config.load_mcp_servers(cfg.home))
+        unknown = sorted(set(allowed_tools) - set(registry))
+        if unknown:
+            raise ConfigError(f"등록되지 않은 도구: {unknown}. 등록된 도구: {sorted(registry)}")
     platforms = sorted({p for i in items for p in i["body"].get("platforms") or []})
     for tid, t in targets:
         if platforms and t.platform not in platforms:
@@ -65,10 +71,10 @@ def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str]
                               f"사용 가능: {', '.join(platforms)}")
 
     run = conn.execute(
-        "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm) "
-        "VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
+        "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm, allowed_tools) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (scope["engagement_id"], operator, cv["id"], Jsonb(scope), Jsonb({**cfg.budget, **(budget or {})}),
-         use_llm)).fetchone()
+         use_llm, allowed_tools)).fetchone()
     goal = conn.execute(
         "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'goal','operator',%s) RETURNING id",
         (run["id"], Jsonb({"text": f"체크리스트 {checklist_id}@{version} 진단", "targets": target_ids}))).fetchone()
@@ -91,7 +97,8 @@ def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str]
     db.audit(conn, run["id"], "run_created", {
         "plan": {"plan_id": str(run["id"]), "checklist_id": checklist_id, "checklist_version": version,
                  "targets": [tid for tid, _ in targets], "use_llm": use_llm},
-        "scope": scope, "tasks": tasks, "use_llm": use_llm, "operator": operator, "budget": run["budget"]})
+        "scope": scope, "tasks": tasks, "use_llm": use_llm, "operator": operator, "budget": run["budget"],
+        "allowed_tools": allowed_tools})
     db.notify_change(conn, run["id"], "run_created")
     conn.commit()
     return run
@@ -107,6 +114,7 @@ class RunContext:
     targets: dict             # asset_id -> Target (지금의 scope.json 에도 그대로 있는 대상만)
     target_ids: dict          # asset_id -> scope target_id
     llm: object = None
+    last_call: float = 0.0    # 마지막 도구 호출 시각(monotonic), 호출 간격 제한용
 
 
 def build_context(cfg, conn, run: dict) -> RunContext:

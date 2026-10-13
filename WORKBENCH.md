@@ -13,7 +13,7 @@ ARTEX(Go/Next.js)는 설계만 참고했다(탐색 그래프의 goal/intent/fact
 ```
 
 1. PostgreSQL 에 역할과 DB 를 만든다(예: `workbench`). `gen_random_uuid()` 를 쓰므로 13 이상.
-2. `.env.example` 을 `.env` 로 복사하고 `WORKBENCH_PG_DSN` 을 맞춘다. 비밀번호는 `pgpass.conf` 권장.
+2. `.env.example` 을 `.env` 로 복사하고 `WORKBENCH_PG_DSN` 을 맞춘다. 비밀번호는 DSN 대신 `.env` 의 `PGPASSWORD` 또는 `pgpass.conf` 에 둔다. 다른 애플리케이션(예: ARTEX)과 DB 를 같이 쓰면 테이블 이름이 겹치므로 반드시 전용 스키마를 쓴다: `CREATE SCHEMA workbench;` 후 DSN 끝에 `?options=-csearch_path%3Dworkbench`.
 3. `python -m diagnostic_workbench migrate` → `python -m diagnostic_workbench doctor`
 4. 선택: `config/workbench.example.json` 을 `config/workbench.json` 으로 복사해 제외 대상·예산·임대 시간을 조정.
 
@@ -45,7 +45,7 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 
 | 모듈 | 책임 |
 |---|---|
-| `migrations/0001_initial.sql`, `db.py` | 스키마(23개 테이블), 마이그레이션 실행기(해시 고정, advisory lock), 감사·변경 이벤트 |
+| `migrations/*.sql`, `db.py` | 스키마(23개 테이블), 마이그레이션 실행기(해시 고정, advisory lock), 감사·변경 이벤트 |
 | `config.py` | DSN(환경 변수/.env), `workbench.json`, 기존 설정 로딩 |
 | `runs.py` | 체크리스트 버전을 DB 로 가져오기, 자산 등록, 실행별 체크리스트 행, 실행 컨텍스트 |
 | `policy.py` | `ALLOW / ALLOW_WITH_APPROVAL / DENY / NEEDS_SCOPE_CONFIRMATION` 판정(범위·제외·중지·승인) |
@@ -63,24 +63,24 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 ## 구현 상태 (2026-10-13 기준)
 
 확인은 스크래치 폴더의 임시 PostgreSQL 18.6 클러스터(포트 55432)와 테스트용 예시 체크리스트로 했다.
-**운영용 PostgreSQL(5432)에는 연결·마이그레이션하지 않았다**(접속 정보 없음).
+이후 이 PC 의 PostgreSQL(5432)에 전용 계정 `kingcrimson` 과 전용 DB `workbench` 를 만들어 마이그레이션 2개를 적용했다. ARTEX 가 쓰는 `artex` DB 에는 워크벤치 객체가 남아 있지 않다.
 
 | 기능 | 상태 | 근거 및 제한 사항 |
 |---|---|---|
 | 설정 검증 | 구현 | `doctor`: DSN 누락·미적용 마이그레이션을 FAIL 로 표시하는 것 확인 |
 | PostgreSQL 스키마·마이그레이션 | 구현 | `migrate` 적용/재실행(변경 없음) 확인, 추가 전용 트리거가 `DELETE FROM evidence` 를 거부 |
-| 범위·정책 강제 | 부분 구현 | 범위 밖 대상·경로 이탈·제외 대상·중지 스위치가 도구 호출 전에 차단됨 확인. 리다이렉트/DNS 해석 결과 검사, 요청 속도 제한, 실행별 허용 도구 목록은 없음 |
+| 범위·정책 강제 | 부분 구현 | 범위 밖 대상·경로 이탈·제외 대상·중지 스위치·실행별 허용 도구(`run create --tools`)가 도구 호출 전에 차단됨 확인. 호출 간격 제한(`min_call_interval_ms`)은 코드만 있고 실측하지 않음. 리다이렉트/DNS 해석 결과 검사는 없음 |
 | 체크리스트 가져오기 | 구현 | 활성·해시 고정된 버전만 DB 로 가져옴(원문 `body` 보존, 자동화 수준 분류). xlsx→JSON 변환은 기존 `audit checklist import` |
-| 결정론적 체크리스트 점검 | 구현 | 예시 체크리스트로 FAIL/PASS/NOT_APPLICABLE/NEEDS_REVIEW/INCONCLUSIVE 확인. 공식 체크리스트 12종은 이 경로로 실행해 보지 않음(대부분 수동확인 항목) |
+| 결정론적 체크리스트 점검 | 구현 | 예시 체크리스트로 FAIL/PASS/NOT_APPLICABLE/NEEDS_REVIEW/INCONCLUSIVE 확인. 공식 `fsec-2026-1-server@2026-1`(70항목) 실행 → 전부 NEEDS_REVIEW(원본에 자동 판정 기준이 없는 수동확인 항목), 보고서 생성까지 확인 |
 | 로컬 LLM 연동 | 구현 | qwen2.5:7b-instruct 로 분석 3회·탐색 제안 2회가 스키마 검증 통과. 16GB 노트북에서 호출당 10~90초 |
-| 작업 큐·Worker 조정 | 부분 구현 | 점유·상태 전이·재개·취소·임대 만료 SQL 동작. 두 프로세스 동시 실행에서 중복 실행 0건(작업 3건 규모). 임대 만료 복구는 실제 Worker 강제 종료로 확인하지 않음 |
-| MCP 어댑터 | 부분 구현 | 기존 `audit` 레지스트리·클라이언트 재사용, 호출은 정책 계층을 거침. 이번에 실제 MCP 서버 출력은 받아 보지 않음(Burp 미실행 → 실패가 FAILED 로 저장되는 것만 확인). `doctor --probe-mcp` 는 `CONNECTED_UNVERIFIED` 까지만 표시 |
+| 작업 큐·Worker 조정 | 구현 | 점유·상태 전이·재개·취소 확인. 두 프로세스 동시 실행에서 중복 실행 0건(작업 3건 규모). 점유만 하고 방치한 작업이 임대 만료 뒤 다시 실행됨(시도 2회) 확인. Worker 는 프로세스당 1개이며 더 필요하면 `run start` 를 여러 개 띄운다 |
+| MCP 어댑터 | 부분 구현 | 기존 `audit` 레지스트리·클라이언트 재사용. 테스트용 stdio MCP 서버로 출력 수신·증적 저장·규칙 판정, 시간 초과(5초) → FAILED, 출력 속 지시문이 판정에 영향 없음 확인. Burp·Playwright·Ghidra·JADX·Frida 실제 서버로는 이 경로에서 확인하지 않음(`CONNECTED_UNVERIFIED`) |
 | 증적 저장 | 구현 | 파일 SHA-256·크기와 DB 행 대조(`evidence`) 통과, 실패·거부도 행으로 남음. 스크린샷 등 미디어 유형 구분, 마스킹 파생본은 없음 |
 | Word 보고서 템플릿 | 부분 구현 | 기존 기본 보고서와 웹 모의해킹 템플릿 보고서가 어댑터로 생성·재검증됨. 미실행 항목 표기는 Word 에 없음(Excel 커버리지 시트와 CLI 출력에만) |
 | Excel 보고서 템플릿 | 부분 구현 | 기존 시트 + '커버리지' 시트 생성 후 다시 열어 확인. 사용자 지정 Excel 템플릿으로는 확인하지 않음 |
 | 탐색·재계획 반복 | 구현 | 실제 모델 제안 → 정책 검증 → 실행 → 사실 기록 → 재계획 → 예산 초과 거부까지 확인. 읽기 전용 도구만 허용 |
-| 이중 그래프·anchor 연결 | 부분 구현 | 탐색 그래프(goal/intent/fact, spawns/yields/derived_from, anchor)는 동작. 자산 그래프는 범위에 선언된 대상만 등록하며, 도구 결과에서 새 자산·관계를 뽑아 `asset_edges` 에 넣는 기능은 없음 |
-| 공유 TodoList·선행 조건 | 부분 구현 | 영속 큐와 멱등 키(재계획 시 중복 0건) 확인. `backlog_deps` 선행 조건은 검사 코드만 있고 선행 관계를 만드는 Planner 규칙이 없어 미확인 |
+| 이중 그래프·anchor 연결 | 부분 구현 | 탐색 그래프(goal/intent/fact, spawns/yields/derived_from, anchor) 동작. 자산 그래프는 범위에 선언된 대상 + `fs.list_dir` 가 관찰한 경로와 `contains` 관계(출처 증적 ID 기록)만 채운다. 호스트·서비스·엔드포인트 추출은 없음 |
+| 공유 TodoList·선행 조건 | 부분 구현 | 영속 큐와 멱등 키(재계획 시 중복 0건) 확인. `backlog_deps` 에 선행 관계를 넣으면 선행 작업 완료 전까지 BLOCKED 였다가 실행됨 확인. 선행 관계를 자동으로 만드는 Planner 규칙은 없음 |
 | Worker Activity 검색·재사용 | 부분 구현 | `trace search/show` 동작, 다른 실행의 실패 이력을 탐색 프롬프트에 참고로 넣음. ILIKE 검색이라 대량 데이터 성능은 미확인 |
 
 ## 최소 동작 확인 기록
@@ -92,12 +92,12 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 | 실행·작업 큐 저장 후 재시작 조회 | PASS | 새 프로세스에서 `run status`, `backlog` |
 | 범위 밖 대상 차단 | PASS | 범위 밖 target_id 로 실행 생성 거부, 경로 이탈 항목 `DENY`(도구 호출 0건) |
 | 작업 중복 할당 없음 | PASS | 동시 `run start` 2개, 작업당 `worker_runs` 1건 |
-| 도구 실패·시간 초과 저장 | PASS(실패) / NOT CHECKED(시간 초과) | 없는 파일·연결 실패가 `FAILED` + `INCONCLUSIVE` 로 저장됨 |
+| 도구 실패·시간 초과 저장 | PASS | 없는 파일·연결 실패·MCP 시간 초과가 `FAILED` + `INCONCLUSIVE` 로 저장됨 |
 | 증적 해시와 DB 일치 | PASS | `evidence` 명령, 테스트 |
 | Word·Excel 다시 열기 | PASS | 기존 `report.verify` + 시트 목록 확인 |
 | 로컬 모델 구조화 응답 | PASS | `model_calls` 에 ok=true, 스키마 검증 통과 |
-| MCP 도구 결과 수신·파싱 | NOT CHECKED | 이번 세션에 실행 중인 MCP 서버 없음 |
-| 운영 DB(5432) 적용 | BLOCKED | 접속 정보 미제공 |
+| MCP 도구 결과 수신·파싱 | PASS(테스트 서버) / NOT CHECKED(실제 진단 도구) | `tests/fixtures/test_mcp_server.py` stdio 서버의 출력이 증적으로 저장됨 |
+| 운영 DB(5432) 적용 | PASS | 전용 DB `workbench`(소유자 `kingcrimson`)에 테이블 23개 생성, `doctor` 통과. 확인용 실행 1건을 저장·재조회한 뒤 삭제했다(현재 실행 0건) |
 
 재현: `set WORKBENCH_TEST_PG_DSN=...` 후 `python -m unittest tests.integration.test_workbench` (전용 DB 필요).
 

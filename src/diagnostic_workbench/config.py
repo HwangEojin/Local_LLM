@@ -22,6 +22,7 @@ WORKBENCH = {
     "properties": {
         "exclude": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "lease_s": _POS, "max_attempts": _POS, "approval_ttl_h": _POS,
+        "min_call_interval_ms": {"type": "integer", "minimum": 0},
         "budget": BUDGET,
     },
 }
@@ -38,6 +39,7 @@ class Config:
     max_attempts: int
     approval_ttl_h: int
     budget: dict
+    min_call_interval_ms: int = 0  # 도구 호출 사이 최소 간격(요청 속도 제한)
 
     @property
     def stop_file(self) -> Path:  # 전체 중지 스위치: 이 파일이 있으면 모든 도구 호출을 거부한다
@@ -74,7 +76,8 @@ def load(home: str | None) -> Config:
     budget = {**DEFAULT_BUDGET, "max_tool_calls": settings.limits["max_tool_calls_per_run"],
               "timeout_s": settings.limits["run_timeout_s"], **wb.get("budget", {})}
     return Config(root, settings, dsn, wb.get("exclude", []), wb.get("lease_s", 300),
-                  wb.get("max_attempts", 2), wb.get("approval_ttl_h", 24), budget)
+                  wb.get("max_attempts", 2), wb.get("approval_ttl_h", 24), budget,
+                  wb.get("min_call_interval_ms", 0))
 
 
 def validate_budget(budget: dict) -> dict:

@@ -23,8 +23,8 @@ def store(conn, evidence_dir: Path, *, run_id, asset_id, requirement_id, tool, a
         sha, size = hashlib.sha256(output.data).hexdigest(), len(output.data)
     conn.execute(
         "INSERT INTO evidence (id, run_id, asset_id, run_checklist_item_id, backlog_item_id, requirement_id, "
-        "tool, tool_version, args, rel_path, sha256, size, truncated, success, error) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "tool, tool_version, args, rel_path, sha256, size, truncated, success, error, collected_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,clock_timestamp())",
         (eid, run_id, asset_id, rci_id, backlog_item_id, requirement_id, tool,
          output.tool_version if output else tool_version, masked(args), rel, sha, size,
          bool(output and output.truncated), rel is not None, error))
