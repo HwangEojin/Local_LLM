@@ -365,10 +365,17 @@ def cmd_graph(args):
 def cmd_report(args):
     cfg, conn = _open(args)
     run = db.resolve_run(conn, args.run)
-    if args.type and not args.meta:
-        print("--type 사용 시 --meta <report_meta.json> 이 필요합니다", file=sys.stderr)
+    # 기본은 회사 템플릿 서식의 결과보고서다. 내부 점검 요약(표 양식 Word + Excel)은 --basic 으로 만든다.
+    kind = None if args.basic else (args.type or reporting.default_kind(conn, run))
+    if kind is None and not args.basic:
+        print("이 실행의 대상 platform 에 맞는 결과보고서 템플릿이 없습니다(지원: WEB). "
+              "--type 으로 지정하거나 --basic 으로 내부 점검 요약을 만드세요", file=sys.stderr)
         return 2
-    res = reporting.generate(cfg, conn, run, args.type, args.meta, args.findings)
+    if kind and not args.meta:
+        print(f"결과보고서({kind})에는 --meta <report_meta.json> 이 필요합니다(고객사·프로젝트·대상·일정·인력). "
+              "내부 점검 요약만 필요하면 --basic", file=sys.stderr)
+        return 2
+    res = reporting.generate(cfg, conn, run, kind, args.meta, args.findings)
     print(f"docx: {res['docx']}" + (f"\nxlsx: {res['xlsx']}" if "xlsx" in res else ""))
     cov = res["coverage"]
     print("커버리지(실제 판정): " + ", ".join(f"{k}={v}" for k, v in cov["verdicts"].items()))
@@ -442,11 +449,12 @@ def build_parser():
     t.add_argument("--limit", type=int, default=20)
     g = sub.add_parser("graph", help="자산 그래프와 탐색 그래프 요약")
     g.add_argument("run")
-    rp = sub.add_parser("report", help="Word/Excel 보고서 생성(COMPLETED 실행)")
+    rp = sub.add_parser("report", help="회사 템플릿 서식의 결과보고서 생성(COMPLETED 실행). --basic 은 내부 점검 요약")
     rp.add_argument("run")
-    rp.add_argument("--type", choices=["web"], help="모의해킹 결과보고서 템플릿 유형")
-    rp.add_argument("--meta")
-    rp.add_argument("--findings")
+    rp.add_argument("--type", choices=["web"], help="결과보고서 템플릿 유형(생략하면 대상 platform 으로 결정)")
+    rp.add_argument("--meta", help="고객사/프로젝트/대상/일정/인력 정보(report_meta.json)")
+    rp.add_argument("--findings", help="취약점 발견 내용(findings.json)")
+    rp.add_argument("--basic", action="store_true", help="템플릿 없이 내부 점검 요약(Word 표 + Excel)을 만든다")
     return p
 
 

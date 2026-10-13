@@ -37,9 +37,12 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 & $wb evidence <run>       # 증적 목록 + 파일 해시 대조
 & $wb trace search <검색어> [--tool ..] [--status FAILED] [--run 제외할실행]
 & $wb graph <run>          # 자산 그래프(대상)와 탐색 그래프
-& $wb report <run> [--type web --meta report_meta.json --findings findings.json]
+& $wb report <run> --meta report_meta.json [--findings findings.json]   # 회사 템플릿 서식의 결과보고서(기본). 템플릿 유형은 대상 platform 으로 결정
+& $wb report <run> --basic   # 템플릿 없이 내부 점검 요약(Word 표 + Excel, 커버리지 포함)
 & $wb run cancel <run>
 ```
+
+포트·서비스 탐색 예: `collect <run> <check_id> <target_id> nmap.scan --args '{"host": "localhost", "ports": "80,443,8000-8100"}' --operator 이름 --approve-as 승인자` (`ports` 생략 시 상위 100개 포트).
 
 실행 ID 는 앞 몇 글자만 써도 된다. 전체 중지 스위치: `data/STOP` 파일을 만들면 모든 도구 호출이 거부되고 실행은 PAUSED 가 된다.
 
@@ -55,6 +58,7 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 | `backlog.py` | 상태 전이 검증, `FOR UPDATE SKIP LOCKED` 점유, 임대 만료 복구 |
 | `worker.py` | 도구 호출 → 증적 → 규칙 판정 → 발견 사항, 단계별 Activity(`tool_invocations`) |
 | `explore.py` | LLM 탐색 제안과 Python 검증, 탐색 그래프(intent/fact, anchor) |
+| `tools.py` | 워크벤치 로컬 도구. `nmap.scan`: TCP connect + 서비스 버전(`-sT -sV`)만, 포트 최대 1024개, 위험도 `write`(호출마다 승인) |
 | `traces.py` | Worker Activity 검색(`search_all_worker_traces`, `get_worker_trace`) |
 | `coordinator.py` | 계획→점유→실행→재계획 반복, 중지·취소·시간 예산 |
 | `reporting.py` | PostgreSQL 기록을 기존 보고서 모듈 형식으로 보여 주는 어댑터 + Excel '커버리지' 시트 |
@@ -71,17 +75,18 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 |---|---|---|
 | 설정 검증 | 구현 | `doctor`: DSN 누락·미적용 마이그레이션을 FAIL 로 표시하는 것 확인 |
 | PostgreSQL 스키마·마이그레이션 | 구현 | `migrate` 적용/재실행(변경 없음) 확인, 추가 전용 트리거가 `DELETE FROM evidence` 를 거부 |
-| 범위·정책 강제 | 부분 구현 | 범위 밖 대상·경로 이탈·제외 대상·중지 스위치·실행별 허용 도구가 도구 호출 전에 차단됨 확인. 리다이렉트: Playwright 가 범위 내 URL 에서 범위 밖 호스트로 302 이동한 경우를 재현했고, 도착 주소 검사로 출력 저장을 막고 `scope_violation` 으로 기록됨 확인(Playwright 출력 형식만 지원). DNS: 제외 목록이 있을 때 이름이 제외 주소로 해석되면 `DENY` 확인. 호출 간격 제한(`min_call_interval_ms`)은 실측하지 않음. 브라우저 내부의 하위 요청(이미지·스크립트)은 검사하지 않음 |
+| 범위·정책 강제 | 부분 구현 | 범위 밖 대상·경로 이탈·제외 대상·중지 스위치·실행별 허용 도구가 도구 호출 전에 차단됨 확인. 리다이렉트: Playwright 가 범위 내 URL 에서 범위 밖 호스트로 302 이동한 경우를 재현했고, 도착 주소 검사로 출력 저장을 막고 `scope_violation` 으로 기록됨 확인(Playwright 출력 형식만 지원). DNS: 제외 목록이 있을 때 이름이 제외 주소로 해석되면 `DENY` 확인. 호출 간격 제한(`min_call_interval_ms` 1500 → 실제 간격 1.5초 이상) 확인. 쓰기 도구는 승인 없이는 거부, `--approve-as` 로 그 호출만 승인 후 실행됨 확인. 브라우저 내부의 하위 요청(이미지·스크립트)은 검사하지 않음 |
 | 체크리스트 가져오기 | 구현 | 활성·해시 고정된 버전만 DB 로 가져옴(원문 `body` 보존, 자동화 수준 분류). xlsx→JSON 변환은 기존 `audit checklist import` |
 | 결정론적 체크리스트 점검 | 구현 | 예시 체크리스트로 FAIL/PASS/NOT_APPLICABLE/NEEDS_REVIEW/INCONCLUSIVE 확인. 공식 `fsec-2026-1-server@2026-1`(70항목) 실행 → 전부 NEEDS_REVIEW(원본에 자동 판정 기준이 없는 수동확인 항목), 보고서 생성까지 확인 |
 | 로컬 LLM 연동 | 구현 | qwen2.5:7b-instruct 로 분석 3회·탐색 제안 2회가 스키마 검증 통과. 16GB 노트북에서 호출당 10~90초 |
 | 작업 큐·Worker 조정 | 구현 | 점유·상태 전이·재개·취소 확인. 두 프로세스 동시 실행에서 중복 실행 0건(작업 3건 규모). 점유만 하고 방치한 작업이 임대 만료 뒤 다시 실행됨(시도 2회) 확인. Worker 는 프로세스당 1개이며 더 필요하면 `run start` 를 여러 개 띄운다 |
-| MCP 어댑터 | 부분 구현 | 기존 `audit` 레지스트리·클라이언트 재사용, 모든 호출이 정책 계층을 거침. `collect` 로 실제 서버 호출 확인: **Playwright** 페이지 이동·스냅샷·스크린샷(로컬 시험 페이지), **Frida** `enumerate_devices` 는 출력 수신·증적 저장 확인. **Burp** `get_proxy_http_history` 는 응답은 받았으나 프록시 이력이 0건이라 항목 파싱·범위 필터는 `CONNECTED_UNVERIFIED`. **Ghidra**·**JADX** 는 브리지 연결만 되고 본체가 꺼져 있어 실패가 기록됨 → `CONNECTED_UNVERIFIED`. 쓰기 도구의 `--approve-as` 경로는 미확인 |
-| 증적 저장 | 구현 | 파일 SHA-256·크기와 DB 행 대조(`evidence`) 통과, 실패·거부도 행으로 남음. 스크린샷은 MCP 응답(JSON, 이미지 포함) 그대로 저장되며 미디어 유형 구분, 마스킹 파생본은 없음 |
-| Word 보고서 템플릿 | 부분 구현 | 기존 기본 보고서와 웹 모의해킹 템플릿 보고서가 어댑터로 생성·재검증됨. 기본 보고서 끝에 '커버리지 및 제한 사항' 절(실제 판정 분포·미실행·차단·도구 실패)을 덧붙이고 다시 열어 확인. 회사 템플릿 기반 모의해킹 보고서에는 서식 보존을 위해 덧붙이지 않음 |
+| MCP 어댑터 | 부분 구현 | 기존 `audit` 레지스트리·클라이언트 재사용, 모든 호출이 정책 계층을 거침. `collect` 로 실제 서버 호출 확인: **Playwright** 페이지 이동·스냅샷·스크린샷, **Frida** `enumerate_devices`, **Burp** `send_http1_request`(승인 후 로컬 시험 서버로 요청, 응답 수신). **Burp** `get_proxy_http_history` 는 프록시 이력이 0건이라 항목 파싱·범위 필터는 `CONNECTED_UNVERIFIED`. **Ghidra**·**JADX** 는 브리지 연결만 되고 본체가 꺼져 있어 실패가 기록됨 → `CONNECTED_UNVERIFIED` |
+| Nmap(로컬 도구) | 구현 | Nmap 7.98 로 `localhost` 의 시험 포트 스캔: 승인 없으면 거부, 범위 밖 호스트·옵션 형태의 호스트 값·포트 1024개 초과는 거부, 승인 후 XML 증적 저장과 열린 포트의 자산 등록 확인. NSE 스크립트·OS 탐지·UDP 는 지원하지 않음 |
+| 증적 저장 | 구현 | 파일 SHA-256·크기와 DB 행 대조(`evidence`) 통과, 실패·거부도 행으로 남음. MCP 응답은 `application/json` 으로, 응답 안의 스크린샷은 원본과 연결된(`derived_from`) `image/png` 파생 증적으로 따로 저장됨 확인. 비밀 값 마스킹 파생본은 없음 |
+| Word 보고서 템플릿 | 부분 구현 | `report` 의 기본은 기존 `audit.pentest_report` + 회사 템플릿(`templates/word/`)으로 만드는 결과보고서다(대상 platform WEB → 웹 템플릿, `--meta` 필수). 실제 대상 실행으로 생성 확인. 모바일 템플릿은 기존 모듈이 아직 지원하지 않음. `--basic` 은 표 양식 요약에 '커버리지 및 제한 사항' 절을 덧붙인다 |
 | Excel 보고서 템플릿 | 부분 구현 | 기존 시트 + '커버리지' 시트 생성 후 다시 열어 확인. 사용자 지정 Excel 템플릿으로는 확인하지 않음 |
 | 탐색·재계획 반복 | 구현 | 실제 모델 제안 → 정책 검증 → 실행 → 사실 기록 → 재계획 → 예산 초과 거부까지 확인. 읽기 전용 도구만 허용 |
-| 이중 그래프·anchor 연결 | 부분 구현 | 탐색 그래프(goal/intent/fact, spawns/yields/derived_from, anchor) 동작. 자산 그래프는 범위에 선언된 대상 + `fs.list_dir` 가 관찰한 경로와 `contains` 관계(출처 증적 ID 기록)만 채운다. 호스트·서비스·엔드포인트 추출은 없음 |
+| 이중 그래프·anchor 연결 | 부분 구현 | 탐색 그래프(goal/intent/fact, spawns/yields/derived_from, anchor) 동작. 자산 그래프는 범위에 선언된 대상 + 도구가 관찰한 것만 채운다: `fs.list_dir` 의 경로(`contains`), Playwright 가 도착한 페이지(`serves`)와 범위 내 링크(`links_to`), `nmap.scan` 의 열린 포트(`exposes`, `service:호스트:포트/프로토콜`). 출처 증적 ID 를 관계에 남긴다. 모두 로컬 시험 대상으로 확인. Burp 이력 기반 추출은 없음 |
 | 공유 TodoList·선행 조건 | 부분 구현 | 영속 큐와 멱등 키(재계획 시 중복 0건) 확인. `backlog_deps` 에 선행 관계를 넣으면 선행 작업 완료 전까지 BLOCKED 였다가 실행됨 확인. 선행 관계를 자동으로 만드는 Planner 규칙은 없음 |
 | Worker Activity 검색·재사용 | 부분 구현 | `trace search/show` 동작, 다른 실행의 실패 이력을 탐색 프롬프트에 참고로 넣음. ILIKE 검색이라 대량 데이터 성능은 미확인 |
 

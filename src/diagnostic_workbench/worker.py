@@ -6,22 +6,25 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urldefrag, urljoin
 
 from psycopg.types.json import Jsonb
 
 from audit import schemas
 from audit.checklist_engine import is_applicable, render_args
 from audit.local_model import LLMError, build_analysis_messages
-from audit.models import ToolError
+from audit.models import PolicyDenied, ToolError, ToolOutput
 from audit.policy import mask_secrets, redact, secret_values
 from audit.verdict import decide, evaluate_rule
 
-from . import backlog, db, evidence, policy
+from . import backlog, db, evidence, policy, tools
 
 _LEGACY_TO_DB = {"MANUAL_REVIEW": "NEEDS_REVIEW"}
+_LINK = re.compile(r"/url: (\S+)")  # Playwright 스냅샷의 링크 표기
 
 
 def load_item(ctx, item: dict) -> dict:
@@ -118,7 +121,14 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
                                  tool_version=out.tool_version, **common)
             ctx.conn.commit()
             return eid, None
-        eid = evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, output=out, **common)
+        is_mcp = tool.startswith("mcp:")
+        media, ext = ("application/json", "json") if is_mcp else             ("application/xml", "xml") if tool == "nmap.scan" else ("application/octet-stream", "bin")
+        eid = evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, output=out, media_type=media, ext=ext,
+                             **common)
+        if is_mcp and not out.truncated:  # 응답에 든 이미지(스크린샷)는 원본과 연결된 파생 증적으로 따로 둔다
+            for mime, ext, raw in evidence.mcp_images(out.data):
+                evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, media_type=mime, ext=ext, derived_from=eid,
+                               output=ToolOutput(raw, out.tool_version), **{**common, "requirement_id": f"{req_id}:image"})
         record_invocation(ctx, it, worker_run_id, step, tool, d, "SUCCEEDED", started=started, evidence_id=eid,
                           tool_version=out.tool_version)
         _observe_assets(ctx, it, tool, d.args, out, eid)
@@ -133,23 +143,44 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
 def _observe_assets(ctx, it, tool, args, out, evidence_id):
     """도구가 실제로 관찰한 자산과 관계를 자산 그래프에 등록한다(출처·실행·증적을 남긴다).
 
-    ponytail: 구조가 확정된 fs.list_dir 출력만 다룬다. 다른 도구는 출력 형식을 실제로 확인한 뒤 추가한다.
+    ponytail: 출력 형식을 실제로 확인한 fs.list_dir, nmap.scan, Playwright MCP 만 다룬다. 다른 도구는 확인 후 추가한다.
     """
-    if tool != "fs.list_dir" or out.truncated:
+    if out.truncated:
         return
     conn, run_id = ctx.conn, ctx.run["id"]
 
-    def asset(value):
+    def asset(kind, value):
         return conn.execute(
             "INSERT INTO assets (kind, value, source, verification, first_seen_run_id) "
-            "VALUES ('path', %s, %s, 'OBSERVED', %s) "
+            "VALUES (%s, %s, %s, 'OBSERVED', %s) "
             "ON CONFLICT (kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id",
-            (value, f"tool:{tool}", run_id)).fetchone()["id"]
-    parent = asset(args["path"])
-    for entry in json.loads(out.data)[:200]:
-        conn.execute("INSERT INTO asset_edges (src_id, dst_id, rel, run_id, source) VALUES (%s,%s,'contains',%s,%s) "
-                     "ON CONFLICT DO NOTHING",
-                     (parent, asset(str(Path(args["path"]) / entry["name"])), run_id, f"evidence:{evidence_id}"))
+            (kind, value, f"tool:{tool}", run_id)).fetchone()["id"]
+
+    def edge(src, rel, dst):
+        if src != dst:
+            conn.execute("INSERT INTO asset_edges (src_id, dst_id, rel, run_id, source) VALUES (%s,%s,%s,%s,%s) "
+                         "ON CONFLICT DO NOTHING", (src, dst, rel, run_id, f"evidence:{evidence_id}"))
+    if tool == "fs.list_dir":
+        parent = asset("path", args["path"])
+        for entry in json.loads(out.data)[:200]:
+            edge(parent, "contains", asset("path", str(Path(args["path"]) / entry["name"])))
+    elif tool == "nmap.scan":  # 열린 포트만 서비스 자산으로 등록한다(제품·버전은 증적에 있다)
+        for p in tools.parse_nmap_xml(out.data)[:200]:
+            edge(it["asset_id"], "exposes", asset("service", f"{args['host']}:{p['port']}/{p['proto']}"))
+    elif tool.startswith("mcp:playwright/"):
+        text = policy._texts(out.data)
+        pages = policy._PAGE_URL.findall(text)
+        if not pages or pages[-1].startswith("about:"):
+            return
+        page = asset("url", urldefrag(pages[-1]).url)  # 도착 주소는 run_tool 이 이미 범위 안임을 확인했다
+        edge(it["asset_id"], "serves", page)
+        for href in _LINK.findall(text)[:200]:
+            link = urldefrag(urljoin(pages[-1], href)).url
+            try:  # 범위 밖 링크는 자산으로 등록하지 않는다
+                ctx.policy.check_url(link, it["target"])
+            except PolicyDenied:
+                continue
+            edge(page, "links_to", asset("url", link))
 
 
 def _analyze(ctx, body, target, ev: dict) -> dict:

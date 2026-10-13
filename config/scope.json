@@ -25,7 +25,7 @@
       "type": "host",
       "value": "localhost",
       "platform": "WEB",
-      "description": "HwangEojin/demo 레포의 BASELINE 테스트 웹(Level1~5, docker-compose, localhost:8090 — Burp 프록시 리스너가 8080 을 쓰므로 충돌 방지차 포트 변경함)"
+      "description": "HwangEojin/demo 레포의 BASELINE 테스트 웹(Level1~5, docker-compose, localhost:9999 — 8080 은 Burp 프록시 리스너, 8090 은 Windows 예약 포트 범위(8034-8133)라 9999 로 변경함)"
     }
   ]
 }

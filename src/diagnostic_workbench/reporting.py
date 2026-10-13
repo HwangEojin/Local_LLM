@@ -180,6 +180,17 @@ def _m_text(v) -> str:
     return mask_secrets("" if v is None else str(v))[:500]
 
 
+_KIND_BY_PLATFORM = {"WEB": "web"}  # audit.pentest_report 가 지원하는 결과보고서 템플릿 유형
+
+
+def default_kind(conn, run: dict) -> str | None:
+    """실행 대상의 platform 으로 결과보고서 템플릿 유형을 고른다. 지원하는 템플릿이 없으면 None."""
+    kinds = {_KIND_BY_PLATFORM.get(r["platform"]) for r in conn.execute(
+        "SELECT DISTINCT a.platform FROM run_assets ra JOIN assets a ON a.id = ra.asset_id WHERE ra.run_id = %s",
+        (run["id"],))}
+    return kinds.pop() if len(kinds) == 1 else None
+
+
 def generate(cfg, conn, run: dict, kind=None, meta=None, findings=None) -> dict:
     run_id = str(run["id"])
     storage = LegacyStorage(conn, cfg.evidence_dir)
