@@ -1,6 +1,4 @@
 """통합: Burp MCP 와 같은 도구 형식의 테스트 서버(실제 MCP stdio 연결)로 증거 수집과 범위 필터를 검증한다."""
-import contextlib
-import io
 import json
 import sys
 import unittest
@@ -9,8 +7,7 @@ from pathlib import Path
 from audit import config
 from audit.adapters import build_registry
 from audit.adapters.burp import request_hosts, split_items
-from audit.cli import main
-from audit.manual_evidence import add_tool_evidence
+from tests.fixtures.legacy_run.manual_evidence import add_tool_evidence
 from audit.models import AuditError, PolicyDenied, ToolError
 from audit.policy import Policy
 from tests.helpers import PLAN, Home
@@ -116,34 +113,6 @@ class BurpTest(unittest.TestCase):
         self.assertEqual(len(split_items(json.dumps([a, a]))), 2)  # JSON 배열
         self.assertEqual(len(split_items(json.dumps(a) + "\n\n" + json.dumps(a))), 2)  # 연속된 객체
         self.assertEqual(len(split_items("GET / HTTP/1.1\r\nHost: a.test\r\n\r\n\r\nGET /b HTTP/1.1\r\nHost: b.test")), 2)  # 텍스트
-
-    def test_cli_evidence_add_and_list(self):
-        # CLI 는 설정 파일의 MCP 서버를 쓴다: 테스트용 서버로 교체
-        (self.h.path / "config" / "mcp_servers.json").write_text(json.dumps({"servers": servers()}), encoding="utf-8")
-        sc = config.load_scope(self.h.path)
-        sc["targets"] = [{"target_id": "srv", "type": "host", "value": "app.test"}]
-        (self.h.path / "config" / "scope.json").write_text(json.dumps(sc), encoding="utf-8")
-        self.h.storage.close()
-
-        def cli(*argv):
-            out, err = io.StringIO(), io.StringIO()
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                try:
-                    rc = main(["--home", str(self.h.path), *argv])
-                except SystemExit as e:
-                    rc = e.code
-            return rc, out.getvalue() + err.getvalue()
-        rc, out = cli("evidence", "add", self.run_id, "SAMPLE-004", "srv", "mcp:burp/get_scanner_issues",
-                      "--args", '{"count": 10, "offset": 0}')
-        self.assertEqual(rc, 0, out)
-        self.assertIn("범위 밖 제외 1건", out)
-        rc, out = cli("evidence", "list", self.run_id)
-        self.assertEqual(rc, 0)
-        self.assertIn("mcp:burp/get_scanner_issues", out)
-        self.assertEqual(cli("evidence", "add", self.run_id, "SAMPLE-004", "srv", "mcp:burp/get_scanner_issues",
-                             "--args", "{bad")[0], 2)
-        self.assertEqual(cli("evidence", "add", self.run_id)[0], 2)  # 인자 부족
-        self.assertEqual(cli("evidence", "add", self.run_id, "SAMPLE-004", "srv", "mcp:burp/nope")[0], 1)  # 정책 거부
 
     def test_empty_burp_response_is_not_counted_as_item(self):
         self.assertEqual(split_items("Reached end"), [])  # 실제 Burp MCP 가 빈 이력에 돌려주는 문구

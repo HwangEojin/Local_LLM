@@ -90,6 +90,60 @@ def cmd_migrate(args):
     return 0
 
 
+def cmd_checklist(args):
+    """체크리스트 목록/검증/활성화, 원본 xlsx 가져오기(파일 기반, 실행 생성 시 DB 로 들어간다)."""
+    from audit.checklist_engine import Checklists
+    cfg, conn = _open(args)
+    cl = Checklists(cfg.settings.path("checklist_dir"))
+    if args.action == "list":
+        for cid, v in cl.entries():
+            print(f"{cid}	{v['version']}	{v['status']}	{v.get('sha256', '-')[:12]}")
+        return 0
+    if args.action == "validate":
+        bad = 0
+        for cid, v in cl.entries():
+            errs = cl.check_version(cid, v["version"])
+            print(f"{cid}@{v['version']} [{v['status']}]: {'정상' if not errs else '무효'}")
+            for e in errs:
+                print(f"    - {e}")
+            bad |= bool(errs)
+        return int(bad)
+    if args.action == "activate":
+        if not (args.name and args.version):
+            print("activate 에는 <checklist_id> <version> 이 필요합니다", file=sys.stderr)
+            return 2
+        sha = cl.activate(args.name, args.version)
+        db.audit(conn, None, "checklist_activated", {"checklist_id": args.name, "version": args.version, "sha256": sha})
+        conn.commit()
+        print(f"활성화됨: {args.name}@{args.version} sha256={sha}")
+        return 0
+    from audit import importer  # import: 원본 xlsx -> 버전 고정 JSON(draft)
+    xlsx, pdf = Path(args.name or ""), Path(args.pdf) if args.pdf else None
+    if not xlsx.is_file() or (pdf is not None and not pdf.is_file()):
+        print("import 에는 원본 xlsx 경로가 필요합니다: checklist import <xlsx> [version] [--pdf <pdf>]", file=sys.stderr)
+        return 2
+    version = args.version or "2026-1"
+    checklists, notes = importer.convert(xlsx, version=version, pdf=pdf)
+    written = importer.write_checklists(checklists, cfg.settings.path("checklist_dir"), version,
+                                        [xlsx] + ([pdf] if pdf else []), replace_draft=args.replace_draft)
+    db.audit(conn, None, "checklist_imported", {"source": xlsx.name, "sha256": importer.sha256_file(xlsx),
+                                                "checklists": list(checklists)})
+    conn.commit()
+    total = sum(len(c["items"]) for c in checklists.values())
+    incomplete = sum(1 for c in checklists.values() for i in c["items"] if i["item_status"] != "complete")
+    print(f"변환 완료: 체크리스트 {len(written)}개, 항목 {total}개 (기준 미확보 incomplete {incomplete}개)")
+    print("상태는 모두 draft 입니다. 검증 후 활성화하세요: checklist validate / checklist activate <id> <version>")
+    return 0
+
+
+def cmd_tools(args):
+    """실행 가능한 도구와 위험도. read 는 바로, 그 밖은 호출마다 승인이 필요하다."""
+    cfg = config.load(args.home)
+    for name, spec in sorted(runs.registry(cfg).items()):
+        print(f"{name:<44} {spec.risk:<10} 범위검사 인자={spec.scope_args or '-'}")
+    return 0
+
+
 def _status(conn, run):
     rid = run["id"]
     cv = conn.execute("SELECT checklist_id, version FROM checklist_versions WHERE id=%s",
@@ -398,6 +452,13 @@ def build_parser():
     d.add_argument("--probe-mcp", action="store_true", help="활성 MCP 서버에 연결해 도구 목록을 받아 본다")
     m = sub.add_parser("migrate", help="SQL 마이그레이션 적용")
     m.add_argument("--status", action="store_true")
+    c = sub.add_parser("checklist", help="체크리스트 목록/검증/활성화/원본 xlsx 가져오기")
+    c.add_argument("action", choices=["list", "validate", "activate", "import"])
+    c.add_argument("name", nargs="?", help="activate: checklist_id, import: 원본 xlsx 경로")
+    c.add_argument("version", nargs="?")
+    c.add_argument("--pdf", help="import 시 쪽 번호를 연결할 참고 PDF 경로(pdftotext 필요)")
+    c.add_argument("--replace-draft", action="store_true", help="import 시 같은 버전이 draft 이면 교체")
+    sub.add_parser("tools", help="등록된 도구와 위험도 목록")
     r = sub.add_parser("run", help="실행 생성/미리 보기/시작(재개)/상태/취소/목록")
     r.add_argument("action", choices=["create", "plan", "start", "status", "cancel", "list"])
     r.add_argument("run", nargs="?")
@@ -458,7 +519,7 @@ def build_parser():
     return p
 
 
-COMMANDS = {"doctor": cmd_doctor, "migrate": cmd_migrate, "run": cmd_run, "backlog": cmd_backlog,
+COMMANDS = {"doctor": cmd_doctor, "migrate": cmd_migrate, "checklist": cmd_checklist, "tools": cmd_tools, "run": cmd_run, "backlog": cmd_backlog,
             "approve": cmd_approve, "retry": cmd_retry, "review": cmd_review, "evidence": cmd_evidence,
             "collect": cmd_collect, "trace": cmd_trace, "graph": cmd_graph, "report": cmd_report}
 

@@ -8,10 +8,10 @@ from audit import config
 from audit.adapters import build_registry
 from audit.checklist_engine import Checklists
 from audit.evidence import EvidenceStore
-from audit.orchestrator import Orchestrator
-from audit.planner import validate_plan
+from tests.fixtures.legacy_run.orchestrator import Orchestrator
+from tests.fixtures.legacy_run.planner import validate_plan
 from audit.policy import Policy
-from audit.storage import Storage
+from tests.fixtures.legacy_run.storage import Storage
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,7 +28,7 @@ class Home:
         # 체크리스트는 테스트 전용 fixture 를 사용한다(실제 checklist/ 와 완전히 분리)
         shutil.copytree(ROOT / "tests" / "fixtures" / "checklist", self.path / "checklist")
         self.settings = config.load_settings(self.path)
-        self.storage = Storage(self.settings.path("db"))
+        self.storage = Storage(self.path / "data" / "audit.db")
         self.policy = Policy(config.load_scope(self.path), self.path)
         self.checklists = Checklists(self.settings.path("checklist_dir"))
         self.registry = build_registry(self.settings, {})

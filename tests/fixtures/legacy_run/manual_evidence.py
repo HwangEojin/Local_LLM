@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from .models import AuditError, PolicyDenied, ToolError
+from audit.models import AuditError, PolicyDenied, ToolError
 
 
 def add_tool_evidence(storage, evidence_store, policy, registry, settings, approver, run_id, check_id, target_id,

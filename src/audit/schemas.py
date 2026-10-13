@@ -114,9 +114,8 @@ SETTINGS = {
         },
         "paths": {
             "type": "object", "additionalProperties": False,
-            "required": ["db", "evidence_dir", "reports_dir", "checklist_dir", "templates_dir"],
-            "properties": {k: _STR for k in
-                           ("db", "evidence_dir", "reports_dir", "checklist_dir", "templates_dir")},
+            "required": ["evidence_dir", "reports_dir", "checklist_dir", "templates_dir"],
+            "properties": {k: _STR for k in ("evidence_dir", "reports_dir", "checklist_dir", "templates_dir")},
         },
         "limits": {
             "type": "object", "additionalProperties": False,
@@ -261,22 +260,6 @@ MANIFEST = {
             }},
         },
     }}},
-}
-
-PLAN = {
-    "type": "object", "additionalProperties": False,
-    "required": ["plan_id", "checklist_id", "checklist_version", "targets"],
-    "properties": {
-        "plan_id": _ID,
-        "description": {"type": "string"},
-        "checklist_id": _ID,
-        "checklist_version": _STR,
-        "targets": {"type": "array", "minItems": 1, "items": _ID},
-        "check_ids": {"type": "array", "items": _ID},
-        "use_llm": {"type": "boolean"},
-        # 정보용일 뿐 권한을 부여하지 않는다(권한은 정책 엔진이 결정한다).
-        "requires_approval": {"type": "boolean"},
-    },
 }
 
 _VERDICTS = ["PASS", "FAIL", "MANUAL_REVIEW", "NOT_APPLICABLE", "INCONCLUSIVE"]

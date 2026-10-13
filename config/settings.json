@@ -10,7 +10,6 @@
   },
   "external_api": {"enabled": false},
   "paths": {
-    "db": "data/audit.db",
     "evidence_dir": "data/evidence",
     "reports_dir": "reports",
     "checklist_dir": "checklist",
