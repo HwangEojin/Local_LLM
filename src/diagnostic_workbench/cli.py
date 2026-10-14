@@ -149,7 +149,8 @@ def _status(conn, run):
     cv = conn.execute("SELECT checklist_id, version FROM checklist_versions WHERE id=%s",
                       (run["checklist_version_id"],)).fetchone()
     print(f"실행 {rid}\n  상태={run['status']}" + (f" ({run['stop_reason']})" if run["stop_reason"] else "")
-          + f"  체크리스트={cv['checklist_id']}@{cv['version']}  운영자={run['operator']}  use_llm={run['use_llm']}")
+          + f"  체크리스트={cv['checklist_id']}@{cv['version']}  운영자={run['operator']}  use_llm={run['use_llm']}"
+          + f"  자율모드={run['autonomy']}")
     cov = reporting.coverage(conn, rid)
     print("  판정: " + (", ".join(f"{k}={v}" for k, v in cov["verdicts"].items()) or "없음"))
     print("  작업: " + (", ".join(f"{k}={v}" for k, v in cov["backlog"].items()) or "없음"))
@@ -178,8 +179,12 @@ def cmd_run(args):
                                                            ("max_explorations", args.max_explorations)) if v is not None})
         run = runs.create_run(conn, cfg, cid, ver, args.targets.split(","), args.operator,
                               args.check_ids.split(",") if args.check_ids else None, args.llm, budget,
-                              args.tools.split(",") if args.tools else None)
-        print(f"실행 생성됨: {run['id']}\n미리 보기: run plan {run['id']}   시작: run start {run['id']}")
+                              args.tools.split(",") if args.tools else None, args.autonomy)
+        print(f"실행 생성됨: {run['id']}  자율 모드={run['autonomy']}")
+        if run["autonomy"] != "approval":
+            print(f"  주의: 위험도 '{'write/dangerous' if run['autonomy'] == 'full' else 'write'}' 도구가 "
+                  "범위 내에서 사람 승인 없이 자동 실행됩니다. 실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
+        print(f"미리 보기: run plan {run['id']}   시작: run start {run['id']}")
         return 0
     if args.action == "list":
         for r in conn.execute("SELECT id, status, operator, created_at FROM runs ORDER BY created_at DESC LIMIT 30"):
@@ -467,6 +472,9 @@ def build_parser():
     r.add_argument("--check-ids", help="일부 항목만 실행(쉼표 구분)")
     r.add_argument("--operator")
     r.add_argument("--tools", help="이 실행에서 허용할 도구 이름(쉼표 구분). 생략하면 등록된 도구 전체")
+    r.add_argument("--autonomy", choices=runs.AUTONOMY_LEVELS, default="approval",
+                   help="approval(기본, 항상 승인) | partial(write 자동, dangerous 승인) | full(모두 자동, 범위 내). "
+                        "진단 시작 전에만 정하며 실행 중 바꿀 수 없음")
     r.add_argument("--llm", action="store_true", help="로컬 LLM 참고 의견과 탐색 제안 사용")
     r.add_argument("--max-tasks", type=int)
     r.add_argument("--max-explorations", type=int)

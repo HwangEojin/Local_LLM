@@ -52,7 +52,7 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 ## 4. 진단 실행
 
 ```powershell
-& $wb run create --checklist fsec-2026-1-web-mobile-hts@2026-1 --targets baseline-demo --operator 이름 [--llm] [--check-ids A,B] [--tools a,b]
+& $wb run create --checklist fsec-2026-1-web-mobile-hts@2026-1 --targets baseline-demo --operator 이름 [--llm] [--check-ids A,B] [--tools a,b] [--autonomy approval|partial|full]
 & $wb run plan  <run>      # 실행 예정 작업과 정책 분류 미리 보기
 & $wb run start <run>      # 시작/재개 (Ctrl+C → PAUSED)
 & $wb run status <run>     # 판정 분포, 작업 큐, 차단 사유, 사용량
@@ -74,7 +74,7 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 ```
 
 - 실행 ID 는 앞 몇 글자만 써도 된다.
-- 도구 위험도: `read` 는 범위 안이면 실행, `write`/`dangerous` 는 `scope.json` 의 `allowed_risks` 에 있고 호출마다 승인돼야 실행된다. 승인은 실행·대상·도구·정확한 인자에 묶이며 24시간 유효.
+- 도구 위험도: `read` 는 범위 안이면 실행, `write`/`dangerous` 는 `scope.json` 의 `allowed_risks` 에 있어야 한다. 그 안에서 승인이 얼마나 필요한지는 실행 생성 시 정한 `--autonomy` 로 정해진다(`approval` 기본값: 매번 승인 / `partial`: write 자동, dangerous 승인 / `full`: 둘 다 자동, 범위 내). 실행 중 바꿀 수 없다. 승인이 필요할 때는 실행·대상·도구·정확한 인자에 묶이며 24시간 유효.
 - `PASS`/`FAIL` 은 연결된 증적이 있어야 기록할 수 있다.
 - 전체 중지: `data/STOP` 파일을 만들면 모든 도구 호출이 거부되고 실행은 PAUSED 가 된다.
 - Nmap 예: `collect <run> <check_id> <target_id> nmap.scan --args '{"host": "localhost", "ports": "80,443,8000-8100"}' --operator 이름 --approve-as 승인자` (`-sT -sV` 고정, 포트 최대 1024개).
@@ -98,7 +98,7 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 ```
 
 - 기본 보고서는 `templates/word/` 의 `웹*결과보고서*.docx` 서식을 그대로 쓰고, 보호대책은 `*웹*보안권고안*.docx` 에서 텍스트와 이미지만 가져온다. 템플릿 유형은 대상 platform 으로 정한다(현재 WEB 만 지원).
-- `report_meta.json`: 고객사, 프로젝트, 대상(`target_id`, 이름, URL), 일정, 인력. 예시 `examples/report/report_meta.sample.json`, 형식 `src/audit/schemas.py` 의 `REPORT_META`.
+- `report_meta.json`: 고객사, 프로젝트, 대상(`target_id`, 이름, URL), 일정, 인력. 형식은 `src/audit/schemas.py` 의 `REPORT_META`.
 - `findings.json`: `check_id` + `target_id` 가 DB 의 **FAIL 판정과 일치**해야 한다. 진단결과, 발생경로, 사례(CASE)와 단계(`text`/`code`/`image`/`caption`), 권고사항. 형식은 `FINDINGS`.
 - FAIL 인데 findings 에 없으면 `(작성 필요)` 로 포함하고 경고한다. 취약점명이 권고안 제목과 다르면 `recommendation_titles` 로 지정한다. 찾지 못한 보호대책은 지어내지 않는다.
 - 생성 후 파일을 다시 열어 취약점 누락을 확인한다. 기존 파일은 덮어쓰지 않는다(`-2`, `-3`).
@@ -126,7 +126,7 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 |---|---|---|
 | 설정 검증 | 구현 | `doctor` 가 DSN 누락·미적용 마이그레이션을 FAIL 로 표시 |
 | PostgreSQL 스키마·마이그레이션 | 구현 | 전용 DB 에 3개 적용, 추가 전용 트리거가 증적 삭제를 거부 |
-| 범위·정책 강제 | 부분 구현 | 범위 밖·경로 이탈·제외 대상·DNS·중지 스위치·허용 도구·승인·호출 간격 확인. 리다이렉트 이탈은 Playwright 출력만 검사하며 페이지의 하위 요청은 검사하지 않음 |
+| 범위·정책 강제 | 부분 구현 | 범위 밖·경로 이탈·제외 대상·DNS·중지 스위치·허용 도구·승인·호출 간격 확인. 3단계 자율성 스위치(`approval`/`partial`/`full`)가 `scope.json` 의 `allowed_risks` 범위 안에서만 승인을 건너뛰는 것을 write(nmap)·dangerous(frida) 도구로 확인. 리다이렉트 이탈은 Playwright 출력만 검사하며 페이지의 하위 요청은 검사하지 않음 |
 | 체크리스트 가져오기 | 구현 | 활성·해시 고정 버전만 DB 로 가져오고 원문 보존 |
 | 결정론적 체크리스트 점검 | 구현 | 예시 체크리스트로 5가지 판정 확인. 공식 12종은 전 항목 사람 검토 |
 | 로컬 LLM 연동 | 구현 | 분석·탐색 제안이 스키마 검증 통과. 16GB 노트북에서 호출당 10~90초 |
@@ -143,14 +143,13 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 
 도커 데모 대상(`baseline-demo`, `localhost:9999`)으로 실행 생성 → Nmap·Playwright·Burp 증적 → 검토 판정 → 결과보고서까지 확인했다. 그 밖의 확인은 임시 PostgreSQL 과 예시 체크리스트로 했다.
 
-## 8. 테스트와 복구
+## 8. 복구와 문제 해결
+
+보고서 서식 코드(`src/audit/pentest_report.py`)는 서식·보호대책 연결·파일 무결성을 검증하는 테스트가 지킨다. 서식 코드를 고친 뒤 실행한다(실제 체크리스트 `fsec-2026-1-web-mobile-hts` 와 `templates/word/` 템플릿이 있어야 한다).
 
 ```powershell
-.venv\Scripts\python -m unittest discover -s tests -t .
-$env:WORKBENCH_TEST_PG_DSN = "postgresql://user@127.0.0.1:5432/workbench_test"   # 워크벤치 흐름 테스트(전용 DB 필요)
+.venv\Scripts\python -m unittest tests.unit.test_pentest_report
 ```
-
-`tests/fixtures/legacy_run/` 은 보고서·필터 테스트에 넣을 실행 결과를 만드는 테스트 전용 SQLite 실행기다(제품 코드 아님).
 
 - Worker 가 죽으면 임대(`lease_s`)가 지난 뒤 READY 로 돌아가거나 시도 횟수 초과 시 FAILED 가 된다.
 - 변경 이벤트를 놓쳐도 `run start` 가 DB 상태에서 다시 계획한다.

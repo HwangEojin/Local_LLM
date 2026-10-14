@@ -50,9 +50,14 @@ def import_checklist(conn, checklists: Checklists, checklist_id: str, version: s
     return row
 
 
+AUTONOMY_LEVELS = ("approval", "partial", "full")  # 항상 승인 | write 자동, dangerous 승인 | 전부 자동(범위 내)
+
+
 def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str], operator: str,
                check_ids: list[str] | None = None, use_llm: bool = False, budget: dict | None = None,
-               allowed_tools: list[str] | None = None) -> dict:
+               allowed_tools: list[str] | None = None, autonomy: str = "approval") -> dict:
+    if autonomy not in AUTONOMY_LEVELS:
+        raise ConfigError(f"autonomy 는 {AUTONOMY_LEVELS} 중 하나여야 함: {autonomy}")
     scope = audit_config.load_scope(cfg.home)
     policy = Policy(scope, cfg.home)
     targets = [(tid, policy.target(tid)) for tid in dict.fromkeys(target_ids)]  # 범위 밖이면 PolicyDenied
@@ -76,10 +81,10 @@ def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str]
                               f"사용 가능: {', '.join(platforms)}")
 
     run = conn.execute(
-        "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm, allowed_tools) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm, allowed_tools, "
+        "autonomy) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (scope["engagement_id"], operator, cv["id"], Jsonb(scope), Jsonb({**cfg.budget, **(budget or {})}),
-         use_llm, allowed_tools)).fetchone()
+         use_llm, allowed_tools, autonomy)).fetchone()
     goal = conn.execute(
         "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'goal','operator',%s) RETURNING id",
         (run["id"], Jsonb({"text": f"체크리스트 {checklist_id}@{version} 진단", "targets": target_ids}))).fetchone()
@@ -103,7 +108,7 @@ def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str]
         "plan": {"plan_id": str(run["id"]), "checklist_id": checklist_id, "checklist_version": version,
                  "targets": [tid for tid, _ in targets], "use_llm": use_llm},
         "scope": scope, "tasks": tasks, "use_llm": use_llm, "operator": operator, "budget": run["budget"],
-        "allowed_tools": allowed_tools})
+        "allowed_tools": allowed_tools, "autonomy": autonomy})
     db.notify_change(conn, run["id"], "run_created")
     conn.commit()
     return run

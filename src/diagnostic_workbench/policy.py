@@ -70,12 +70,16 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
                 return Decision(DENY, f"'{host}' 이(가) 제외 주소 '{hit}' 로 해석됨", clean)
     if spec.risk == "read":
         return Decision(ALLOW, "읽기 전용 도구, 범위 내", clean)
+    autonomy = ctx.run.get("autonomy", "approval")  # approval(기본) | partial | full — 실행 생성 시 고정
+    auto_ok = autonomy == "full" or (autonomy == "partial" and spec.risk == "write")
+    if auto_ok:  # 승인을 건너뛰어도 그 사실을 감사 기록에 남긴다(범위·제외·중지 스위치 검사는 이미 위에서 통과함)
+        return Decision(ALLOW, f"자율 모드 '{autonomy}' 로 위험도 '{spec.risk}' 도구를 승인 없이 허용함", clean)
     row = ctx.conn.execute(
         "SELECT decision, approver FROM approvals WHERE run_id=%s AND asset_id=%s AND tool=%s AND args_sha256=%s "
         "AND expires_at > now() ORDER BY decided_at DESC LIMIT 1",
         (ctx.run["id"], asset_id, tool, args_hash(clean))).fetchone()
     if row is None:
-        return Decision(ALLOW_WITH_APPROVAL, f"위험도 '{spec.risk}' 도구는 유효한 승인이 필요함", clean)
+        return Decision(ALLOW_WITH_APPROVAL, f"위험도 '{spec.risk}' 도구는 유효한 승인이 필요함(자율 모드 '{autonomy}')", clean)
     if row["decision"] != "APPROVED":
         return Decision(DENY, f"승인자 {row['approver']} 이(가) 거부함", clean)
     return Decision(ALLOW, f"승인됨 (승인자 {row['approver']})", clean)
