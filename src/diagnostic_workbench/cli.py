@@ -364,6 +364,8 @@ def cmd_collect(args):
         db.audit(conn, run["id"], "evidence_added", {"check_id": args.check_id, "target_id": args.target_id,
                                                       "tool": tool, "evidence_id": str(eid), "success": row["success"],
                                                       "operator": args.operator})
+        if row["success"]:  # 운영자가 손으로 모은 증적도 Planner 를 깨운다(탐색이 이를 근거로 삼을 수 있게)
+            db.notify_change(conn, run["id"], "evidence", eid)
         conn.commit()
         if out is None:
             failed += 1
