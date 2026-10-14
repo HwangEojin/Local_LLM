@@ -1,4 +1,4 @@
-"""테스트 도우미: 프로젝트 설정/체크리스트/예시 대상의 격리된 복사본."""
+"""보고서 서식 테스트용 도우미: 프로젝트 설정·테스트 체크리스트의 격리된 복사본과 SQLite 실행기(픽스처)."""
 import json
 import shutil
 import tempfile
@@ -23,8 +23,7 @@ class Home:
     def __init__(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.path = Path(self._tmp.name)
-        for d in ("config", "examples"):
-            shutil.copytree(ROOT / d, self.path / d)
+        shutil.copytree(ROOT / "config", self.path / "config")
         # 체크리스트는 테스트 전용 fixture 를 사용한다(실제 checklist/ 와 완전히 분리)
         shutil.copytree(ROOT / "tests" / "fixtures" / "checklist", self.path / "checklist")
         self.settings = config.load_settings(self.path)
