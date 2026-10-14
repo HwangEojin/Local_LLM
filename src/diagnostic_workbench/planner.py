@@ -82,7 +82,8 @@ def plan(ctx) -> dict:
     conn.commit()
     # 탐색 제안은 새 판정/사실이 생겼고 체크리스트 작업이 더 남지 않았을 때만 시도한다
     queued = backlog.counts(conn, run_id)
-    if ctx.llm and {"verdict", "fact"} & set(events) and not (queued.get("READY") or queued.get("RUNNING")):
+    if ctx.llm and {"verdict", "fact", "evidence", "approval"} & set(events) \
+            and not (queued.get("READY") or queued.get("RUNNING")):
         stats["explorations"] = explore.propose(ctx)
         if stats["explorations"]:
             stats.update(_admit(ctx))

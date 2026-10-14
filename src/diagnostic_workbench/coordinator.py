@@ -20,8 +20,13 @@ def _set_status(conn, run_id, status, reason=None, ended=False):
 
 
 def run_loop(cfg, conn, run: dict, log=print) -> dict:
-    """실행을 시작하거나 이어서 진행한다. 최종 runs 행을 반환한다."""
-    if run["status"] in ("COMPLETED", "CANCELLED"):
+    """실행을 시작하거나 이어서 진행한다. 최종 runs 행을 반환한다.
+
+    COMPLETED 는 '마지막으로 본 시점에 더 할 일이 없었다'는 뜻일 뿐 확정된 종료가 아니다 — 그 뒤 운영자가
+    증적을 더 모으거나 탐색이 새 사실을 내면 다시 할 일이 생길 수 있으므로 재개를 허용한다. CANCELLED 만
+    사람이 명시적으로 끝낸 상태라 재개하지 않는다.
+    """
+    if run["status"] == "CANCELLED":
         raise AuditError(f"실행 {run['id']} 은(는) 이미 {run['status']} 상태임")
     ctx = build_context(cfg, conn, run)
     if run["use_llm"]:
