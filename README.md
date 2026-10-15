@@ -129,7 +129,7 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 | 범위·정책 강제 | 부분 구현 | 범위 밖·경로 이탈·제외 대상·DNS·중지 스위치·허용 도구·승인·호출 간격 확인. 3단계 자율성 스위치(`approval`/`partial`/`full`)가 `scope.json` 의 `allowed_risks` 범위 안에서만 승인을 건너뛰는 것을 write(nmap)·dangerous(frida) 도구로 확인. 리다이렉트 이탈은 Playwright 출력만 검사하며 페이지의 하위 요청은 검사하지 않음 |
 | 체크리스트 가져오기 | 구현 | 활성·해시 고정 버전만 DB 로 가져오고 원문 보존 |
 | 결정론적 체크리스트 점검 | 구현 | 예시 체크리스트로 5가지 판정 확인. 공식 12종은 전 항목 사람 검토 |
-| 자동 점검 (A) 결정론적 규칙 (WEB/Mobile) | 계획 | 구성 확인형 항목(TLS 프로토콜/암호, 디렉토리 목록, 쿠키 속성, HTTP 메서드 등) 설계만 완료(CLAUDE.md §5.1A). `fsec-2026-1-web-mobile-hts` WEB platform 48항목 중 약 16개를 1차 후보로 분류. 코드·데이터 미작성 |
+| 자동 점검 (A) 결정론적 규칙 (WEB/Mobile) | 부분 구현 | `config/rule_overlays.json`(스키마 `RULE_OVERLAYS`) → `audit.overlays.load_overlays`(정규식·증거 참조 교차검증) → `runs.import_checklist`에서 원문 `pass_criteria`/`fail_criteria`는 그대로 두고 `verification_method`/`evidence_requirements`만 오버레이로 바꿔 `checklist_items.body`에 저장. 기존 `audit.verdict` 엔진이 그대로 판정(단위테스트 8건, `tests/unit/test_rule_overlays.py`), 판정 사유에 "오버레이(업계 표준 기법) 기준, 원문 판단기준 아님" 자동 표기(`worker.py`). `checklist overlays` CLI로 실제 DB의 활성 체크리스트(`fsec-2026-1-web-mobile-hts` WEB-SER-038)와 교차검증 확인. **제한**: `import_checklist`는 동일 `(checklist_id, version, sha256)`가 이미 임포트돼 있으면 그대로 반환하므로, 이미 가져온 버전에는 오버레이가 소급 적용되지 않음(재적용 명령 미작성) — 실제 실행 생성으로 end-to-end 확인은 못 함(NOT CHECKED, 기존 DB에 해당 버전이 이미 임포트돼 있어서). 오버레이 데이터는 1건(HTTP 메서드)만 예시 작성, 나머지 약 15개 후보는 미작성 |
 | 자동 점검 (B) 탐색 기반 발견 승격 (WEB/Mobile) | 계획 | 페이로드형 항목(SQLi/XSS/CSRF/SSRF/SSTI/XXE 등)을 탐색 → 결정론적 신호 검증 → 체크리스트 사후 매핑 구조로 처리하는 설계만 완료(CLAUDE.md §5.1B). `findings` 테이블은 이미 이 구조를 지원(스키마 변경 불필요). 검증 신호 정의·매핑 태그 코드 미작성 |
 | 로컬 LLM 연동 | 구현 | 분석·탐색 제안이 스키마 검증 통과. 16GB 노트북에서 호출당 10~90초 |
 | 작업 큐·Worker 조정 | 구현 | 동시 실행 중복 0건, 임대 만료 복구, 재개·취소 확인. Worker 는 프로세스당 1개 |
@@ -163,7 +163,7 @@ CLAUDE.md 는 바뀌지 않는 규칙만 담는다. 단계별 계획은 상태�
 | 0 | 체크리스트 가져오기·판정·보고서 기본 경로 | 구현 (§7) |
 | 1 | 자산/탐색 이중 그래프, 다단계 탐색 체인, 자율성 스위치 | 구현 (§7) |
 | 2 | 공유 작업 큐·Worker 조정·Activity 검색 | 구현/부분 구현 (§7) |
-| 3 | 자동 점검 (A): WEB/Mobile 결정론적 규칙 등록(`check_id`→도구·인자·판정) | 계획 — 설계만 완료(CLAUDE.md §7A), 1차 후보 약 16개 항목 분류, 코드·데이터 미작성 |
+| 3 | 자동 점검 (A): WEB/Mobile 결정론적 규칙 등록(`check_id`→도구·인자·판정) | 부분 구현(§7) — 엔진·로더·CLI 완료, 재적용(이미 임포트된 버전에 소급 적용) 미작성, 오버레이 데이터 1/16건만 등록 |
 | 4 | 자동 점검 (B): 탐색 발견의 취약점별 검증 신호 정의, `RULE_CONFIRMED` 승격, 체크리스트 매핑 태그 | 계획 — 설계만 완료(CLAUDE.md §7B), 스키마 변경 불필요(`findings.run_checklist_item_id` nullable 확인됨), 신호·태그 코드 미작성 |
 | 5 | 필수 체크리스트 작업과 탐색 작업의 예산 분리(§2 "굶지 않게 한다") | 계획 |
 | 6 | HTS 등 다른 platform/체크리스트로 오버레이 확장 | 계획 — 데이터 추가만으로 가능하도록 설계(§7), 실제 확장은 미착수 |

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from psycopg.types.json import Jsonb
 
 from audit import config as audit_config
+from audit import overlays as overlays_mod
 from audit.adapters import build_registry
 from audit.checklist_engine import Checklists, platform_match
 from audit.models import ConfigError, Target
@@ -27,8 +28,13 @@ def automation_level(item: dict) -> str:
     return "AUTOMATABLE" if method == "rule" else "PARTIALLY_AUTOMATABLE"
 
 
-def import_checklist(conn, checklists: Checklists, checklist_id: str, version: str) -> dict:
-    """활성 상태이고 해시가 고정된 체크리스트 버전을 DB 에 넣는다(이미 있으면 그대로 사용)."""
+def import_checklist(conn, checklists: Checklists, checklist_id: str, version: str,
+                     overlays: dict[tuple[str, str], dict] | None = None) -> dict:
+    """활성 상태이고 해시가 고정된 체크리스트 버전을 DB 에 넣는다(이미 있으면 그대로 사용).
+
+    overlays 에 (checklist_id, check_id) 가 있으면 그 항목은 원문 pass_criteria/fail_criteria 를 그대로 두고
+    verification_method/evidence_requirements 만 오버레이 것으로 바꿔 저장한다(CLAUDE.md §7A).
+    """
     data, sha = checklists.load(checklist_id, version)
     row = conn.execute("SELECT * FROM checklist_versions WHERE checklist_id=%s AND version=%s AND sha256=%s",
                        (checklist_id, version, sha)).fetchone()
@@ -39,14 +45,21 @@ def import_checklist(conn, checklists: Checklists, checklist_id: str, version: s
         "sha256, sources) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (checklist_id, version, data["guide_name"], data["guide_version"], data["official"], data["notice"],
          sha, Jsonb(data.get("sources", [])))).fetchone()
+    overlays = overlays or {}
+    rows = []
+    for it in data["items"]:
+        ov = overlays.get((checklist_id, it["check_id"]))
+        body = overlays_mod.apply(it, ov) if ov else it
+        level = overlays_mod.automation_level(ov) if ov else automation_level(it)
+        rows.append((row["id"], it["check_id"], it["title"], it["severity"], level, Jsonb(body)))
     with conn.cursor() as cur:
         cur.executemany(
             "INSERT INTO checklist_items (checklist_version_id, check_id, title, severity, automation_level, body) "
-            "VALUES (%s,%s,%s,%s,%s,%s)",
-            [(row["id"], it["check_id"], it["title"], it["severity"], automation_level(it), Jsonb(it))
-             for it in data["items"]])
+            "VALUES (%s,%s,%s,%s,%s,%s)", rows)
     db.audit(conn, None, "checklist_imported_to_db", {"checklist_id": checklist_id, "version": version,
-                                                      "sha256": sha, "items": len(data["items"])})
+                                                      "sha256": sha, "items": len(data["items"]),
+                                                      "overlays_applied": sum(1 for it in data["items"]
+                                                                              if (checklist_id, it["check_id"]) in overlays)})
     return row
 
 
@@ -61,7 +74,8 @@ def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str]
     scope = audit_config.load_scope(cfg.home)
     policy = Policy(scope, cfg.home)
     targets = [(tid, policy.target(tid)) for tid in dict.fromkeys(target_ids)]  # 범위 밖이면 PolicyDenied
-    cv = import_checklist(conn, Checklists(cfg.settings.path("checklist_dir")), checklist_id, version)
+    overlays = overlays_mod.load_overlays(cfg.home / "config" / "rule_overlays.json")
+    cv = import_checklist(conn, Checklists(cfg.settings.path("checklist_dir")), checklist_id, version, overlays)
     items = conn.execute("SELECT * FROM checklist_items WHERE checklist_version_id=%s ORDER BY check_id",
                          (cv["id"],)).fetchall()
     if check_ids:

@@ -217,6 +217,8 @@ def _run_checklist(ctx, it, wr) -> tuple[str, str | None]:
     llm_outcome = _analyze(ctx, body, target, ev) \
         if ctx.llm and auto and ev and method["type"] in ("rule", "llm_assisted") else None
     verdict, _, reason = decide(body, applicable, complete, rule_outcome, llm_outcome)
+    if body.get("overlay"):  # 오버레이로 낸 판정은 원문 기준과 섞어 표시하지 않는다(CLAUDE.md §7A)
+        reason = f"{reason} [{body['overlay']['note']}: {body['overlay']['basis']}]"
     v = _LEGACY_TO_DB.get(verdict.value, verdict.value)
     set_verdict(ctx.conn, it["run_checklist_item_id"], v, reason, actor="worker", decided_by="rule",
                 evidence_ids=ids, rule_outcome=rule_outcome, llm_outcome=llm_outcome)
