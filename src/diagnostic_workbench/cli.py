@@ -117,6 +117,27 @@ def cmd_checklist(args):
         conn.commit()
         print(f"활성화됨: {args.name}@{args.version} sha256={sha}")
         return 0
+    if args.action == "overlays":
+        from audit import overlays as overlays_mod
+        path = cfg.home / "config" / "rule_overlays.json"
+        try:
+            ov = overlays_mod.load_overlays(path)
+        except AuditError as e:
+            print(f"무효: {e}", file=sys.stderr)
+            return 1
+        if not ov:
+            print(f"오버레이 없음 ({path})")
+            return 0
+        known = {(cid, it["check_id"]) for cid, v in cl.entries() if v["status"] == "active"
+                for it in cl.load(cid, v["version"])[0]["items"]}
+        bad = 0
+        for (cid, check_id), entry in sorted(ov.items()):
+            stale = (cid, check_id) not in known
+            bad |= stale
+            print(f"{cid}  {check_id}  platforms={entry['platforms']}  "
+                  f"{'[활성 체크리스트에 없음]' if stale else 'OK'}")
+            print(f"    근거: {entry['basis']}")
+        return int(bad)
     from audit import importer  # import: 원본 xlsx -> 버전 고정 JSON(draft)
     xlsx, pdf = Path(args.name or ""), Path(args.pdf) if args.pdf else None
     if not xlsx.is_file() or (pdf is not None and not pdf.is_file()):
@@ -460,7 +481,7 @@ def build_parser():
     m = sub.add_parser("migrate", help="SQL 마이그레이션 적용")
     m.add_argument("--status", action="store_true")
     c = sub.add_parser("checklist", help="체크리스트 목록/검증/활성화/원본 xlsx 가져오기")
-    c.add_argument("action", choices=["list", "validate", "activate", "import"])
+    c.add_argument("action", choices=["list", "validate", "activate", "import", "overlays"])
     c.add_argument("name", nargs="?", help="activate: checklist_id, import: 원본 xlsx 경로")
     c.add_argument("version", nargs="?")
     c.add_argument("--pdf", help="import 시 쪽 번호를 연결할 참고 PDF 경로(pdftotext 필요)")

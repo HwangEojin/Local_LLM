@@ -227,6 +227,34 @@ CHECK_ITEM = {
     },
 }
 
+RULE_OVERLAY = {
+    "type": "object", "additionalProperties": False,
+    "required": ["checklist_id", "check_id", "platforms", "basis", "rule_version",
+                 "evidence_requirements", "rule"],
+    "properties": {
+        "checklist_id": _ID, "check_id": _ID,
+        # 이 오버레이가 적용되는 platform. 1차로는 WEB/Mobile 데이터만 등록하는 운영 관례이지,
+        # 엔진이 강제하는 값은 아니다(CLAUDE.md §7).
+        "platforms": {"type": "array", "minItems": 1, "items": _STR},
+        # 판정 근거가 된 업계 공인 기법과 출처. 원문 pass_criteria/fail_criteria 의 재해석이 아니다.
+        "basis": {"type": "string", "minLength": 1},
+        "rule_version": _STR,
+        "automation_level": {"enum": ["AUTOMATABLE", "PARTIALLY_AUTOMATABLE"]},
+        "evidence_requirements": {"type": "array", "minItems": 1, "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["id", "tool", "args"],
+            "properties": {"id": _ID, "description": {"type": "string"}, "tool": _STR,
+                           "args": {"type": "object"}},
+        }},
+        "rule": _RULE,
+    },
+}
+
+RULE_OVERLAYS = {
+    "type": "object", "additionalProperties": False, "required": ["overlays"],
+    "properties": {"overlays": {"type": "array", "items": RULE_OVERLAY}},
+}
+
 CHECKLIST = {
     "type": "object", "additionalProperties": False,
     "required": ["checklist_id", "guide_name", "guide_version", "official", "notice", "items"],
