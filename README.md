@@ -25,7 +25,7 @@ py -3.13 -m venv .venv
 |---|---|
 | `.env` | `WORKBENCH_PG_DSN`, `PGPASSWORD` (`.env.example` 복사). 다른 앱과 DB 를 같이 쓰면 전용 스키마: DSN 끝에 `?options=-csearch_path%3Dworkbench` |
 | `config/scope.json` | 승인된 범위: `engagement_id`, `approved_by`, `valid_until`, `allowed_risks`, `targets`(`path`/`host`/`url`, 필요 시 `platform`). 만료되면 모든 실행이 거부된다 |
-| `config/settings.json` | Ollama 주소·모델·한도, 증적·보고서·체크리스트·템플릿 경로, 도구 호출 한도. 루프백이 아닌 모델 주소는 `external_api.enabled=false` 이면 거부 |
+| `config/settings.json` | Ollama 주소·모델·한도, 증적·보고서·체크리스트·템플릿 경로, 도구 호출 한도. 루프백이 아닌 모델 주소는 `external_api.enabled=false` 이면 거부. `ollama.timeout_s`(기본 120)는 모델 크기에 맞춰 늘린다 — 16GB 노트북에서 `qwen2.5:7b` 는 호출당 10~90초, `qwen2.5:14b` 는 타임아웃을 600초 정도로 늘려야 응답을 받을 수 있었다 |
 | `config/mcp_servers.json` | MCP 서버와 허용 도구(`risk`, `scope_args`, `args_schema`). 이 PC 의 경로는 `mcp_servers.local.json` 에 같은 서버 이름으로 적는다 |
 | `config/workbench.json` (선택) | 제외 대상 `exclude`, 예산 `budget`, `lease_s`, `min_call_interval_ms`, `nmap_path` (`workbench.example.json` 참고) |
 
@@ -137,7 +137,7 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 | Word 보고서 템플릿 | 부분 구현 | 웹 결과보고서를 실제 대상 실행으로 생성 확인. 모바일 템플릿 미지원 |
 | Excel 보고서 템플릿 | 부분 구현 | 요약 + 커버리지 시트 확인. 사용자 지정 Excel 템플릿은 미확인 |
 | 탐색·재계획 반복 | 구현 | read/write 제안 → 정책 검증(스키마·자산 유형·자율성 스위치) → 실행 → 사실 기록 → 재계획 → 예산 거부 확인. write 제안이 `approval` 모드에서 거부되지 않고 승인 대기(BLOCKED)로 큐에 서고, 승인 후 재개됨을 실제 LLM 과 nmap/Burp 도구로 확인. 완료(COMPLETED)된 실행도 새 증적/사실이 생기면 `run start` 로 다시 깨어남. dangerous 도구는 자율 제안에서 항상 제외 |
-| 이중 그래프·anchor 연결 | 부분 구현 | 탐색 그래프에서 다단계 체인(`goal→intent→fact→(derived_from)→intent→fact`) 을 가짜 LLM 응답으로 결정론적으로 확인(2단계). 실제 LLM(qwen2.5:7b)은 매 라운드 goal 에서 바로 가지를 쳤고 이전 사실을 근거로 인용하지 않아 실제 실행에서는 derived_from 이 아직 관찰되지 않음(모델 한계로 추정). 자산은 범위 선언 + 관찰(`fs.list_dir`, Playwright, Nmap)만. Burp 이력 기반 추출 없음 |
+| 이중 그래프·anchor 연결 | 구현 | 탐색 그래프 다단계 체인(`goal→intent→fact→(derived_from)→intent→fact`) 을 가짜 LLM 응답(결정론적)과 실제 LLM 양쪽으로 확인. 처음엔 모델이 사실의 내용은 올바르게 서술하면서도 `based_on_evidence_ids` 에 옛 증적만 인용했다 — 프롬프트에서 최신 사실(LATEST_FACT)을 맨 앞에 강조하고 "같은 대상을 다루는 제안은 최신 사실을 인용해야 함"을 Python 검증 규칙으로 추가(다른 대상으로의 병렬 탐색은 그대로 허용)한 뒤 실제 체인이 생성됨 확인. qwen2.5:7b-instruct 로 1단계 체인, qwen2.5:14b(`ollama.timeout_s` 를 늘려서 확인)로 **거부 없이 깊이 5단계까지** 이어지는 연속 체인을 확인(Burp MCP 실연동). 자산은 범위 선언 + 관찰(`fs.list_dir`, Playwright, Nmap)만. Burp 이력 기반 자산 추출 없음 |
 | 공유 TodoList·선행 조건 | 부분 구현 | 멱등 키와 선행 조건 대기 확인. 선행 관계를 자동으로 만드는 규칙 없음 |
 | Worker Activity 검색·재사용 | 부분 구현 | `trace` 동작, 실패 이력을 탐색 프롬프트에 참고로 제공. 대량 데이터 성능 미확인 |
 
