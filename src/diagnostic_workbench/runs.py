@@ -63,6 +63,37 @@ def import_checklist(conn, checklists: Checklists, checklist_id: str, version: s
     return row
 
 
+def reapply_overlays(conn, checklists: Checklists, checklist_id: str, version: str,
+                     overlays: dict[tuple[str, str], dict]) -> list[str]:
+    """이미 DB 에 들어간 체크리스트 버전의 checklist_items 를 현재 오버레이 기준으로 다시 계산한다.
+
+    원본 파일·sha256·checklist_versions 행은 바뀌지 않는다. import_checklist 가 (checklist_id, version, sha256)
+    가 이미 있으면 그대로 반환해 소급 적용하지 않는 문제(README §7)를 메우는 명시적 재적용 경로다. 오버레이가
+    없어진 항목은 원문 기준으로 되돌린다. 바뀐 check_id 목록을 반환하고 감사 이벤트로 남긴다.
+    """
+    data, sha = checklists.load(checklist_id, version)
+    row = conn.execute("SELECT id FROM checklist_versions WHERE checklist_id=%s AND version=%s AND sha256=%s",
+                       (checklist_id, version, sha)).fetchone()
+    if not row:
+        raise ConfigError(f"{checklist_id}@{version} 이(가) 아직 DB 로 import 되지 않음 (run create 로 먼저 가져오기)")
+    changed = []
+    for it in data["items"]:
+        ov = overlays.get((checklist_id, it["check_id"]))
+        body = overlays_mod.apply(it, ov) if ov else it
+        level = overlays_mod.automation_level(ov) if ov else automation_level(it)
+        cur = conn.execute("SELECT automation_level, body FROM checklist_items "
+                           "WHERE checklist_version_id=%s AND check_id=%s",
+                           (row["id"], it["check_id"])).fetchone()
+        if cur and (cur["automation_level"] != level or cur["body"] != body):
+            conn.execute("UPDATE checklist_items SET automation_level=%s, body=%s "
+                        "WHERE checklist_version_id=%s AND check_id=%s",
+                        (level, Jsonb(body), row["id"], it["check_id"]))
+            changed.append(it["check_id"])
+    db.audit(conn, None, "checklist_overlays_reapplied",
+             {"checklist_id": checklist_id, "version": version, "changed_check_ids": changed})
+    return changed
+
+
 AUTONOMY_LEVELS = ("approval", "partial", "full")  # 항상 승인 | write 자동, dangerous 승인 | 전부 자동(범위 내)
 
 

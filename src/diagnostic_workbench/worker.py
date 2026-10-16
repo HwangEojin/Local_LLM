@@ -14,7 +14,7 @@ from urllib.parse import urldefrag, urljoin
 
 from psycopg.types.json import Jsonb
 
-from audit import schemas
+from audit import schemas, signals
 from audit.checklist_engine import is_applicable, render_args
 from audit.local_model import LLMError, build_analysis_messages
 from audit.models import PolicyDenied, ToolError, ToolOutput
@@ -239,6 +239,36 @@ def _run_checklist(ctx, it, wr) -> tuple[str, str | None]:
     return "NEEDS_REVIEW", None
 
 
+def _promote_exploration_finding(ctx, it, fact_id, evidence_id, args, data: bytes):
+    """탐색 fact 가 특정 취약점 클래스의 검증 신호와 일치하면 RULE_CONFIRMED finding 으로 승격한다(CLAUDE.md §7B).
+
+    LLM 의견이 아니라 audit.signals 의 결정론적 checker 로만 승격한다. 일치하지 않으면 사실로만 남는다 —
+    체크리스트 판정은 바꾸지 않으며, 체크리스트 커버리지에 반영하려면 'trace tag' 로 사람이 따로 매핑해야 한다.
+    """
+    result = signals.check(args, data)
+    if result is None:
+        return
+    vclass, outcome = result
+    db.audit(ctx.conn, ctx.run["id"], "exploration_signal_checked",
+             {"fact": str(fact_id), "vuln_class": vclass, "matched": outcome.matched, "reason": outcome.reason})
+    if not outcome.matched:
+        return
+    f = ctx.conn.execute(
+        "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification) "
+        "VALUES (%s,%s,%s,%s,%s,%s,'RULE_CONFIRMED') RETURNING id",
+        (ctx.run["id"], it["asset_id"], f"탐색 기반 발견: {vclass}", signals.SEVERITY[vclass], outcome.reason,
+         signals.REMEDIATION[vclass])).fetchone()
+    ctx.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], evidence_id))
+    # exploration_edges 는 양쪽 다 exploration_nodes 를 참조하므로(findings.id 를 직접 못 넣음) finding 을
+    # 가리키는 전용 노드를 만들고, 그 노드만 exploration_anchors.finding_id 로 실제 findings 행과 연결한다.
+    finding_node = ctx.conn.execute(
+        "INSERT INTO exploration_nodes (run_id, kind, state, origin, payload) VALUES "
+        "(%s,'finding','RECORDED','worker',%s) RETURNING id",
+        (ctx.run["id"], Jsonb({"vuln_class": vclass, "finding_id": str(f["id"])}))).fetchone()["id"]
+    ctx.conn.execute("INSERT INTO exploration_anchors (node_id, finding_id) VALUES (%s,%s)", (finding_node, f["id"]))
+    ctx.conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'proves')", (fact_id, finding_node))
+
+
 def _run_exploration(ctx, it, wr) -> tuple[str, str | None]:
     (req_id, tool, args), = calls(it)
     eid, out = run_tool(ctx, it, wr, 1, req_id, tool, args)
@@ -253,6 +283,8 @@ def _run_exploration(ctx, it, wr) -> tuple[str, str | None]:
     ctx.conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'yields')", (it["exploration_node_id"], fact))
     ctx.conn.execute("UPDATE exploration_nodes SET state=%s WHERE id=%s",
                      ("DONE" if out is not None else "FAILED", it["exploration_node_id"]))
+    if out is not None:
+        _promote_exploration_finding(ctx, it, fact, eid, args, out.data)
     db.notify_change(ctx.conn, ctx.run["id"], "fact", fact)
     return ("SUCCEEDED", None) if out is not None else ("FAILED", "도구 호출 실패 또는 정책 거부")
 
