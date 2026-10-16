@@ -138,6 +138,16 @@ def cmd_checklist(args):
                   f"{'[활성 체크리스트에 없음]' if stale else 'OK'}")
             print(f"    근거: {entry['basis']}")
         return int(bad)
+    if args.action == "reapply-overlays":
+        from audit import overlays as overlays_mod
+        if not (args.name and args.version):
+            print("reapply-overlays 에는 <checklist_id> <version> 이 필요합니다", file=sys.stderr)
+            return 2
+        ov = overlays_mod.load_overlays(cfg.home / "config" / "rule_overlays.json")
+        changed = runs.reapply_overlays(conn, cl, args.name, args.version, ov)
+        conn.commit()
+        print(f"재계산된 check_id: {changed or '없음(이미 최신)'}")
+        return 0
     from audit import importer  # import: 원본 xlsx -> 버전 고정 JSON(draft)
     xlsx, pdf = Path(args.name or ""), Path(args.pdf) if args.pdf else None
     if not xlsx.is_file() or (pdf is not None and not pdf.is_file()):
@@ -403,6 +413,15 @@ def cmd_collect(args):
 
 def cmd_trace(args):
     cfg, conn = _open(args)
+    if args.action == "tag":
+        if not (args.run and args.query and args.check_id):
+            print("trace tag 에는 <node_id> --run <run> --check-id <check_id> 가 필요합니다", file=sys.stderr)
+            return 2
+        run = db.resolve_run(conn, args.run)
+        tagged = traces.tag_node(conn, run, args.query, args.check_id)
+        conn.commit()
+        print(f"매핑됨: 탐색 노드 {tagged['node_id']} -> check_id {args.check_id}")
+        return 0
     if args.action == "show":
         run = db.resolve_run(conn, args.run)
         rows = traces.get_worker_trace(conn, _item(conn, run, args.query)["id"])
@@ -434,10 +453,12 @@ def cmd_graph(args):
     print("탐색 그래프:")
     for n in conn.execute("SELECT * FROM exploration_nodes WHERE run_id=%s ORDER BY created_at", (run["id"],)):
         text = n["payload"].get("text") or n["payload"].get("rationale") or n["payload"].get("tool", "")
-        anchors = conn.execute("SELECT count(asset_id) AS a, count(evidence_id) AS e FROM exploration_anchors "
-                               "WHERE node_id=%s", (n["id"],)).fetchone()
+        anchors = conn.execute("SELECT count(asset_id) AS a, count(evidence_id) AS e, count(finding_id) AS f, "
+                               "count(checklist_item_id) AS c FROM exploration_anchors WHERE node_id=%s",
+                               (n["id"],)).fetchone()
         print(f"  {str(n['id'])[:8]}  {n['kind']:<7} {n['state']:<9} 출처={n['origin']:<8} "
-              f"anchor(자산 {anchors['a']}, 증적 {anchors['e']})  {text[:80]}")
+              f"anchor(자산 {anchors['a']}, 증적 {anchors['e']}, 발견 {anchors['f']}, check_id {anchors['c']})  "
+              f"{text[:80]}")
     for e in conn.execute("SELECT e.* FROM exploration_edges e JOIN exploration_nodes n ON n.id = e.src_id "
                           "WHERE n.run_id=%s", (run["id"],)):
         print(f"  {str(e['src_id'])[:8]} -{e['rel']}-> {str(e['dst_id'])[:8]}")
@@ -481,8 +502,8 @@ def build_parser():
     m = sub.add_parser("migrate", help="SQL 마이그레이션 적용")
     m.add_argument("--status", action="store_true")
     c = sub.add_parser("checklist", help="체크리스트 목록/검증/활성화/원본 xlsx 가져오기")
-    c.add_argument("action", choices=["list", "validate", "activate", "import", "overlays"])
-    c.add_argument("name", nargs="?", help="activate: checklist_id, import: 원본 xlsx 경로")
+    c.add_argument("action", choices=["list", "validate", "activate", "import", "overlays", "reapply-overlays"])
+    c.add_argument("name", nargs="?", help="activate/reapply-overlays: checklist_id, import: 원본 xlsx 경로")
     c.add_argument("version", nargs="?")
     c.add_argument("--pdf", help="import 시 쪽 번호를 연결할 참고 PDF 경로(pdftotext 필요)")
     c.add_argument("--replace-draft", action="store_true", help="import 시 같은 버전이 draft 이면 교체")
@@ -532,13 +553,14 @@ def build_parser():
     c.add_argument("--steps", help='여러 호출을 한 프로세스에서 차례로: [{"tool": ..., "args": {...}}] JSON 또는 @파일.json')
     c.add_argument("--operator", required=True)
     c.add_argument("--approve-as", metavar="이름", help="읽기 전용이 아닌 도구일 때 이 호출을 승인하는 사람")
-    t = sub.add_parser("trace", help="Worker Activity 검색(search) / 작업 단계 상세(show)")
-    t.add_argument("action", choices=["search", "show"])
-    t.add_argument("query", nargs="?", help="search: 검색어, show: 작업 ID")
-    t.add_argument("--run", help="search: 제외할 현재 실행, show: 작업이 속한 실행")
+    t = sub.add_parser("trace", help="Worker Activity 검색(search) / 작업 단계 상세(show) / 탐색-체크리스트 매핑(tag)")
+    t.add_argument("action", choices=["search", "show", "tag"])
+    t.add_argument("query", nargs="?", help="search: 검색어, show: 작업 ID, tag: 탐색 노드 ID")
+    t.add_argument("--run", help="search: 제외할 현재 실행, show/tag: 실행 ID")
     t.add_argument("--tool")
     t.add_argument("--status", choices=["SKIPPED", "SUCCEEDED", "FAILED"])
     t.add_argument("--limit", type=int, default=20)
+    t.add_argument("--check-id", help="tag: 이 탐색 노드가 검증하는 체크리스트 check_id (사후 매핑, 판정은 바꾸지 않음)")
     g = sub.add_parser("graph", help="자산 그래프와 탐색 그래프 요약")
     g.add_argument("run")
     rp = sub.add_parser("report", help="회사 템플릿 서식의 결과보고서 생성(COMPLETED 실행). --basic 은 내부 점검 요약")
