@@ -12,6 +12,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
@@ -72,14 +73,53 @@ async def _session(srv: dict):
         errlog.close()
 
 
-def _run(coro_fn, srv: dict):
-    async def guarded():
-        return await asyncio.wait_for(coro_fn(), timeout=srv["timeout_s"])
+_KILL_POLL_S = 0.2
+
+
+def _wait_cancelable(fut: concurrent.futures.Future, timeout_s: float, stop_file, timeout_msg: str):
+    """짧은 간격으로 폴링하며 fut 를 기다린다. Kill Switch(전체 중지 스위치)가 켜지면 아직 끝나지 않은
+    future 도 즉시 취소한다(CLAUDE.md §8 Kill Switch 동작: '진행 중 작업의 취소 요청') — fut 는 asyncio
+    태스크를 감싼 것이라 cancel() 이 그 태스크에 CancelledError 를 실제로 전달한다.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            return fut.result(timeout=_KILL_POLL_S)
+        except concurrent.futures.TimeoutError:
+            if stop_file is not None and stop_file.exists():
+                fut.cancel()
+                raise ToolError(f"전체 중지 스위치로 MCP 호출을 취소함 ({stop_file})") from None
+            if time.monotonic() > deadline:
+                fut.cancel()
+                raise ToolError(timeout_msg) from None
+
+
+def _run(coro_fn, srv: dict, stop_file=None):
+    """일회성 호출도 별도 스레드의 이벤트 루프 위에서 future 로 돌려 Kill Switch 로 취소할 수 있게 한다
+    (asyncio.run() 은 호출 스레드를 그대로 막아 외부에서 취소할 방법이 없었다).
+    """
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def _thread():
+        asyncio.set_event_loop(loop)
+        ready.set()
+        try:
+            loop.run_forever()
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_thread, name="mcp-oneshot", daemon=True)
+    t.start()
+    ready.wait()
     try:
-        return asyncio.run(guarded())
+        async def guarded():
+            return await asyncio.wait_for(coro_fn(), timeout=srv["timeout_s"])
+        fut = asyncio.run_coroutine_threadsafe(guarded(), loop)
+        return _wait_cancelable(fut, srv["timeout_s"] + 5, stop_file, f"MCP 시간 초과 ({srv['timeout_s']}초)")
     except ToolError:
         raise
-    except (TimeoutError, asyncio.TimeoutError):
+    except (TimeoutError, asyncio.TimeoutError, concurrent.futures.TimeoutError):
         raise ToolError(f"MCP 시간 초과 ({srv['timeout_s']}초)") from None
     except BaseException as e:  # SDK는 anyio 태스크 그룹에서 ExceptionGroup을 발생시킨다
         if isinstance(e, KeyboardInterrupt):
@@ -91,6 +131,16 @@ def _run(coro_fn, srv: dict):
         if "timed out" in str(inner).lower():  # SDK 자체의 읽기 시간 제한
             raise ToolError(f"MCP 시간 초과 ({srv['timeout_s']}초)") from None
         raise ToolError(f"MCP 오류: {type(inner).__name__}: {inner}") from None
+    finally:
+        def _shutdown():
+            pending = [p for p in asyncio.all_tasks(loop) if not p.done()]
+            if not pending:
+                loop.stop()
+                return
+            asyncio.ensure_future(asyncio.gather(*pending, return_exceptions=True), loop=loop) \
+                .add_done_callback(lambda _: loop.stop())
+        loop.call_soon_threadsafe(_shutdown)
+        t.join(timeout=5)
 
 
 def list_tools(srv: dict) -> dict:
@@ -169,11 +219,12 @@ class _Persistent:
             self.error = e
             self.ready.set()
 
-    def call(self, tool, args, max_bytes) -> ToolOutput:
+    def call(self, tool, args, max_bytes, stop_file=None) -> ToolOutput:
         s, init, offered = self.state
         fut = asyncio.run_coroutine_threadsafe(_do_call(s, init, self.srv, tool, args, max_bytes, offered), self.loop)
         try:
-            return fut.result(timeout=self.srv["timeout_s"] + 5)
+            return _wait_cancelable(fut, self.srv["timeout_s"] + 5, stop_file,
+                                    f"MCP 시간 초과 ({self.srv['timeout_s']}초)")
         except ToolError:
             raise
         except (TimeoutError, concurrent.futures.TimeoutError):
@@ -210,15 +261,15 @@ def close_all():
 atexit.register(close_all)
 
 
-def call_tool(srv: dict, tool: str, args: dict, max_bytes: int) -> ToolOutput:
+def call_tool(srv: dict, tool: str, args: dict, max_bytes: int, stop_file=None) -> ToolOutput:
     if srv.get("persistent"):
         with _POOL_LOCK:
             conn = _POOL.get(_pool_key(srv))
             if conn is None or not conn.thread.is_alive():
                 conn = _POOL[_pool_key(srv)] = _Persistent(srv)
-        return conn.call(tool, args, max_bytes)
+        return conn.call(tool, args, max_bytes, stop_file)
 
     async def go():
         async with _session(srv) as (s, init):
             return await _do_call(s, init, srv, tool, args, max_bytes)
-    return _run(go, srv)
+    return _run(go, srv, stop_file)

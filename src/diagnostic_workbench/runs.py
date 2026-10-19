@@ -16,8 +16,12 @@ from . import db, tools
 
 
 def registry(cfg) -> dict:
-    """실행 가능한 도구 전체: 기존 audit 도구(fs, MCP) + 워크벤치 로컬 도구."""
-    return {**build_registry(cfg.settings, audit_config.load_mcp_servers(cfg.home)), **tools.make_tools(cfg)}
+    """실행 가능한 도구 전체: 기존 audit 도구(fs, MCP) + 워크벤치 로컬 도구.
+
+    stop_file 을 넘겨 MCP 호출도 Kill Switch 로 진행 중에 취소할 수 있게 한다(CLAUDE.md §8 Kill Switch 동작).
+    """
+    return {**build_registry(cfg.settings, audit_config.load_mcp_servers(cfg.home), stop_file=cfg.stop_file),
+            **tools.make_tools(cfg)}
 
 
 def automation_level(item: dict) -> str:
@@ -94,7 +98,10 @@ def reapply_overlays(conn, checklists: Checklists, checklist_id: str, version: s
     return changed
 
 
-AUTONOMY_LEVELS = ("approval", "partial", "full")  # 항상 승인 | write 자동, dangerous 승인 | 전부 자동(범위 내)
+# 항상 승인 | 전부 자동(범위 내). 2026-10-19 결정으로 기존 3단계(partial)를 없애고 artex 와 같은 이분법으로
+# 단순화했다(CLAUDE.md 가 3단계를 요구한 적은 없어 규칙 예외는 아님). 기존 'partial' 실행은 더 안전한 쪽인
+# 'approval'로 백필됨(migrations/0007).
+AUTONOMY_LEVELS = ("approval", "full")
 
 
 def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id: str | None = None,

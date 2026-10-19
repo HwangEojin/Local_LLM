@@ -21,7 +21,11 @@ HAVE_WEB_TEMPLATE = any((ROOT / "templates" / "word").glob("웹*결과보고서*
 
 
 class _FakeLLM:
-    """explore.propose 가 기대하는 최소 인터페이스. 실제 Ollama 를 부르지 않는다."""
+    """explore.propose 가 기대하는 최소 인터페이스. 실제 Ollama 를 부르지 않는다.
+
+    bootstrap_probe 호출(CLAUDE.md §1.1 예외 2번)에는 즉시 중단 신호를 돌려주고, 본 제안(explore)
+    호출에만 미리 정한 proposals 를 돌려준다.
+    """
     model = "fake-bootstrap"
 
     def __init__(self, proposals):
@@ -29,6 +33,8 @@ class _FakeLLM:
 
     def structured_chat(self, messages, schema, purpose):
         self.last_messages = messages
+        if purpose == "bootstrap_probe":
+            return {"tool": "", "target_id": "", "args": {}, "rationale": ""}
         return {"proposals": self._proposals}
 
 

@@ -8,7 +8,7 @@ from ..policy import is_loopback_url
 from .fs_tools import make_tools
 
 
-def build_registry(settings, mcp_servers: dict) -> dict[str, ToolSpec]:
+def build_registry(settings, mcp_servers: dict, stop_file=None) -> dict[str, ToolSpec]:
     max_bytes = settings.limits["max_evidence_bytes"]
     reg = make_tools(max_bytes)
     for server, srv in mcp_servers.items():
@@ -25,6 +25,6 @@ def build_registry(settings, mcp_servers: dict) -> dict[str, ToolSpec]:
                 post = scope_filter
             reg[name] = ToolSpec(name, pol["risk"], pol.get("args_schema", {"type": "object"}),
                                  pol.get("scope_args", {}),
-                                 partial(mcp_client.call_tool, srv, tool, max_bytes=max_bytes),
+                                 partial(mcp_client.call_tool, srv, tool, max_bytes=max_bytes, stop_file=stop_file),
                                  version=f"mcp:{server}", post=post)
     return reg
