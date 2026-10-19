@@ -1,4 +1,4 @@
-"""자율성 레벨 이분법(approval/full, 2026-10-19 — artex 와 동일하게 3단계 partial 을 없앰)을 확인한다."""
+"""자율성 레벨 이분법(approval/full, 2026-10-19 — 3단계 partial 을 없앰)을 확인한다."""
 import unittest
 
 from audit.models import ConfigError, ToolOutput, ToolSpec

@@ -150,7 +150,7 @@ def create_retest(conn, run_id, finding_id, *, operator, reason) -> list:
 
 def create_llm_finding(conn, run_id, asset_id, *, title, severity, rationale, remediation, evidence_ids, model):
     """LLM이 자신이 인용한 실존 증거를 근거로 finding을 직접 CONFIRMED로 기록한다(CLAUDE.md §1.1 예외 3번,
-    2026-10-19 결정 — artex 설계 참고). 인용한 증거 id가 이 실행(run)에 실제로 존재하는지만 확인하는
+    2026-10-19 결정). 인용한 증거 id가 이 실행(run)에 실제로 존재하는지만 확인하는
     최소한의 데이터 무결성 검사이고, 주장(취약점이 실제로 있는지)의 실체는 검증하지 않는다 — 그게 이
     예외의 요지다. finding_review_history 에 actor='llm:<model>' 로 남아 추적 가능하고, 사람은 이후에도
     finding review 로 재검토·기각할 수 있다(그 이력도 보존됨).
