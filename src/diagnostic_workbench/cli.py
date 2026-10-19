@@ -23,6 +23,24 @@ def _open(args, need_schema=True):
     return cfg, conn
 
 
+def cmd_web(args):
+    """로컬 웹 UI 백엔드(FastAPI)를 띄운다. 선택적 의존성(pip install -e .[web])이 필요함.
+
+    새 진단 로직은 없다 — src/webapi 가 이 모듈들을 그대로 부르는 HTTP 어댑터일 뿐이다.
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        print("웹 UI 의존성이 없음: pip install -e '.[web]' 로 설치하세요", file=sys.stderr)
+        return 2
+    import os
+    if not os.environ.get("WORKBENCH_WEB_PASSWORD") or not os.environ.get("WORKBENCH_WEB_SECRET"):
+        print("환경 변수 WORKBENCH_WEB_PASSWORD, WORKBENCH_WEB_SECRET 이 .env 에 필요합니다", file=sys.stderr)
+        return 2
+    uvicorn.run("webapi.main:app", host=args.host, port=args.port, reload=args.reload)
+    return 0
+
+
 def cmd_doctor(args):
     rows, conn = [], None
 
@@ -581,6 +599,10 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("doctor", help="설정, PostgreSQL, 마이그레이션, 범위, LLM, MCP 상태 점검")
     d.add_argument("--probe-mcp", action="store_true", help="활성 MCP 서버에 연결해 도구 목록을 받아 본다")
+    w = sub.add_parser("web", help="로컬 웹 UI 백엔드(FastAPI) 실행 — pip install -e '.[web]' 필요")
+    w.add_argument("--host", default="127.0.0.1")
+    w.add_argument("--port", type=int, default=8420)
+    w.add_argument("--reload", action="store_true", help="개발용: 코드 변경 시 자동 재시작")
     m = sub.add_parser("migrate", help="SQL 마이그레이션 적용")
     m.add_argument("--status", action="store_true")
     c = sub.add_parser("checklist", help="체크리스트 목록/검증/활성화/원본 xlsx 가져오기")
@@ -663,7 +685,7 @@ def build_parser():
     return p
 
 
-COMMANDS = {"doctor": cmd_doctor, "migrate": cmd_migrate, "checklist": cmd_checklist, "tools": cmd_tools, "run": cmd_run, "backlog": cmd_backlog,
+COMMANDS = {"doctor": cmd_doctor, "web": cmd_web, "migrate": cmd_migrate, "checklist": cmd_checklist, "tools": cmd_tools, "run": cmd_run, "backlog": cmd_backlog,
             "approve": cmd_approve, "retry": cmd_retry, "review": cmd_review, "finding": cmd_finding,
             "evidence": cmd_evidence, "collect": cmd_collect, "trace": cmd_trace, "graph": cmd_graph,
             "report": cmd_report}
