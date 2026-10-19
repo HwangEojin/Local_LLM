@@ -18,6 +18,96 @@
       ],
       "rule": {"kind": "regex", "evidence": "options_response",
                "pattern": "(?i)Allow:.*\\b(PUT|DELETE|TRACE|CONNECT)\\b", "fail_if": "match"}
+    },
+    {
+      "checklist_id": "fsec-2026-1-web-mobile-hts",
+      "check_id": "WEB-SER-030",
+      "platforms": ["WEB"],
+      "basis": "서버 인증서 유효기간·CN/SAN 일치·자체서명 여부 — TLS 인증서 검증의 표준 항목(RFC 6125 호스트명 검증)",
+      "rule_version": "2026-10-2",
+      "automation_level": "AUTOMATABLE",
+      "evidence_requirements": [
+        {
+          "id": "tls_cert",
+          "description": "검증 없이 서버 인증서를 받아 만료·자체서명·호스트명 일치 여부를 확인(tls.inspect, stdlib ssl)",
+          "tool": "tls.inspect",
+          "args": {"host": "{target}"}
+        }
+      ],
+      "rule": {"kind": "regex", "evidence": "tls_cert",
+               "pattern": "\"self_signed\": true|\"expired\": true|\"hostname_match\": false", "fail_if": "match"}
+    },
+    {
+      "checklist_id": "fsec-2026-1-web-mobile-hts",
+      "check_id": "WEB-SER-034",
+      "platforms": ["WEB"],
+      "basis": "SSLv3/TLS 1.0/TLS 1.1 협상 가능 여부 — Qualys SSL Labs 기준(취약한 프로토콜 허용 시 등급 하락)",
+      "rule_version": "2026-10-2",
+      "automation_level": "AUTOMATABLE",
+      "evidence_requirements": [
+        {
+          "id": "tls_protocols",
+          "description": "SSLv3/TLSv1/TLSv1.1 로 핸드셰이크를 강제 시도해 서버가 받아주는지 확인(tls.inspect, stdlib ssl)",
+          "tool": "tls.inspect",
+          "args": {"host": "{target}"}
+        }
+      ],
+      "rule": {"kind": "regex", "evidence": "tls_protocols",
+               "pattern": "\"(SSLv3|TLSv1|TLSv1_1)\": \"accepted\"", "fail_if": "match"}
+    },
+    {
+      "checklist_id": "fsec-2026-1-web-mobile-hts",
+      "check_id": "WEB-SER-035",
+      "platforms": ["WEB"],
+      "basis": "nmap NSE ssl-enum-ciphers 등급(least strength) — 보안강도가 낮은(C/D/F) 암호 모음 제공 여부",
+      "rule_version": "2026-10-3",
+      "automation_level": "AUTOMATABLE",
+      "evidence_requirements": [
+        {
+          "id": "cipher_scan",
+          "description": "nmap ssl-enum-ciphers 로 서버가 제공하는 cipher 전체 목록과 등급을 확인",
+          "tool": "nmap.ssl_scan",
+          "args": {"host": "{target}"}
+        }
+      ],
+      "rule": {"kind": "regex", "evidence": "cipher_scan",
+               "pattern": "least strength: [CDF]", "fail_if": "match"}
+    },
+    {
+      "checklist_id": "fsec-2026-1-web-mobile-hts",
+      "check_id": "WEB-SER-036",
+      "platforms": ["WEB"],
+      "basis": "nmap NSE ssl-heartbleed/ssl-ccs-injection — 알려진 TLS 구현 취약점(CVE-2014-0160, CVE-2014-0224) 탐지",
+      "rule_version": "2026-10-3",
+      "automation_level": "AUTOMATABLE",
+      "evidence_requirements": [
+        {
+          "id": "vuln_scan",
+          "description": "nmap ssl-heartbleed/ssl-ccs-injection 로 알려진 취약점 존재 여부를 확인",
+          "tool": "nmap.ssl_scan",
+          "args": {"host": "{target}"}
+        }
+      ],
+      "rule": {"kind": "regex", "evidence": "vuln_scan",
+               "pattern": "State: VULNERABLE", "fail_if": "match"}
+    },
+    {
+      "checklist_id": "fsec-2026-1-web-mobile-hts",
+      "check_id": "WEB-SER-037",
+      "platforms": ["WEB"],
+      "basis": "testssl.sh -R(재협상) — insecure client-initiated renegotiation 허용 여부(RFC 5746 Secure Renegotiation 미지원 포함)",
+      "rule_version": "2026-10-4",
+      "automation_level": "AUTOMATABLE",
+      "evidence_requirements": [
+        {
+          "id": "renegotiation_scan",
+          "description": "testssl.sh -R 로 안전하지 않은 재협상 허용 여부를 확인(전용 스캐너, data/tools/testssl.sh)",
+          "tool": "tls.renegotiation",
+          "args": {"host": "{target}"}
+        }
+      ],
+      "rule": {"kind": "regex", "evidence": "renegotiation_scan",
+               "pattern": "VULNERABLE \\(NOT ok\\)", "fail_if": "match"}
     }
   ]
 }

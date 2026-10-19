@@ -9,7 +9,7 @@
 | Python | 3.12 이상 (검증 3.13.5) |
 | PostgreSQL | 13 이상 (검증 18.6) |
 | Ollama | 0.5.0 이상, 구조화 출력 필요 (검증 0.35.1, `qwen2.5:7b-instruct`) |
-| 선택 | Nmap, MCP 서버(Burp, Playwright, Frida, Ghidra, JADX) |
+| 선택 | Nmap, MCP 서버(Burp, Playwright, Frida, Ghidra, JADX), [testssl.sh](https://testssl.sh)(재협상 취약점 점검용, 아래 참고) |
 
 ```powershell
 py -3.13 -m venv .venv
@@ -27,7 +27,9 @@ py -3.13 -m venv .venv
 | `config/scope.json` | 승인된 범위: `engagement_id`, `approved_by`, `valid_until`, `allowed_risks`, `targets`(`path`/`host`/`url`, 필요 시 `platform`). 만료되면 모든 실행이 거부된다 |
 | `config/settings.json` | Ollama 주소·모델·한도, 증적·보고서·체크리스트·템플릿 경로, 도구 호출 한도. 루프백이 아닌 모델 주소는 `external_api.enabled=false` 이면 거부. `ollama.timeout_s`(기본 120)는 모델 크기에 맞춰 늘린다 — 16GB 노트북에서 `qwen2.5:7b` 는 호출당 10~90초, `qwen2.5:14b` 는 타임아웃을 600초 정도로 늘려야 응답을 받을 수 있었다 |
 | `config/mcp_servers.json` | MCP 서버와 허용 도구(`risk`, `scope_args`, `args_schema`). 이 PC 의 경로는 `mcp_servers.local.json` 에 같은 서버 이름으로 적는다 |
-| `config/workbench.json` (선택) | 제외 대상 `exclude`, 예산 `budget`, `lease_s`, `min_call_interval_ms`, `nmap_path` (`workbench.example.json` 참고) |
+| `config/workbench.json` (선택) | 제외 대상 `exclude`, 예산 `budget`, `lease_s`, `min_call_interval_ms`, `nmap_path`, `testssl_path` (`workbench.example.json` 참고) |
+
+**testssl.sh (WEB-SER-037 재협상 오버레이용, 선택):** `git clone --branch 3.2 --depth 1 https://github.com/drwetter/testssl.sh.git data/tools/testssl.sh`(저장소에는 안 올라감, `/data/` 가 `.gitignore` 대상). Git-for-Windows 의 MSYS 에는 `hexdump`/`pkill` 이 없어 `data/tools/hexdump-shim/`(이 저장소에 포함, testssl.sh 가 실제로 쓰는 호출 형태만 정확히 구현)을 testssl.sh 실행 시 PATH 맨 앞에 둔다 — `tools.py` 의 `tls.renegotiation` 도구가 자동으로 해 준다. `config/workbench.json` 에 `testssl_path`를 설정해야 도구가 등록된다.
 
 ```powershell
 $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
@@ -132,7 +134,7 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 | 범위·정책 강제 | 부분 구현 | 범위 밖·경로 이탈·제외 대상·DNS·중지 스위치·허용 도구·승인·호출 간격 확인. 3단계 자율성 스위치(`approval`/`partial`/`full`)가 `scope.json` 의 `allowed_risks` 범위 안에서만 승인을 건너뛰는 것을 write(nmap)·dangerous(frida) 도구로 확인. 리다이렉트 이탈은 Playwright 출력만 검사하며 페이지의 하위 요청은 검사하지 않음 |
 | 체크리스트 가져오기 | 구현 | 활성·해시 고정 버전만 DB 로 가져오고 원문 보존 |
 | 결정론적 체크리스트 점검 | 구현 | 예시 체크리스트로 5가지 판정 확인. 공식 12종은 전 항목 사람 검토 |
-| 자동 점검 (A) 결정론적 규칙 (WEB/Mobile) | 부분 구현 | `config/rule_overlays.json`(스키마 `RULE_OVERLAYS`) → `audit.overlays.load_overlays`(정규식·증거 참조 교차검증) → `runs.import_checklist`에서 원문 `pass_criteria`/`fail_criteria`는 그대로 두고 `verification_method`/`evidence_requirements`만 오버레이로 바꿔 `checklist_items.body`에 저장. 기존 `audit.verdict` 엔진이 그대로 판정(단위테스트 8건, `tests/unit/test_rule_overlays.py`), 판정 사유에 "오버레이(업계 표준 기법) 기준, 원문 판단기준 아님" 자동 표기(`worker.py`). `checklist overlays` CLI로 실제 DB의 활성 체크리스트(`fsec-2026-1-web-mobile-hts` WEB-SER-038)와 교차검증 확인. 이미 import 된 버전에 소급 적용하는 `runs.reapply_overlays` + `checklist reapply-overlays <id> <version>` CLI 추가. 로컬 PostgreSQL 18(+psycopg) 로 end-to-end 확인: `tests/fixtures/checklist` 의 sample-local-config 로 import → 오버레이 적용(재적용으로 AUTOMATABLE 전환, 원문 criteria 불변) → 오버레이 제거 후 재적용하면 다시 원문(MANUAL_REVIEW)으로 복귀 — 전부 PASS. 오버레이 데이터는 1건(HTTP 메서드)만 예시 작성, 나머지 약 15개 후보는 미작성 |
+| 자동 점검 (A) 결정론적 규칙 (WEB/Mobile) | 부분 구현 | `config/rule_overlays.json`(스키마 `RULE_OVERLAYS`) → `audit.overlays.load_overlays`(정규식·증거 참조 교차검증) → `runs.import_checklist`에서 원문 `pass_criteria`/`fail_criteria`는 그대로 두고 `verification_method`/`evidence_requirements`만 오버레이로 바꿔 `checklist_items.body`에 저장. 기존 `audit.verdict` 엔진이 그대로 판정(단위테스트 8건, `tests/unit/test_rule_overlays.py`), 판정 사유에 "오버레이(업계 표준 기법) 기준, 원문 판단기준 아님" 자동 표기(`worker.py`). `checklist overlays` CLI로 실제 DB의 활성 체크리스트(`fsec-2026-1-web-mobile-hts` WEB-SER-038)와 교차검증 확인. 이미 import 된 버전에 소급 적용하는 `runs.reapply_overlays` + `checklist reapply-overlays <id> <version>` CLI 추가. 로컬 PostgreSQL 18(+psycopg) 로 end-to-end 확인: `tests/fixtures/checklist` 의 sample-local-config 로 import → 오버레이 적용(재적용으로 AUTOMATABLE 전환, 원문 criteria 불변) → 오버레이 제거 후 재적용하면 다시 원문(MANUAL_REVIEW)으로 복귀 — 전부 PASS. **오버레이 데이터 6건 — WEB-SER-030/034~038 전부 작성**: HTTP 메서드(038, `mcp:burp/send_http1_request`) / 서버 인증서 무결성(030)·취약한 HTTPS 프로토콜(034, 신규 `tls.inspect` 도구 — stdlib `ssl`/`socket`만 사용, 새 의존성 없음) / 취약한 암호 알고리즘(035)·취약한 HTTPS 컴포넌트(036, 신규 `nmap.ssl_scan` 도구 — 이 PC 에 이미 설치된 nmap 의 NSE 스크립트 `ssl-enum-ciphers`/`ssl-heartbleed`/`ssl-ccs-injection` 고정 사용, 임의 `--script` 인자는 받지 않음) / **취약한 재협상(037, 신규 `tls.renegotiation` 도구 — 전용 스캐너 testssl.sh 3.2 도입**, 운영자 승인 하에 공식 저장소에서 다운로드해 `data/tools/testssl.sh/`에 설치, Git 에는 안 올라감). `tls.inspect`는 ① 검증 없이 인증서를 받아 만료·자체서명·CN/SAN-호스트명 일치를 보고 ② SSLv3/TLSv1/TLSv1.1 로 핸드셰이크를 강제 시도해 서버가 받아주는지 본다. 로컬에 자체서명 인증서로 TLS 서버를 띄워 실제 핸드셰이크로 확인(`tests/unit/test_tls_inspect.py` 4건, `nmap.ssl_scan`은 같은 서버에 실제 nmap 7.98 을 돌려 캡처한 실제 출력으로 회귀 테스트, `tests/unit/test_rule_overlays.py` 총 14건 — 전부 실 소켓/실 nmap 실행). **testssl.sh 연동**: Git-for-Windows MSYS 에 없는 `hexdump`/`pkill`을 testssl.sh 가 실제로 쓰는 호출 형태만 정확히 구현한 대체 스크립트(`data/tools/hexdump-shim/`)로 보완(GNU hexdump 출력과 바이트 단위로 대조 확인). 실제 testssl.sh 를 로컬 TLS 서버에 두 번(`-R` 단독, `-p -S` 전체) 돌려 재협상·프로토콜·인증서 판정이 정상 출력됨을 확인했고, `make_tools()`가 돌리는 실제 실행 경로로도 동일 결과를 재확인(`tests/unit/test_testssl_tool.py`, testssl.sh 미설치 환경에서는 자동 skip). **이 과정에서 실제 버그 발견·수정**: ① 취약 프로토콜 프로브가 최신 OpenSSL 기본 보안 레벨(SECLEVEL) 때문에 실제로 취약한 서버에도 전부 "rejected"(거짓 안전)로 보고하는 문제 — 프로브 측 cipher 를 `@SECLEVEL=0`으로 낮춰 수정(테스트로 "accepted" 경로까지 실측 확인). ② `tools.make_tools()`가 nmap 이 없으면 `tls.inspect`까지 통째로 등록하지 않던 버그(nmap 조건부 early-return 안에 있었음) — nmap 의존 도구와 분리해 수정. 나머지 ~12개 후보(세션/인증 등 행동형 항목)는 (A) 적용 대상이 아님으로 재분류 |
 | 자동 점검 (B) 탐색 기반 발견 승격 (WEB/Mobile) | 부분 구현 | `audit.signals`(순수 함수): `classify_payload`가 요청 인자에서 공격 페이로드 시그니처(SQLi/XSS 2종)를 찾고, `verify_sqli`/`verify_xss`가 응답에서 클래스별 신호(엔진 특정 오류 문구 / 인코딩 없는 반사+인과관계)를 따로 확인 — 반사·오류 문구 하나만으로 확정하지 않음(단위테스트 10건, `tests/unit/test_signals.py`). `worker._run_exploration`이 fact 생성 시 신호를 확인해 일치하면 `findings`에 `verification='RULE_CONFIRMED'`로 삽입하고, finding 전용 `exploration_nodes`(`kind='finding'`)를 만들어 `exploration_edges`에 `proves` 엣지를 연결(전부 `exploration_signal_checked` 감사 이벤트로 기록, 불일치해도 기록). 체크리스트 사후 매핑은 `traces.tag_node` + `trace tag` CLI로 사람이 탐색 노드에 check_id 를 붙임(exploration_anchors.checklist_item_id, 판정 자체는 바꾸지 않음). 로컬 PostgreSQL 로 end-to-end 확인(21개 단언 전부 PASS): XSS 신호 일치 시 finding·finding_evidence·finding 전용 노드·proves 엣지·감사 이벤트가 모두 생성되고, 인코딩된 반사·알려진 시그니처 없음 케이스는 finding 을 만들지 않으며, `trace tag` 매핑과 존재하지 않는 check_id 거부도 확인. **이 과정에서 실제 버그 발견·수정**: `exploration_edges` 는 양쪽 다 `exploration_nodes` 를 참조하므로 `findings.id` 를 직접 넣으면 FK 위반 — finding 전용 노드를 만들어 anchor 하도록 수정. **제한**: SQLi/XSS 2종만 구현(CSRF/SSRF/SSTI/XXE/명령 실행 미작성), SQLi 는 오류 기반 신호만이며 차등/행동 기반 검증은 미구현, 실제 MCP(Burp 등) 도구가 보낸 페이로드가 아니라 직접 구성한 인자/응답으로 검증(실제 웹 대상 연동은 미확인) |
 | 로컬 LLM 연동 | 구현 | 분석·탐색 제안이 스키마 검증 통과. 16GB 노트북에서 호출당 10~90초 |
 | 작업 큐·Worker 조정 | 구현 | 동시 실행 중복 0건, 임대 만료 복구, 재개·취소 확인. Worker 는 프로세스당 1개 |
@@ -166,13 +168,13 @@ CLAUDE.md 는 바뀌지 않는 규칙만 담는다. 단계별 계획은 상태�
 | 0 | 체크리스트 가져오기·판정·보고서 기본 경로 | 구현 (§7) |
 | 1 | 자산/탐색 이중 그래프, 다단계 탐색 체인, 자율성 스위치 | 구현 (§7) |
 | 2 | 공유 작업 큐·Worker 조정·Activity 검색 | 구현/부분 구현 (§7) |
-| 3 | 자동 점검 (A): WEB/Mobile 결정론적 규칙 등록(`check_id`→도구·인자·판정) | 부분 구현(§7) — 엔진·로더·CLI·재적용 명령 완료, 로컬 PostgreSQL 로 end-to-end 확인(9건 PASS), 오버레이 데이터 1/16건만 등록 |
+| 3 | 자동 점검 (A): WEB/Mobile 결정론적 규칙 등록(`check_id`→도구·인자·판정) | 부분 구현(§7) — 엔진·로더·CLI·재적용 명령 완료, **오버레이 데이터 6/6건**(HTTP 메서드·인증서 무결성·취약 프로토콜·취약 암호·취약 컴포넌트·재협상). 신규 도구 3개: `tls.inspect`(stdlib ssl), `nmap.ssl_scan`(기존 nmap NSE 고정 스크립트), `tls.renegotiation`(신규 도입 testssl.sh 3.2 + MSYS 용 hexdump/pkill 대체 스크립트). 테스트 24건 전부 실제 소켓/실제 nmap/실제 testssl.sh 로 확인(건수는 §7 참고). (A) 범위에 해당하는 WEB 후보는 모두 처리 — 나머지는 행동형 항목이라 범위 밖 |
 | 4 | 자동 점검 (B): 탐색 발견의 취약점별 검증 신호 정의, `RULE_CONFIRMED` 승격, 체크리스트 매핑 태그 | 부분 구현(§7) — SQLi/XSS 2종 신호·승격·매핑 태그 완료, 로컬 PostgreSQL 로 end-to-end 확인(21건 PASS, FK 버그 1건 발견·수정), CSRF/SSRF/SSTI/XXE/명령 실행·SQLi 차등 검증 미작성 |
 | 5 | 필수 체크리스트 작업과 탐색 작업의 예산 분리(§2 "굶지 않게 한다") | 계획 |
 | 6 | HTS 등 다른 platform/체크리스트로 오버레이 확장 | 계획 — 데이터 추가만으로 가능하도록 설계(§7), 실제 확장은 미착수 |
 | 7 | 모바일 Word 템플릿, 리다이렉트 하위 요청 범위 검사, Burp 이력 기반 자산 추출 | 계획 — §7 의 기존 제한 사항 |
 
-3·4(자동 점검 두 메커니즘)는 로컬 PostgreSQL 로 end-to-end 확인까지 마쳤지만, 오버레이 데이터(1/16건)와 검증 신호(2개 클래스)가 아직 일부만 등록돼 "부분 구현"으로 남아 있다. 우선순위는 4의 나머지 취약점 클래스(CSRF/SSRF/SSTI/XXE/명령 실행) → 3의 오버레이 데이터 확장 → 5(예산 분리) → 나머지. 단계가 끝나면 §7 상태표의 해당 행을 "구현"으로 바꾸고 이 표에서 지운다.
+3(자동 점검 A)은 오버레이 데이터 6/6건이 전부 등록돼 WEB 플랫폼의 config-check형 항목은 더 추가할 게 없다 — 남은 건 §6 HTS 등으로의 확장(§7A는 platform·checklist_id 를 하드코딩하지 않으므로 데이터만 추가하면 됨). 4(자동 점검 B)는 검증 신호(2개 클래스)가 아직 일부만 등록돼 "부분 구현"으로 남아 있다. 우선순위는 4의 나머지 취약점 클래스(CSRF/SSRF/SSTI/XXE/명령 실행) → 6(HTS 확장) → 5(예산 분리) → 나머지. 단계가 끝나면 §7 상태표의 해당 행을 "구현"으로 바꾸고 이 표에서 지운다.
 
 ## 9. 복구와 문제 해결
 

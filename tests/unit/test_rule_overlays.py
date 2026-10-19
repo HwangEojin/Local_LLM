@@ -87,5 +87,79 @@ class ApplyAndJudge(unittest.TestCase):
         self.assertEqual(verdict, Verdict.PASS)
 
 
+# nmap.ssl_scan 으로 실제 nmap 7.98 + ssl-enum-ciphers/ssl-heartbleed/ssl-ccs-injection 을 돌려 받은 실제 출력
+# (강한 cipher 만 제공하는 로컬 TLS 테스트 서버, tests/unit/test_tls_inspect.py 참고).
+REAL_SAFE_SSL_SCAN = """PORT      STATE SERVICE
+16864/tcp open  unknown
+| ssl-enum-ciphers:
+|   TLSv1.2:
+|     ciphers:
+|       TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 (ecdh_x25519) - A
+|     cipher preference: server
+|_  least strength: A
+"""
+
+# 취약한 서버를 실제로 만들 수 없어, nmap 문서의 출력 형식을 그대로 따른 구성값(실측 아님 — 패턴만 확인).
+WEAK_CIPHER_SSL_SCAN = REAL_SAFE_SSL_SCAN.replace("least strength: A", "least strength: C")
+VULNERABLE_SSL_SCAN = REAL_SAFE_SSL_SCAN + "\n|_ssl-heartbleed: \n|   VULNERABLE:\n|_    State: VULNERABLE\n"
+
+_WEB_SER_035 = {**OVERLAY, "check_id": "WEB-SER-035",
+               "evidence_requirements": [{"id": "cipher_scan", "tool": "nmap.ssl_scan", "args": {}}],
+               "rule": {"kind": "regex", "evidence": "cipher_scan", "pattern": "least strength: [CDF]",
+                        "fail_if": "match"}}
+_WEB_SER_036 = {**OVERLAY, "check_id": "WEB-SER-036",
+               "evidence_requirements": [{"id": "vuln_scan", "tool": "nmap.ssl_scan", "args": {}}],
+               "rule": {"kind": "regex", "evidence": "vuln_scan", "pattern": "State: VULNERABLE",
+                        "fail_if": "match"}}
+
+
+class NmapSslScanOverlays(unittest.TestCase):
+    def _judge(self, overlay, text):
+        merged = overlays.apply(ITEM, overlay)
+        req_id = overlay["evidence_requirements"][0]["id"]
+        ev = {req_id: {"evidence_id": "e1", "data": text.encode(), "truncated": False}}
+        rule_outcome = evaluate_rule(merged["verification_method"]["rule"], ev)
+        verdict, _, _ = decide(merged, True, True, rule_outcome, None)
+        return verdict
+
+    def test_strong_ciphers_only_pass(self):
+        self.assertEqual(self._judge(_WEB_SER_035, REAL_SAFE_SSL_SCAN), Verdict.PASS)
+
+    def test_weak_cipher_grade_fails(self):
+        self.assertEqual(self._judge(_WEB_SER_035, WEAK_CIPHER_SSL_SCAN), Verdict.FAIL)
+
+    def test_no_known_vuln_passes(self):
+        self.assertEqual(self._judge(_WEB_SER_036, REAL_SAFE_SSL_SCAN), Verdict.PASS)
+
+    def test_heartbleed_vulnerable_fails(self):
+        self.assertEqual(self._judge(_WEB_SER_036, VULNERABLE_SSL_SCAN), Verdict.FAIL)
+
+
+# testssl.sh 소스(run_renego())에서 확인한 실제 출력 문구 그대로(두 FAIL 분기 모두 "VULNERABLE (NOT ok)").
+SAFE_RENEGO_SCAN = (" Secure Renegotiation (RFC 5746)           supported (OK)\n"
+                   " Secure Client-Initiated Renegotiation     not vulnerable (OK)\n")
+NO_SECURE_RENEGO_SCAN = (" Secure Renegotiation (RFC 5746)           Not supported / VULNERABLE (NOT ok)\n"
+                        " Secure Client-Initiated Renegotiation     not vulnerable (OK)\n")
+_WEB_SER_037 = {**OVERLAY, "check_id": "WEB-SER-037",
+               "evidence_requirements": [{"id": "renegotiation_scan", "tool": "tls.renegotiation", "args": {}}],
+               "rule": {"kind": "regex", "evidence": "renegotiation_scan", "pattern": "VULNERABLE \\(NOT ok\\)",
+                        "fail_if": "match"}}
+
+
+class TestsslRenegotiationOverlay(unittest.TestCase):
+    def _judge(self, text):
+        merged = overlays.apply(ITEM, _WEB_SER_037)
+        ev = {"renegotiation_scan": {"evidence_id": "e1", "data": text.encode(), "truncated": False}}
+        rule_outcome = evaluate_rule(merged["verification_method"]["rule"], ev)
+        verdict, _, _ = decide(merged, True, True, rule_outcome, None)
+        return verdict
+
+    def test_secure_renegotiation_passes(self):
+        self.assertEqual(self._judge(SAFE_RENEGO_SCAN), Verdict.PASS)
+
+    def test_missing_secure_renegotiation_fails(self):
+        self.assertEqual(self._judge(NO_SECURE_RENEGO_SCAN), Verdict.FAIL)
+
+
 if __name__ == "__main__":
     unittest.main()

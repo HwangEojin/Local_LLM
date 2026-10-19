@@ -122,7 +122,10 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
             ctx.conn.commit()
             return eid, None
         is_mcp = tool.startswith("mcp:")
-        media, ext = ("application/json", "json") if is_mcp else             ("application/xml", "xml") if tool == "nmap.scan" else ("application/octet-stream", "bin")
+        media, ext = (("application/json", "json") if is_mcp
+                     else ("application/xml", "xml") if tool == "nmap.scan"
+                     else ("text/plain", "txt") if tool == "nmap.ssl_scan"
+                     else ("application/octet-stream", "bin"))
         eid = evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, output=out, media_type=media, ext=ext,
                              **common)
         if is_mcp and not out.truncated:  # 응답에 든 이미지(스크린샷)는 원본과 연결된 파생 증적으로 따로 둔다
