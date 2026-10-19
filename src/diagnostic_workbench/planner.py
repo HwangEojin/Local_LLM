@@ -80,10 +80,13 @@ def plan(ctx) -> dict:
              "created": _propose_checklist_tasks(ctx), "explorations": 0}
     stats.update(_admit(ctx))
     conn.commit()
-    # 탐색 제안은 새 판정/사실이 생겼고 체크리스트 작업이 더 남지 않았을 때만 시도한다
+    # 탐색 제안은 체크리스트 작업이 더 남지 않았을 때 시도한다. 체크리스트가 있는 실행은 기존처럼 새
+    # 판정/사실/승인 이벤트가 있어야 깨어난다. 체크리스트가 없는 실행(자율 탐색 전용)은 그 조건에 묶이지
+    # 않는다 — 초기 증거가 없어도 매 주기 탐색을 시도해야 한다(CLAUDE.md §3.2/§5.1/§6).
     queued = backlog.counts(conn, run_id)
-    if ctx.llm and {"verdict", "fact", "evidence", "approval"} & set(events) \
-            and not (queued.get("READY") or queued.get("RUNNING")):
+    has_checklist = ctx.run["checklist_version_id"] is not None
+    woken = not has_checklist or bool({"verdict", "fact", "evidence", "approval"} & set(events))
+    if ctx.llm and woken and not (queued.get("READY") or queued.get("RUNNING")):
         stats["explorations"] = explore.propose(ctx)
         if stats["explorations"]:
             stats.update(_admit(ctx))

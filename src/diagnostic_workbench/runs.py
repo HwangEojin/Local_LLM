@@ -97,42 +97,52 @@ def reapply_overlays(conn, checklists: Checklists, checklist_id: str, version: s
 AUTONOMY_LEVELS = ("approval", "partial", "full")  # 항상 승인 | write 자동, dangerous 승인 | 전부 자동(범위 내)
 
 
-def create_run(conn, cfg, checklist_id: str, version: str, target_ids: list[str], operator: str,
-               check_ids: list[str] | None = None, use_llm: bool = False, budget: dict | None = None,
-               allowed_tools: list[str] | None = None, autonomy: str = "approval") -> dict:
+def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id: str | None = None,
+               version: str | None = None, check_ids: list[str] | None = None, use_llm: bool = False,
+               budget: dict | None = None, allowed_tools: list[str] | None = None, autonomy: str = "approval",
+               goal_text: str | None = None) -> dict:
+    """실행 생성. checklist_id 가 없으면 체크리스트 항목 없이 자율 탐색만 하는 실행이 된다 — 체크리스트는
+    필수 조건이 아니라 선택적으로 곁들이는 기능이다(CLAUDE.md §3.2/§13).
+    """
     if autonomy not in AUTONOMY_LEVELS:
         raise ConfigError(f"autonomy 는 {AUTONOMY_LEVELS} 중 하나여야 함: {autonomy}")
+    if not checklist_id and not use_llm:
+        raise ConfigError("체크리스트 없이 실행하려면 --llm 이 필요함(자율 탐색은 LLM 제안에 의존함)")
     scope = audit_config.load_scope(cfg.home)
     policy = Policy(scope, cfg.home)
     targets = [(tid, policy.target(tid)) for tid in dict.fromkeys(target_ids)]  # 범위 밖이면 PolicyDenied
-    overlays = overlays_mod.load_overlays(cfg.home / "config" / "rule_overlays.json")
-    cv = import_checklist(conn, Checklists(cfg.settings.path("checklist_dir")), checklist_id, version, overlays)
-    items = conn.execute("SELECT * FROM checklist_items WHERE checklist_version_id=%s ORDER BY check_id",
-                         (cv["id"],)).fetchall()
-    if check_ids:
-        unknown = sorted(set(check_ids) - {i["check_id"] for i in items})
-        if unknown:
-            raise ConfigError(f"알 수 없는 check_id: {unknown}")
-        items = [i for i in items if i["check_id"] in set(check_ids)]
     if allowed_tools is not None:
         known = registry(cfg)
         unknown = sorted(set(allowed_tools) - set(known))
         if unknown:
             raise ConfigError(f"등록되지 않은 도구: {unknown}. 등록된 도구: {sorted(known)}")
-    platforms = sorted({p for i in items for p in i["body"].get("platforms") or []})
-    for tid, t in targets:
-        if platforms and t.platform not in platforms:
-            raise ConfigError(f"대상 '{tid}' 의 platform '{t.platform}' 이(가) 체크리스트에 없음 (scope.json). "
-                              f"사용 가능: {', '.join(platforms)}")
+
+    cv, items = None, []
+    if checklist_id:
+        overlays = overlays_mod.load_overlays(cfg.home / "config" / "rule_overlays.json")
+        cv = import_checklist(conn, Checklists(cfg.settings.path("checklist_dir")), checklist_id, version, overlays)
+        items = conn.execute("SELECT * FROM checklist_items WHERE checklist_version_id=%s ORDER BY check_id",
+                             (cv["id"],)).fetchall()
+        if check_ids:
+            unknown = sorted(set(check_ids) - {i["check_id"] for i in items})
+            if unknown:
+                raise ConfigError(f"알 수 없는 check_id: {unknown}")
+            items = [i for i in items if i["check_id"] in set(check_ids)]
+        platforms = sorted({p for i in items for p in i["body"].get("platforms") or []})
+        for tid, t in targets:
+            if platforms and t.platform not in platforms:
+                raise ConfigError(f"대상 '{tid}' 의 platform '{t.platform}' 이(가) 체크리스트에 없음 (scope.json). "
+                                  f"사용 가능: {', '.join(platforms)}")
 
     run = conn.execute(
         "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm, allowed_tools, "
         "autonomy) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
-        (scope["engagement_id"], operator, cv["id"], Jsonb(scope), Jsonb({**cfg.budget, **(budget or {})}),
-         use_llm, allowed_tools, autonomy)).fetchone()
+        (scope["engagement_id"], operator, cv["id"] if cv else None, Jsonb(scope),
+         Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy)).fetchone()
+    default_goal = f"체크리스트 {checklist_id}@{version} 진단" if checklist_id else f"자율 진단: {', '.join(target_ids)}"
     goal = conn.execute(
         "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'goal','operator',%s) RETURNING id",
-        (run["id"], Jsonb({"text": f"체크리스트 {checklist_id}@{version} 진단", "targets": target_ids}))).fetchone()
+        (run["id"], Jsonb({"text": goal_text or default_goal, "targets": target_ids}))).fetchone()
     tasks = []
     for tid, t in targets:
         asset = conn.execute(

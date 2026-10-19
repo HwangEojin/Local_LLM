@@ -177,10 +177,14 @@ def cmd_tools(args):
 
 def _status(conn, run):
     rid = run["id"]
-    cv = conn.execute("SELECT checklist_id, version FROM checklist_versions WHERE id=%s",
-                      (run["checklist_version_id"],)).fetchone()
+    if run["checklist_version_id"] is None:
+        checklist_desc = "없음(자율 탐색 전용)"
+    else:
+        cv = conn.execute("SELECT checklist_id, version FROM checklist_versions WHERE id=%s",
+                          (run["checklist_version_id"],)).fetchone()
+        checklist_desc = f"{cv['checklist_id']}@{cv['version']}"
     print(f"실행 {rid}\n  상태={run['status']}" + (f" ({run['stop_reason']})" if run["stop_reason"] else "")
-          + f"  체크리스트={cv['checklist_id']}@{cv['version']}  운영자={run['operator']}  use_llm={run['use_llm']}"
+          + f"  체크리스트={checklist_desc}  운영자={run['operator']}  use_llm={run['use_llm']}"
           + f"  자율모드={run['autonomy']}")
     cov = reporting.coverage(conn, rid)
     print("  판정: " + (", ".join(f"{k}={v}" for k, v in cov["verdicts"].items()) or "없음"))
@@ -207,16 +211,19 @@ def _status(conn, run):
 def cmd_run(args):
     cfg, conn = _open(args)
     if args.action == "create":
-        if not (args.checklist and args.targets and args.operator):
-            print("run create 에는 --checklist ID@VERSION --targets a,b --operator 이름 이 필요합니다", file=sys.stderr)
+        if not (args.targets and args.operator):
+            print("run create 에는 --targets a,b --operator 이름 이 필요합니다 "
+                  "(체크리스트 진단은 --checklist ID@VERSION 도 필요, 자율 탐색만 하려면 --llm 필요)", file=sys.stderr)
             return 2
-        cid, _, ver = args.checklist.partition("@")
+        cid, ver = (args.checklist.partition("@")[0], args.checklist.partition("@")[2]) if args.checklist else (None, None)
         budget = config.validate_budget({k: v for k, v in (("max_tasks", args.max_tasks),
                                                            ("max_explorations", args.max_explorations)) if v is not None})
-        run = runs.create_run(conn, cfg, cid, ver, args.targets.split(","), args.operator,
-                              args.check_ids.split(",") if args.check_ids else None, args.llm, budget,
-                              args.tools.split(",") if args.tools else None, args.autonomy)
-        print(f"실행 생성됨: {run['id']}  자율 모드={run['autonomy']}")
+        run = runs.create_run(conn, cfg, args.targets.split(","), args.operator, checklist_id=cid, version=ver,
+                              check_ids=args.check_ids.split(",") if args.check_ids else None, use_llm=args.llm,
+                              budget=budget, allowed_tools=args.tools.split(",") if args.tools else None,
+                              autonomy=args.autonomy, goal_text=args.goal)
+        print(f"실행 생성됨: {run['id']}  자율 모드={run['autonomy']}"
+              + ("" if cid else "  (체크리스트 없음 — 자율 탐색 전용)"))
         if run["autonomy"] != "approval":
             print(f"  주의: 위험도 '{'write/dangerous' if run['autonomy'] == 'full' else 'write'}' 도구가 "
                   "범위 내에서 사람 승인 없이 자동 실행됩니다. 실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
@@ -516,9 +523,10 @@ def build_parser():
     r = sub.add_parser("run", help="실행 생성/미리 보기/시작(재개)/상태/취소/목록")
     r.add_argument("action", choices=["create", "plan", "start", "status", "cancel", "list"])
     r.add_argument("run", nargs="?")
-    r.add_argument("--checklist", help="ID@VERSION (활성화된 체크리스트)")
+    r.add_argument("--checklist", help="ID@VERSION (활성화된 체크리스트). 생략하면 체크리스트 없이 자율 탐색만 함(--llm 필요)")
     r.add_argument("--targets", help="scope.json 의 target_id 목록(쉼표 구분)")
-    r.add_argument("--check-ids", help="일부 항목만 실행(쉼표 구분)")
+    r.add_argument("--check-ids", help="일부 항목만 실행(쉼표 구분, --checklist 있을 때만)")
+    r.add_argument("--goal", help="자율 탐색 목표 문구(생략하면 기본 문구 사용, --checklist 없을 때만 의미 있음)")
     r.add_argument("--operator")
     r.add_argument("--tools", help="이 실행에서 허용할 도구 이름(쉼표 구분). 생략하면 등록된 도구 전체")
     r.add_argument("--autonomy", choices=runs.AUTONOMY_LEVELS, default="approval",
