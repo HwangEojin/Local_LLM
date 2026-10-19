@@ -480,12 +480,23 @@ def cmd_graph(args):
 def cmd_report(args):
     cfg, conn = _open(args)
     run = db.resolve_run(conn, args.run)
-    if run["checklist_version_id"] is None:  # 체크리스트가 없는 실행: 탐색 그래프 기반 보고서(초안)만 가능
-        res = reporting.generate(cfg, conn, run)
-        print(f"docx: {res['docx']}\nxlsx: {res['xlsx']}")
+    no_checklist = run["checklist_version_id"] is None
+    if no_checklist and args.basic:  # --basic(audit.report)은 체크리스트 전제라 자율 탐색 실행에는 못 씀
+        print("체크리스트 없는 실행은 --basic 을 지원하지 않습니다. --meta 로 결과보고서(초안)를 만드세요",
+              file=sys.stderr)
+        return 2
+    if no_checklist:  # 체크리스트가 없는 실행: pentest_report 서식 그대로, findings 테이블에서 발견 사항을 채움
+        if not args.meta:
+            print("체크리스트 없는 실행도 결과보고서에는 --meta <report_meta.json> 이 필요합니다(고객사·프로젝트·대상)",
+                  file=sys.stderr)
+            return 2
+        res = reporting.generate(cfg, conn, run, meta=args.meta, findings=args.findings)
+        print(f"docx: {res['docx']}")
         for w in res.get("warnings", []):
             print(f"  경고: {w}")
-        return 0
+        for p in res["problems"]:
+            print(f"  검증 실패: {p}")
+        return int(bool(res["problems"]))
     # 기본은 회사 템플릿 서식의 결과보고서다. 내부 점검 요약(표 양식 Word + Excel)은 --basic 으로 만든다.
     kind = None if args.basic else (args.type or reporting.default_kind(conn, run))
     if kind is None and not args.basic:

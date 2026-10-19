@@ -193,167 +193,70 @@ def default_kind(conn, run: dict) -> str | None:
     return kinds.pop() if len(kinds) == 1 else None
 
 
-def _free(path: Path) -> Path:
-    """기존 보고서를 덮어쓰지 않는다(audit.report._free 와 같은 규칙)."""
-    n, p = 1, path
-    while p.exists():
-        n += 1
-        p = path.with_name(f"{path.stem}-{n}{path.suffix}")
-    return p
-
-
-def _m(v) -> str:
-    return mask_secrets("" if v is None else str(v))
-
-
-def _table(doc, header, rows):
-    t = doc.add_table(rows=1, cols=len(header))
-    try:
-        t.style = "Table Grid"
-    except (KeyError, ValueError):
-        pass
-    for cell, h in zip(t.rows[0].cells, header):
-        cell.text = h
-    for row in rows:
-        for cell, v in zip(t.add_row().cells, row):
-            cell.text = v if isinstance(v, str) else str(v)
-    return t
-
-
-def _autonomous_data(conn, run: dict) -> dict:
-    """체크리스트 없는 실행의 보고 데이터: 탐색 그래프·증적·발견 사항·LLM 호출. PASS/FAIL 판정은 없다 —
-    체크리스트 기반 판정이 아니라 탐색 가설/사실/발견이라서다(CLAUDE.md §3.3/§9).
+def _findings_for_pentest_report(conn, run: dict, meta: dict) -> list[dict]:
+    """findings 테이블(체크리스트 없는 실행이 자율 탐색으로 쌓은 발견 사항) 을 audit.pentest_report._Builder
+    가 기대하는 findings 리스트 모양으로 변환한다. check_id/target_id 는 FAIL 판정과 맞추는 용도가 아니라
+    _Builder 가 쓰는 필드 이름일 뿐이므로 체크리스트 없이도 채울 수 있다.
     """
-    run_id = run["id"]
-    targets = conn.execute(
-        "SELECT ra.target_id, a.kind, a.value, a.platform FROM run_assets ra "
-        "JOIN assets a ON a.id = ra.asset_id WHERE ra.run_id=%s", (run_id,)).fetchall()
-    nodes = conn.execute(
-        "SELECT * FROM exploration_nodes WHERE run_id=%s ORDER BY created_at", (run_id,)).fetchall()
-    edges = conn.execute(
-        "SELECT e.src_id, e.rel, e.dst_id FROM exploration_edges e JOIN exploration_nodes n ON n.id = e.src_id "
-        "WHERE n.run_id=%s", (run_id,)).fetchall()
-    findings = conn.execute(
-        "SELECT f.*, array_agg(fe.evidence_id::text) AS evidence_ids FROM findings f "
-        "LEFT JOIN finding_evidence fe ON fe.finding_id = f.id WHERE f.run_id=%s "
-        "GROUP BY f.id ORDER BY f.created_at", (run_id,)).fetchall()
-    evidence = conn.execute(
-        "SELECT * FROM evidence WHERE run_id=%s ORDER BY collected_at", (run_id,)).fetchall()
-    calls = conn.execute("SELECT * FROM model_calls WHERE run_id=%s", (run_id,)).fetchall()
-    return {"run": run, "targets": targets, "nodes": nodes, "edges": edges, "findings": findings,
-            "evidence": evidence,
-            "model_calls": {"total": len(calls), "ok": sum(c["ok"] for c in calls),
-                            "prompt_tokens": sum(c["prompt_tokens"] or 0 for c in calls),
-                            "completion_tokens": sum(c["completion_tokens"] or 0 for c in calls)}}
+    targets = {t["target_id"]: t for t in meta.get("targets", [])}
+    rows = conn.execute(
+        "SELECT f.*, ra.target_id FROM findings f "
+        "JOIN run_assets ra ON ra.run_id = f.run_id AND ra.asset_id = f.asset_id "
+        "WHERE f.run_id=%s ORDER BY f.created_at", (run["id"],)).fetchall()
+    out = []
+    for r in rows:
+        tinfo = targets.get(r["target_id"]) or {"name": r["target_id"], "url": "", "kind": "WEB"}
+        out.append({
+            "check_id": str(r["id"])[:8], "target_id": r["target_id"], "target_name": tinfo["name"],
+            "url": tinfo.get("url", ""), "kind": tinfo.get("kind", "WEB"), "name": r["title"],
+            "result": mask_secrets(r["rationale"]), "path": tinfo.get("url", "") or r["target_id"],
+            "notes": f"검증: {r['verification']} (사람 최종 검토 전 — CLAUDE.md §9/§10)",
+            "cases": [], "recommendation": r["remediation"] or "", "rec_titles": [], "reason": r["rationale"],
+        })
+    return out
 
 
-def _write_autonomous_docx(m: dict, path: Path):
-    from docx import Document
-    run = m["run"]
-    doc = Document()
-    doc.add_heading("자율 탐색 보고서 (초안 — 사람 검토 전)", 0)
-    doc.add_paragraph("이 보고서는 체크리스트 기반 PASS/FAIL 판정이 아니라 자율 탐색이 만든 가설(intent)·"
-                      "사실(fact)·발견 사항(finding)을 모은 초안이다. CONFIRMED 로 표시된 항목도 결정론적 "
-                      "신호 일치(RULE_CONFIRMED)일 뿐 사람의 최종 검토를 거치지 않았다(CLAUDE.md §9/§10).")
-
-    doc.add_heading("1. 실행 개요", 1)
-    _table(doc, ["항목", "내용"], [
-        ["실행 ID", str(run["id"])], ["Engagement", run["engagement_id"]], ["운영자", run["operator"]],
-        ["상태", run["status"]], ["자율 모드", run["autonomy"]],
-        ["시작", str(run["created_at"])], ["종료", str(run["ended_at"] or "-")]])
-
-    doc.add_heading("2. 대상", 1)
-    _table(doc, ["대상ID", "유형", "값", "platform"],
-           [[t["target_id"], t["kind"], t["value"], t["platform"] or "-"] for t in m["targets"]])
-
-    doc.add_heading("3. 탐색 그래프 (goal → intent → fact/finding)", 1)
-    doc.add_paragraph(f"LLM 호출 {m['model_calls']['total']}회(성공 {m['model_calls']['ok']}), "
-                      f"토큰 입력 {m['model_calls']['prompt_tokens']}/출력 {m['model_calls']['completion_tokens']}")
-    _table(doc, ["노드ID", "종류", "상태", "출처", "내용"], [
-        [str(n["id"])[:8], n["kind"], n["state"], n["origin"],
-         _m((n["payload"].get("text") or n["payload"].get("rationale") or n["payload"].get("tool", ""))[:200])]
-        for n in m["nodes"]])
-
-    doc.add_heading("4. 발견 사항 (CANDIDATE — 사람 검토 전)", 1)
-    if not m["findings"]:
-        doc.add_paragraph("탐색 과정에서 결정론적 신호가 확정한 발견 사항이 없음.")
-    for f in m["findings"]:
-        doc.add_heading(f"{f['title']} — {f['severity']} ({f['verification']})", 2)
-        doc.add_paragraph(f"판정 근거: {_m(f['rationale'])}")
-        if f["remediation"]:
-            doc.add_paragraph(f"조치 권고: {_m(f['remediation'])}")
-        doc.add_paragraph(f"증적: {', '.join(e for e in (f['evidence_ids'] or []) if e) or '없음'}")
-
-    doc.add_heading("5. 증적 목록", 1)
-    _table(doc, ["증적ID", "도구", "수집시각", "성공", "SHA-256"],
-           [[str(e["id"])[:8], e["tool"], str(e["collected_at"]), "Y" if e["success"] else "N",
-             e["sha256"] or "-"] for e in m["evidence"]])
-
-    doc.add_heading("6. 제한 사항", 1)
-    doc.add_paragraph("체크리스트가 없는 실행이므로 PASS/FAIL 판정, 커버리지 비율은 제공하지 않는다. "
-                      "이 실행이 다룬 범위는 §1 '대상' 과 §3 탐색 그래프가 실제로 생성한 작업으로 한정되며, "
-                      "다루지 않은 영역에 대한 보장은 없다. 발견 사항은 사람이 확인·승인하기 전까지 최종 결과가 "
-                      "아니다(검토 워크플로는 아직 구현되지 않음).")
-    doc.save(str(path))
-
-
-def _write_autonomous_xlsx(m: dict, path: Path):
-    from openpyxl import Workbook
-    wb = Workbook()
-    wb.remove(wb.active)
-
-    ws = wb.create_sheet("개요")
-    run = m["run"]
-    for row in [["실행ID", str(run["id"])], ["Engagement", run["engagement_id"]], ["운영자", run["operator"]],
-                ["상태", run["status"]], ["자율모드", run["autonomy"]]]:
-        ws.append(row)
-
-    ws = wb.create_sheet("탐색")
-    ws.append(["노드ID", "종류", "상태", "출처", "내용", "생성시각"])
-    for n in m["nodes"]:
-        ws.append([str(n["id"]), n["kind"], n["state"], n["origin"],
-                   _m((n["payload"].get("text") or n["payload"].get("rationale") or n["payload"].get("tool", ""))),
-                   str(n["created_at"])])
-
-    ws = wb.create_sheet("발견사항")
-    ws.append(["제목", "심각도", "검증", "판정근거", "조치권고", "증적ID"])
-    for f in m["findings"]:
-        ws.append([f["title"], f["severity"], f["verification"], _m(f["rationale"]), f["remediation"],
-                   ", ".join(e for e in (f["evidence_ids"] or []) if e)])
-
-    ws = wb.create_sheet("증적")
-    ws.append(["증적ID", "도구", "수집시각", "성공", "SHA-256", "오류"])
-    for e in m["evidence"]:
-        ws.append([str(e["id"]), e["tool"], str(e["collected_at"]), "Y" if e["success"] else "N",
-                   e["sha256"] or "", _m(e["error"])])
-    wb.save(str(path))
-
-
-def generate_autonomous(cfg, conn, run: dict) -> dict:
-    """체크리스트 없는(자율 탐색 전용) 실행의 보고서. audit.report 와 달리 PASS/FAIL 판정 표를 만들지
-    않는다 — 그런 판정이 아예 없기 때문이다. 탐색 그래프·발견 사항·증적만으로 초안을 만든다.
+def generate_autonomous(cfg, conn, run: dict, meta_path, findings_path=None) -> dict:
+    """체크리스트 없는(자율 탐색 전용) 실행의 보고서. audit.pentest_report 의 Word 서식·조립 로직
+    (_Builder/fill_*/verify)을 그대로 쓰고, 체크리스트의 collect_findings(FAIL 판정 매칭) 만 findings
+    테이블에서 직접 읽는 방식으로 바꿔 넣는다 — 서식은 하나만 유지한다.
     """
+    from audit import pentest_report, schemas
     if run["status"] != "COMPLETED":
         raise AuditError(f"실행 {run['id']} 의 상태가 {run['status']} 임. COMPLETED 상태의 실행만 보고서로 출력할 수 있음")
+    if not meta_path:
+        raise AuditError("체크리스트 없는 실행도 --meta <report_meta.json> 이 필요함(고객사·프로젝트·대상)")
     run_id = str(run["id"])
-    m = _autonomous_data(conn, run)
-    out = cfg.settings.path("reports_dir") / run_id
-    out.mkdir(parents=True, exist_ok=True)
-    docx_path, xlsx_path = _free(out / f"report_{run_id}.docx"), _free(out / f"report_{run_id}.xlsx")
-    _write_autonomous_docx(m, docx_path)
-    _write_autonomous_xlsx(m, xlsx_path)
-    result = {"run_id": run_id, "docx": str(docx_path), "xlsx": str(xlsx_path),
-              "findings": len(m["findings"]), "evidence": len(m["evidence"]), "problems": [],
-              "warnings": ["체크리스트 없는 실행 — PASS/FAIL 판정 없음. 발견 사항은 사람 검토 전 초안임"]}
-    db.audit(conn, run["id"], "report_generated", result)
+    meta = pentest_report._load_json(meta_path, schemas.REPORT_META, "report meta")
+    tpl, rec_paths = pentest_report.find_templates(cfg.settings.path("templates_dir"), "web")
+    findings = _findings_for_pentest_report(conn, run, meta)
+    b = pentest_report._Builder(tpl, pentest_report.load_recommendations(rec_paths), meta, findings)
+    if findings_path:
+        b.improvements = json.loads(Path(findings_path).read_text(encoding="utf-8")).get("improvements", [])
+    b.fill_overview()
+    b.fill_summary()
+    b.fill_improvements()
+    b.fill_details()
+    b.fill_protection()
+    b.finish()
+    out_dir = cfg.settings.path("reports_dir") / run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = pentest_report._free(out_dir / f"web_pentest_report_{run_id}.docx")
+    b.doc.save(str(out))
+    problems, warnings = pentest_report.verify(out, findings, b.unmatched)
+    result = {"docx": str(out), "template": tpl.name, "findings": len(findings),
+              "unmatched_recommendations": sorted(set(b.unmatched)),
+              "warnings": ["체크리스트 없는 실행: 발견 사항은 findings 테이블(사람 최종 검토 전)에서 가져옴"] + warnings,
+              "problems": problems}
+    db.audit(conn, run["id"], "pentest_report_generated", result)
     conn.commit()
-    return {**result, "coverage": coverage(conn, run["id"])}
+    return result
 
 
 def generate(cfg, conn, run: dict, kind=None, meta=None, findings=None) -> dict:
     run_id = str(run["id"])
     if run["checklist_version_id"] is None:
-        return generate_autonomous(cfg, conn, run)
+        return generate_autonomous(cfg, conn, run, meta, findings)
     storage = LegacyStorage(conn, cfg.evidence_dir)
     checklists = Checklists(cfg.settings.path("checklist_dir"))
     cov = coverage(conn, run["id"])
