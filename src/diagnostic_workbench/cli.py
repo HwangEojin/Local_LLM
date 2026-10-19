@@ -224,9 +224,9 @@ def cmd_run(args):
                               autonomy=args.autonomy, goal_text=args.goal)
         print(f"실행 생성됨: {run['id']}  자율 모드={run['autonomy']}"
               + ("" if cid else "  (체크리스트 없음 — 자율 탐색 전용)"))
-        if run["autonomy"] != "approval":
-            print(f"  주의: 위험도 '{'write/dangerous' if run['autonomy'] == 'full' else 'write'}' 도구가 "
-                  "범위 내에서 사람 승인 없이 자동 실행됩니다. 실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
+        if run["autonomy"] == "full":
+            print("  주의: 위험도 'write/dangerous' 도구가 범위 내에서 사람 승인 없이 자동 실행됩니다. "
+                  "실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
         print(f"미리 보기: run plan {run['id']}   시작: run start {run['id']}")
         return 0
     if args.action == "list":
@@ -371,6 +371,18 @@ def cmd_finding(args):
             print(f"{str(f['id'])[:8]}  [{f['severity']:<6}] {f['title'][:50]:<50} "
                   f"verification={f['verification']:<17} status={f['status']:<10} {reviewed}")
         print(f"{len(rows)}건")
+        return 0
+    if args.action == "retest":
+        if not (args.finding_id and args.reason and args.reviewer):
+            print("finding retest 에는 <finding_id> --reason .. --reviewer .. 가 필요합니다", file=sys.stderr)
+            return 2
+        f = _finding(conn, run, args.finding_id)
+        item_ids = worker.create_retest(conn, run["id"], f["id"], operator=args.reviewer, reason=args.reason)
+        db.audit(conn, run["id"], "finding_retest_requested",
+                 {"finding_id": str(f["id"]), "reviewer": args.reviewer, "backlog_items": [str(i) for i in item_ids]})
+        db.notify_change(conn, run["id"], "fact")  # 다음 계획 주기가 새 탐색 작업을 집어가게 깨운다
+        conn.commit()
+        print(f"{f['id']}: 재검증 작업 {len(item_ids)}건 생성됨 — run start {run['id']} 로 실행")
         return 0
     if not (args.finding_id and args.status and args.reason and args.reviewer):
         print("finding review 에는 <finding_id> <status> --reason .. --reviewer .. 가 필요합니다", file=sys.stderr)
@@ -588,7 +600,7 @@ def build_parser():
     r.add_argument("--operator")
     r.add_argument("--tools", help="이 실행에서 허용할 도구 이름(쉼표 구분). 생략하면 등록된 도구 전체")
     r.add_argument("--autonomy", choices=runs.AUTONOMY_LEVELS, default="approval",
-                   help="approval(기본, 항상 승인) | partial(write 자동, dangerous 승인) | full(모두 자동, 범위 내). "
+                   help="approval(기본, 항상 승인) | full(모두 자동, 범위 내). "
                         "진단 시작 전에만 정하며 실행 중 바꿀 수 없음")
     r.add_argument("--llm", action="store_true", help="로컬 LLM 참고 의견과 탐색 제안 사용")
     r.add_argument("--max-tasks", type=int)
@@ -613,13 +625,13 @@ def build_parser():
     rv.add_argument("verdict", choices=VERDICTS)
     rv.add_argument("--reason", required=True)
     rv.add_argument("--reviewer", required=True)
-    fd = sub.add_parser("finding", help="findings 목록(list) / 사람의 확정·기각 검토 기록(review, 이력 보존)")
-    fd.add_argument("action", choices=["list", "review"])
+    fd = sub.add_parser("finding", help="findings 목록(list) / 확정·기각 검토(review) / 추가 검증 요청(retest)")
+    fd.add_argument("action", choices=["list", "review", "retest"])
     fd.add_argument("run")
-    fd.add_argument("finding_id", nargs="?", help="review: 검토할 finding id(앞부분만으로도 특정 가능)")
+    fd.add_argument("finding_id", nargs="?", help="review/retest: 대상 finding id(앞부분만으로도 특정 가능)")
     fd.add_argument("status", nargs="?", choices=worker.FINDING_STATUSES, help="review: 새 상태")
-    fd.add_argument("--reason", help="review 필수")
-    fd.add_argument("--reviewer", help="review 필수")
+    fd.add_argument("--reason", help="review/retest 필수")
+    fd.add_argument("--reviewer", help="review/retest 필수")
     fd.add_argument("--evidence", help="review: 추가로 연결할 증적 id(쉼표로 구분), CONFIRMED 에 필요할 수 있음")
     ev = sub.add_parser("evidence", help="증적 목록과 파일 해시 대조")
     ev.add_argument("run")

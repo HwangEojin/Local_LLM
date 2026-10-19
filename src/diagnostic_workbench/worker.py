@@ -102,6 +102,73 @@ def set_finding_status(conn, finding_id, status, reason, *, actor, evidence_ids=
         "VALUES (%s,%s,%s,%s,%s,%s)", (finding_id, f["status"], status, reason, actor, list(evidence_ids)))
 
 
+def create_retest(conn, run_id, finding_id, *, operator, reason) -> list:
+    """사람이 Finding 의 추가 검증(재검증)을 요청한다(CLAUDE.md §10 "추가 검증 요청").
+
+    그 finding 의 근거가 된 증거를 낸 도구·인자를 그대로 새 탐색 작업으로 백로그에 다시 올린다. 상태는
+    바꾸지 않는다 — 재검증 결과가 나오면 사람이 finding review 로 다시 판정해야 한다. 요청 사실은
+    finding_review_history 에 남는다(old_status == new_status, 판정 변경이 아니라 요청 기록).
+    """
+    f = conn.execute("SELECT status FROM findings WHERE id=%s", (finding_id,)).fetchone()
+    if f is None:
+        raise AuditError(f"finding {finding_id} 를 찾을 수 없음")
+    calls = conn.execute(
+        "SELECT DISTINCT e.asset_id, e.tool, e.args FROM finding_evidence fe "
+        "JOIN evidence e ON e.id = fe.evidence_id WHERE fe.finding_id=%s", (finding_id,)).fetchall()
+    if not calls:
+        raise AuditError("이 finding 에는 재실행할 증거(도구/인자)가 없음 — 재검증을 요청할 수 없음")
+    goal = conn.execute("SELECT id FROM exploration_nodes WHERE run_id=%s AND kind='goal' ORDER BY created_at LIMIT 1",
+                        (run_id,)).fetchone()["id"]
+    item_ids = []
+    for c in calls:
+        node = conn.execute(
+            "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'intent','retest',%s) "
+            "RETURNING id", (run_id, Jsonb({"tool": c["tool"], "args": c["args"],
+                                            "retest_of_finding": str(finding_id)}))).fetchone()["id"]
+        conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'spawns')", (goal, node))
+        conn.execute("INSERT INTO exploration_anchors (node_id, asset_id) VALUES (%s,%s)", (node, c["asset_id"]))
+        item = conn.execute(
+            "INSERT INTO backlog_items (run_id, kind, exploration_node_id, asset_id, priority, idempotency_key, "
+            "reason, payload, max_attempts) VALUES (%s,'exploration',%s,%s,70,%s,%s,%s,1) RETURNING id",
+            (run_id, node, c["asset_id"], f"retest:{finding_id}:{node}",
+             f"재검증 요청(operator={operator}): {reason}"[:300],
+             Jsonb({"tool": c["tool"], "args": c["args"]}))).fetchone()["id"]
+        item_ids.append(item)
+    conn.execute(
+        "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
+        "VALUES (%s,%s,%s,%s,%s,'{}')",
+        (finding_id, f["status"], f["status"], f"재검증 요청됨: {reason} (새 탐색 작업 {len(item_ids)}건)",
+         f"reviewer:{operator}"))
+    return item_ids
+
+
+def create_llm_finding(conn, run_id, asset_id, *, title, severity, rationale, remediation, evidence_ids, model):
+    """LLM이 자신이 인용한 실존 증거를 근거로 finding을 직접 CONFIRMED로 기록한다(CLAUDE.md §1.1 예외 3번,
+    2026-10-19 결정 — artex 설계 참고). 인용한 증거 id가 이 실행(run)에 실제로 존재하는지만 확인하는
+    최소한의 데이터 무결성 검사이고, 주장(취약점이 실제로 있는지)의 실체는 검증하지 않는다 — 그게 이
+    예외의 요지다. finding_review_history 에 actor='llm:<model>' 로 남아 추적 가능하고, 사람은 이후에도
+    finding review 로 재검토·기각할 수 있다(그 이력도 보존됨).
+
+    인용한 증거가 하나도 실존하지 않으면 아무것도 기록하지 않고 None 을 돌려준다.
+    """
+    real = sorted({r["id"] for r in conn.execute(
+        "SELECT id FROM evidence WHERE run_id=%s AND id = ANY(%s::uuid[])", (run_id, list(evidence_ids))).fetchall()})
+    if not real:
+        return None
+    actor = f"llm:{model}"
+    f = conn.execute(
+        "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification, status, "
+        "reviewed_by, reviewed_at, review_reason) "
+        "VALUES (%s,%s,%s,%s,%s,%s,'LLM_CONFIRMED','CONFIRMED',%s,now(),%s) RETURNING id",
+        (run_id, asset_id, title, severity, rationale, remediation, actor, rationale)).fetchone()
+    for eid in real:
+        conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], eid))
+    conn.execute(
+        "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
+        "VALUES (%s,NULL,'CONFIRMED',%s,%s,%s)", (f["id"], rationale, actor, real))
+    return f["id"]
+
+
 def _tool_calls_used(ctx, kind: str) -> int:
     """kind('checklist'|'exploration')별로 따로 센다 — 탐색이 체크리스트 예산을 먹거나 그 반대가 되지
     않게 한다(CLAUDE.md §2 "각자의 예산... 따로 관리").
@@ -111,7 +178,7 @@ def _tool_calls_used(ctx, kind: str) -> int:
         "WHERE ti.run_id=%s AND ti.status <> 'SKIPPED' AND b.kind=%s", (ctx.run["id"], kind)).fetchone()["n"]
 
 
-_BUDGET_KEY = {"checklist": "max_tool_calls", "exploration": "max_tool_calls_exploration"}
+_BUDGET_KEY = {"checklist": "max_tool_calls"}  # 자율 탐색(exploration)에는 하드 리밋을 두지 않음(CLAUDE.md §1.1 예외 1번)
 
 
 def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
@@ -119,8 +186,8 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
     common = dict(run_id=ctx.run["id"], asset_id=it["asset_id"], requirement_id=req_id, tool=tool,
                   rci_id=it.get("run_checklist_item_id"), backlog_item_id=it["id"])
     d = policy.decide(ctx, tool, args, it["asset_id"])
-    budget_key = _BUDGET_KEY[it["kind"]]
-    if d.decision == policy.ALLOW and _tool_calls_used(ctx, it["kind"]) >= ctx.run["budget"][budget_key]:
+    budget_key = _BUDGET_KEY.get(it["kind"])  # exploration 은 예산 키가 없음 — 벽시계 타임아웃으로만 끝낸다
+    if budget_key and d.decision == policy.ALLOW and _tool_calls_used(ctx, it["kind"]) >= ctx.run["budget"][budget_key]:
         d = policy.Decision(policy.DENY, f"실행 예산 {budget_key} 에 도달함", d.args)
     if d.decision != policy.ALLOW:
         record_invocation(ctx, it, worker_run_id, step, tool, d, "SKIPPED", error=d.reason)

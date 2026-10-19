@@ -70,8 +70,8 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
                 return Decision(DENY, f"'{host}' 이(가) 제외 주소 '{hit}' 로 해석됨", clean)
     if spec.risk == "read":
         return Decision(ALLOW, "읽기 전용 도구, 범위 내", clean)
-    autonomy = ctx.run.get("autonomy", "approval")  # approval(기본) | partial | full — 실행 생성 시 고정
-    auto_ok = autonomy == "full" or (autonomy == "partial" and spec.risk == "write")
+    autonomy = ctx.run.get("autonomy", "approval")  # approval(기본) | full — 실행 생성 시 고정(2026-10-19: 이분법으로 단순화)
+    auto_ok = autonomy == "full"
     if auto_ok:  # 승인을 건너뛰어도 그 사실을 감사 기록에 남긴다(범위·제외·중지 스위치 검사는 이미 위에서 통과함)
         return Decision(ALLOW, f"자율 모드 '{autonomy}' 로 위험도 '{spec.risk}' 도구를 승인 없이 허용함", clean)
     row = ctx.conn.execute(
