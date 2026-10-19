@@ -346,6 +346,47 @@ def cmd_review(args):
     return 0
 
 
+def _finding(conn, run, ref):
+    rows = conn.execute("SELECT * FROM findings WHERE run_id=%s AND id::text LIKE %s",
+                        (run["id"], ref.replace("%", "") + "%")).fetchall()
+    if len(rows) != 1:
+        raise AuditError(f"finding '{ref}' 을(를) 하나로 특정할 수 없음 ({len(rows)}건)")
+    return rows[0]
+
+
+def cmd_finding(args):
+    """체크리스트 유무와 무관하게 findings 테이블의 발견 사항을 사람이 검토한다(CLAUDE.md §9/§10).
+
+    체크리스트 FAIL 판정은 'review' 명령으로 이미 검토할 수 있지만, 자율 탐색이 올린 발견 사항
+    (run_checklist_item_id 없음)은 그 명령으로 닿지 않아 'finding review' 를 따로 둔다. 둘 다 같은
+    findings 테이블, 같은 상태 체계(worker.FINDING_STATUSES)를 쓴다.
+    """
+    cfg, conn = _open(args)
+    run = db.resolve_run(conn, args.run)
+    if args.action == "list":
+        rows = conn.execute(
+            "SELECT * FROM findings WHERE run_id=%s ORDER BY created_at", (run["id"],)).fetchall()
+        for f in rows:
+            reviewed = f"검토: {f['status']}({f['reviewed_by']})" if f["reviewed_by"] else "검토 전"
+            print(f"{str(f['id'])[:8]}  [{f['severity']:<6}] {f['title'][:50]:<50} "
+                  f"verification={f['verification']:<17} status={f['status']:<10} {reviewed}")
+        print(f"{len(rows)}건")
+        return 0
+    if not (args.finding_id and args.status and args.reason and args.reviewer):
+        print("finding review 에는 <finding_id> <status> --reason .. --reviewer .. 가 필요합니다", file=sys.stderr)
+        return 2
+    f = _finding(conn, run, args.finding_id)
+    evidence_ids = [e.strip() for e in (args.evidence or "").split(",") if e.strip()]
+    old_status = f["status"]
+    worker.set_finding_status(conn, f["id"], args.status, args.reason,
+                              actor=f"reviewer:{args.reviewer}", evidence_ids=evidence_ids)
+    db.audit(conn, run["id"], "finding_status_changed",
+             {"finding_id": str(f["id"]), "old": old_status, "new": args.status, "reviewer": args.reviewer})
+    conn.commit()
+    print(f"{f['id']}: {old_status} -> {args.status} (이력 기록됨)")
+    return 0
+
+
 def cmd_evidence(args):
     cfg, conn = _open(args)
     run = db.resolve_run(conn, args.run)
@@ -572,6 +613,14 @@ def build_parser():
     rv.add_argument("verdict", choices=VERDICTS)
     rv.add_argument("--reason", required=True)
     rv.add_argument("--reviewer", required=True)
+    fd = sub.add_parser("finding", help="findings 목록(list) / 사람의 확정·기각 검토 기록(review, 이력 보존)")
+    fd.add_argument("action", choices=["list", "review"])
+    fd.add_argument("run")
+    fd.add_argument("finding_id", nargs="?", help="review: 검토할 finding id(앞부분만으로도 특정 가능)")
+    fd.add_argument("status", nargs="?", choices=worker.FINDING_STATUSES, help="review: 새 상태")
+    fd.add_argument("--reason", help="review 필수")
+    fd.add_argument("--reviewer", help="review 필수")
+    fd.add_argument("--evidence", help="review: 추가로 연결할 증적 id(쉼표로 구분), CONFIRMED 에 필요할 수 있음")
     ev = sub.add_parser("evidence", help="증적 목록과 파일 해시 대조")
     ev.add_argument("run")
     c = sub.add_parser("collect", help="등록된 도구를 한 번 실행해 항목에 증적 추가(판정은 바꾸지 않음)")
@@ -603,8 +652,9 @@ def build_parser():
 
 
 COMMANDS = {"doctor": cmd_doctor, "migrate": cmd_migrate, "checklist": cmd_checklist, "tools": cmd_tools, "run": cmd_run, "backlog": cmd_backlog,
-            "approve": cmd_approve, "retry": cmd_retry, "review": cmd_review, "evidence": cmd_evidence,
-            "collect": cmd_collect, "trace": cmd_trace, "graph": cmd_graph, "report": cmd_report}
+            "approve": cmd_approve, "retry": cmd_retry, "review": cmd_review, "finding": cmd_finding,
+            "evidence": cmd_evidence, "collect": cmd_collect, "trace": cmd_trace, "graph": cmd_graph,
+            "report": cmd_report}
 
 
 def main(argv=None) -> int:
