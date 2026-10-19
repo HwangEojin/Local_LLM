@@ -16,6 +16,11 @@ _HOST_HEADER = re.compile(r"(?i)(?:^|\\r\\n|\r?\n)host:[ \t]*([A-Za-z0-9._\-\[\]
 _HOST_KEYS = ("host", "hostname", "targetHostname")
 _URL_KEYS = ("baseUrl", "url", "origin", "target")
 _NESTED_KEYS = ("requestResponses", "requests", "request_responses", "evidence")
+# "HttpRequestResponse{httpRequest=GET /x HTTP/1.1\r\n, ...}" 형태(실제 Burp MCP 응답, 줄바꿈 없는 JSON
+# 문자열 하나로 옴 — test_signals.VerifyCsrf.test_status_line_matches_inside_burp_json_wrapper 에서 실측).
+# 요청 줄은 "httpRequest=" 바로 뒤에 와서 앞에 줄바꿈이 없으므로(줄 시작 고정은 안 됨 — 같은 종류의 버그를
+# CSRF 쪽에서 이미 실측으로 발견했음), 줄 경계를 요구하지 않고 메서드+경로+HTTP 버전 모양만 찾는다.
+_REQUEST_LINE = re.compile(r"\b([A-Z]{3,10})[ \t]+(\S+)[ \t]+HTTP/\d")
 
 
 def _host_only(h: str) -> str:
@@ -82,6 +87,39 @@ def request_hosts(item) -> set[str]:
         if isinstance(item.get(k), (list, dict)):
             hosts |= request_hosts(item[k])
     return hosts
+
+
+def request_urls(item) -> set[str]:
+    """항목이 가리키는 요청의 전체 URL 집합(README §7 "Burp 이력 기반 자산 추출", 2026-10-19 구현).
+
+    프록시 이력은 요청 줄(GET /path HTTP/1.1)과 Host 헤더만 평문으로 보여주고 TLS 여부는 구조적으로
+    알려주지 않는 경우가 많아, 스킴을 모르면 http 로 둔다(범위 검사는 호스트 기준이라 스킴을 잘못 추정해도
+    범위를 벗어나거나 들어오는 일은 없다). 알 수 없으면 빈 집합.
+    """
+    urls: set[str] = set()
+    if isinstance(item, str):
+        line, host = _REQUEST_LINE.search(item), _HOST_HEADER.search(item)
+        if line and host:
+            path = line.group(2)
+            # 자산 URL은 포트를 보존해야 한다(_host_only 는 request_hosts 용으로 포트를 버림 — 여기선 안 됨)
+            urls.add(path if path.startswith(("http://", "https://")) else f"http://{host.group(1).strip()}{path}")
+        return urls
+    if isinstance(item, list):
+        for x in item:
+            urls |= request_urls(x)
+        return urls
+    if not isinstance(item, dict):
+        return urls
+    for k in _URL_KEYS:
+        v = item.get(k)
+        if isinstance(v, str) and "://" in v:
+            urls.add(v)
+    if isinstance(item.get("request"), str):
+        urls |= request_urls(item["request"])
+    for k in _NESTED_KEYS:
+        if isinstance(item.get(k), (list, dict)):
+            urls |= request_urls(item[k])
+    return urls
 
 
 def scope_filter(output: ToolOutput, target) -> ToolOutput:
