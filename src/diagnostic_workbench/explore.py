@@ -169,8 +169,8 @@ def _context(ctx) -> tuple[str, set[str]]:
 
 
 def _bootstrap_probes(ctx, base_text: str, assets: dict) -> tuple[set[str], str]:
-    """최초 탐색 라운드에 한해 LLM이 read 전용 도구를 최대 3회까지 직접 실행한다(CLAUDE.md §1.1 예외 2번,
-    artex 설계 참고). 백로그 대기·운영자 승인 대기는 건너뛰지만 Scope·제외 목록 검사(policy.decide, worker.run_tool
+    """최초 탐색 라운드에 한해 LLM이 read 전용 도구를 최대 3회까지 직접 실행한다(CLAUDE.md §1.1 예외 2번).
+    백로그 대기·운영자 승인 대기는 건너뛰지만 Scope·제외 목록 검사(policy.decide, worker.run_tool
     을 그대로 재사용)는 모든 호출에서 그대로 거친다 — read 도구는 원래도 승인 대기가 없었으므로 실질적인
     변화는 '백로그 지연 없이 같은 라운드에서 즉시 실행'뿐이다.
     """

@@ -15,8 +15,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# 웹 UI(artex 의 findings/tasks 화면을 참고한 로컬 대시보드, README §7 "다음 구현 단계" 10번 이후)만
-# 쓰는 의존성. CLI 는 이 없이도 완전히 동작한다.
+# 웹 UI(findings/runs 로컬 대시보드, README §7 "다음 구현 단계" 10번 이후)만 쓰는 의존성.
+# CLI 는 이 없이도 완전히 동작한다.
 web = [
     "fastapi==0.147.0",
     "uvicorn[standard]==0.54.0",
