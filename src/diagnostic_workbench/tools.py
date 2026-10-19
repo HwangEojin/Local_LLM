@@ -22,12 +22,45 @@ import os
 import shutil
 import ssl
 import subprocess
+import threading
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from audit.models import ToolError, ToolOutput, ToolSpec
 
 from . import tls_inspect
+
+_KILL_POLL_S = 0.2
+
+
+def _run_cancelable(cmd, timeout: float, stop_file: Path, **popen_kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run(capture_output=True, timeout=...) 대신 쓴다. Kill Switch(전체 중지 스위치)가 켜지면
+    기다리는 동안에도(이미 시작된 프로세스라도) 즉시 종료한다(CLAUDE.md §8 Kill Switch 동작: '진행 중
+    작업의 취소 요청', '취소되지 않는 격리된 도구 프로세스 종료'). 출력은 별도 스레드의 communicate() 로
+    받아 파이프 버퍼가 가득 차 멈추는 문제를 피한다.
+    """
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                         **popen_kwargs)
+    result: dict = {}
+
+    def _drain():
+        result["out"], result["err"] = p.communicate()
+
+    t = threading.Thread(target=_drain, name="tool-subprocess-wait", daemon=True)
+    t.start()
+    deadline = time.monotonic() + timeout
+    while t.is_alive():
+        if stop_file.exists():
+            p.kill()
+            t.join(timeout=5)
+            raise ToolError(f"전체 중지 스위치로 실행 중인 프로세스를 종료함 ({stop_file})")
+        if time.monotonic() > deadline:
+            p.kill()
+            t.join(timeout=5)
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        t.join(timeout=_KILL_POLL_S)
+    return subprocess.CompletedProcess(cmd, p.returncode, result.get("out", b""), result.get("err", b""))
 
 _SHIM_DIR = Path(__file__).resolve().parents[2] / "data" / "tools" / "hexdump-shim"
 
@@ -91,7 +124,7 @@ def make_tools(cfg) -> dict[str, ToolSpec]:
             cmd = [bash_exe, testssl, "--warnings", "off", "--color", "0", "--connect-timeout", "10", "-R",
                    f"{args['host']}:{args.get('port', 443)}"]
             try:
-                p = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
+                p = _run_cancelable(cmd, timeout, cfg.stop_file, env=env)
             except subprocess.TimeoutExpired:
                 raise ToolError(f"testssl.sh 시간 초과 ({timeout}초)") from None
             except OSError as e:
@@ -115,7 +148,7 @@ def make_tools(cfg) -> dict[str, ToolSpec]:
         cmd = [exe, "-sT", "-sV", "--version-light", "-Pn", "-T3", "--host-timeout", f"{timeout - 30}s", "-oX", "-",
                *(["-p", ports] if ports else ["--top-ports", "100"]), args["host"]]
         try:
-            p = subprocess.run(cmd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+            p = _run_cancelable(cmd, timeout, cfg.stop_file)
         except subprocess.TimeoutExpired:
             raise ToolError(f"nmap 시간 초과 ({timeout}초)") from None
         except OSError as e:
@@ -134,7 +167,7 @@ def make_tools(cfg) -> dict[str, ToolSpec]:
         cmd = [exe, "-Pn", "-p", str(port), "--script", _SSL_SCRIPTS, "-T3",
                "--host-timeout", f"{timeout - 30}s", "-oN", "-", args["host"]]
         try:
-            p = subprocess.run(cmd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+            p = _run_cancelable(cmd, timeout, cfg.stop_file)
         except subprocess.TimeoutExpired:
             raise ToolError(f"nmap 시간 초과 ({timeout}초)") from None
         except OSError as e:

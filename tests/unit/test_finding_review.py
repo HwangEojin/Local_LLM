@@ -110,6 +110,33 @@ class FindingReviewTest(unittest.TestCase):
         self.assertNotIn("오탐", titles)
         self.assertEqual(status_counts, {"CONFIRMED": 1, "CANDIDATE": 1})
 
+    def test_retest_requeues_original_tool_call_and_logs_request(self):
+        run, asset_id = self._run_and_asset()
+        f = self._finding(run["id"], asset_id)
+        eid = self.conn.execute(
+            "INSERT INTO evidence (run_id, asset_id, requirement_id, tool, args, success, rel_path, sha256, size) "
+            "VALUES (%s,%s,'TEST-RETEST','test.retest-tool','{\"x\":1}',true,'test/fake.txt',repeat('a',64),0) "
+            "RETURNING id", (run["id"], asset_id)).fetchone()["id"]
+        self.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], eid))
+        item_ids = worker.create_retest(self.conn, run["id"], f["id"], operator="pytest", reason="재현 재확인 필요")
+        self.assertEqual(len(item_ids), 1)
+        item = self.conn.execute("SELECT * FROM backlog_items WHERE id=%s", (item_ids[0],)).fetchone()
+        self.assertEqual(item["kind"], "exploration")
+        self.assertEqual(item["payload"]["tool"], "test.retest-tool")
+        self.assertEqual(item["payload"]["args"], {"x": 1})
+        hist = self.conn.execute(
+            "SELECT old_status, new_status, actor, reason FROM finding_review_history WHERE finding_id=%s "
+            "ORDER BY changed_at DESC LIMIT 1", (f["id"],)).fetchone()
+        self.assertEqual(hist["old_status"], hist["new_status"])  # 상태는 바뀌지 않음, 요청만 기록됨
+        self.assertEqual(hist["actor"], "reviewer:pytest")
+        self.assertIn("재검증 요청됨", hist["reason"])
+
+    def test_retest_without_evidence_raises(self):
+        run, asset_id = self._run_and_asset()
+        f = self._finding(run["id"], asset_id)
+        with self.assertRaises(AuditError):
+            worker.create_retest(self.conn, run["id"], f["id"], operator="pytest", reason="x")
+
 
 if __name__ == "__main__":
     unittest.main()
