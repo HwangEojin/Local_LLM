@@ -130,10 +130,11 @@ cd web && npm install && npm run dev    # 프론트엔드(Next.js, 기본 :3000)
 ```
 
 - **인증**: 가벼운 단일 운영자 로그인(다중 사용자·역할 체계는 없음). 아이디/비밀번호는 `.env` 의 환경 변수로만 받고(DB·설정 파일에 평문 저장 안 함), 로그인하면 서명된 쿠키(`itsdangerous`, 12시간) 로 세션을 유지한다. 비밀번호·서명 비밀이 없으면 서버가 시작을 거부한다(기본 거부, CLAUDE.md §8-4 와 같은 원칙).
-- **화면**: `/runs`(실행 목록) → `/runs/[id]`(상태·예산 사용량 + Findings/Backlog 탭). Findings 탭에서 행을 클릭하면 `finding review`/`finding retest` CLI 와 똑같은 입력(상태·사유·증적 id)으로 바로 검토·재검증을 기록한다 — CONFIRMED 는 연결된 증거가 없으면 API 가 그대로 거부한다(CLI 와 동일한 `AuditError`, 우회 경로 없음).
-- **API**: `GET /api/runs`, `GET /api/runs/{id}`, `GET /api/runs/{id}/backlog`, `GET /api/runs/{id}/findings`, `POST .../findings/{id}/review`, `POST .../findings/{id}/retest`. OpenAPI 문서는 `/api/docs`.
-- **범위**: 이번에 만든 건 findings + runs(tasks) 화면뿐이다. assets/traffic/agents/mcp/tools/settings/chat 같은 관리자용 화면은 만들지 않았다(§7 "다음 구현 단계" 참고 — 전체 화면 구성은 상당히 큰 범위라 이번에는 핵심 화면만으로 범위를 좁힘).
-- **실제 확인**: 로컬 PostgreSQL + 실제 Chromium(headless) 으로 로그인 → runs 목록 → run 상세(findings/backlog 탭) → finding 상태를 브라우저에서 직접 바꿔 `finding_review_history` 에 `actor='reviewer:<웹 로그인 아이디>'` 로 기록되는 것까지 확인. `npm run build`/`tsc --noEmit`/`eslint` 전부 통과.
+- **화면**: `/runs`(실행 목록 + "새 진단") → `/runs/new`(진단 환경 설정: `scope.json` 대상 선택, 운영자, 체크리스트(선택), `--llm`, 자율성 — 제출하면 `runs.create_run` 그대로 호출해 실행을 만들고 상세로 이동, 환경 상태 패널에 `doctor` 점검(scope/Ollama/MCP)도 같이 보여준다) → `/runs/[id]`(상태·예산 사용량 + **시작/재개·취소 버튼** + Findings/Backlog/Evidence/Activity 탭). Findings 탭은 기존과 동일(검토·재검증). Backlog 탭은 `BLOCKED`+승인 대기 작업에 **승인/거부 버튼**을 보여준다(`approve` CLI 와 동일한 호출). Evidence 탭은 증적 목록 + 무결성 확인(해시 대조) + 원본 파일 다운로드(`evidence verify`/`evidence` CLI 와 동일한 근거). Activity 탭은 `tool_invocations` 를 4초 간격으로 다시 받아오는 최근 도구 호출 로그(모니터링 — `trace` CLI 와 같은 데이터).
+- **시작/재개**: `coordinator.run_loop`(기존 `run start` 가 쓰는 바로 그 함수)를 웹 서버 프로세스 안의 백그라운드 스레드로 돌린다(오래 걸릴 수 있어 HTTP 요청-응답 주기 밖에서 실행) — 이 스레드 레지스트리는 이 FastAPI 프로세스 안에서만 유효하다(재시작하면 모름, CLI 로 그 사이 또 `run start` 해도 Backlog 점유(SKIP LOCKED)가 안전하게 막아 줌). `RUNNING` 으로 바뀌기 전에 실패하면(LLM 연결 불가 등) `PAUSED` + 사유로 명시적으로 남겨 모니터링 화면에 왜 멈췄는지 보이게 한다(실패를 서버 로그에만 묻지 않음).
+- **API**: `GET /api/environment`(대상/체크리스트/도구/자율성/환경 점검), `GET|POST /api/runs`, `GET /api/runs/{id}`(`loop_running` 포함), `POST /api/runs/{id}/start|cancel`, `GET /api/runs/{id}/backlog`, `POST /api/runs/{id}/backlog/{item}/approve`, `GET /api/runs/{id}/evidence`, `GET /api/runs/{id}/evidence/{id}/download`, `GET /api/runs/{id}/activity`, `GET /api/runs/{id}/findings`, `POST .../findings/{id}/review`, `POST .../findings/{id}/retest`. OpenAPI 문서는 `/api/docs`.
+- **범위**: findings + runs(tasks, 환경 설정·시작·승인·증적·모니터링 포함) 화면. assets/traffic/agents/mcp/tools/settings/chat 같은 별도 관리자용 화면은 여전히 범위 밖이다(§7 "다음 구현 단계" 참고).
+- **실제 확인**: 로컬 PostgreSQL + 실제 Chromium(headless) 으로 로그인 → "새 진단" 폼으로 실행 생성(대상 체크박스·운영자·자율성) → 상세 페이지에서 시작 클릭(Ollama 가 없는 이 환경에서는 실패가 `PAUSED` + 사유로 바로 보이는 것까지 확인) → Backlog 탭에서 승인 대기 작업에 승인 버튼 클릭 → `approvals` 테이블에 실제로 기록되는 것 확인 → Evidence 탭에서 실제 파일을 내려받아 원본과 바이트 단위로 동일함 확인(`diff`) → Activity 탭 폴링 확인. finding 상태를 브라우저에서 직접 바꿔 `finding_review_history` 에 `actor='reviewer:<웹 로그인 아이디>'` 로 기록되는 것까지 확인. `npm run build`/`tsc --noEmit`/`eslint` 전부 통과.
 
 ## 6. 구조
 
@@ -209,7 +210,7 @@ CLAUDE.md 는 바뀌지 않는 규칙만 담는다. 단계별 계획은 상태�
 | 8b | 기존 실행에 체크리스트를 나중에 붙이는 기능 | 계획 — 아직 미착수 |
 | 9 | Finding 검토 워크플로(사람의 확정/기각, CLAUDE.md §9/§10) | **구현(§7)** — `findings.status` 6 종 상태 전환 + `finding_review_history` 이력 + `finding review`/`finding retest` CLI. CONFIRMED 는 증거 필수 |
 | 10 | 자율성 확장 | **구현(§7, CLAUDE.md §1)** — 탐색 호출 수 무제한·LLM 최초 라운드 직접 실행·LLM 직접 finding 확정·자율성 이분법·Kill Switch 즉시 취소·디바운스+하트비트 wake-up (총 6건, CLAUDE.md 기본 정책) |
-| 11 | 웹 UI MVP(findings/runs, 2026-10-19) | **구현(§5a)** — FastAPI(`src/webapi`, 새 진단 로직 없음) + Next.js(`web/`). 로그인, runs 목록/상세, finding review/retest. 실제 Chromium 으로 end-to-end 확인. assets/traffic/agents/mcp/tools/settings/chat 등 나머지 화면은 범위 밖 |
+| 11 | 웹 UI MVP(findings/runs, 2026-10-19) | **구현(§5a)** — FastAPI(`src/webapi`, 새 진단 로직 없음) + Next.js(`web/`). 로그인, 진단 환경 설정(대상·체크리스트·자율성 선택 후 실행 생성)·시작/취소, 승인 대기 작업 승인/거부, 증적 목록·다운로드·무결성 확인, Activity 모니터링, runs 목록/상세, finding review/retest. 실제 Chromium 으로 end-to-end 확인. assets/traffic/agents/mcp/tools/settings/chat 등 나머지 화면은 범위 밖 |
 
 3(자동 점검 A)은 오버레이 데이터 6/6건이 전부 등록돼 WEB 플랫폼의 config-check형 항목은 더 추가할 게 없다 — 남은 건 §6 HTS 등으로의 확장(§7A는 platform·checklist_id 를 하드코딩하지 않으므로 데이터만 추가하면 됨, 이번에는 보류). 4(자동 점검 B)는 §7B 가 이름 붙인 7종 신호·SQLi 차등 검증·실제 MCP 연동까지 전부 끝나 "구현"으로 올렸다. 5(예산 분리)도 완료(단, 10 번으로 탐색 쪽 강제는 없어짐). 0a(체크리스트 분리·자율 탐색 bootstrap), 8a(자율 탐색 전용 보고서), 9(Finding 검토 워크플로), 10(자율성 확장)도 완료. 7은 웹 관련 두 항목(리다이렉트 하위 요청 범위 검사, Burp 이력 기반 자산 추출)을 2026-10-19 에 마무리했고 모바일 Word 템플릿만 남았다. **웹 UI(§5a)도 2026-10-19 에 findings/runs(tasks) MVP 를 구현**(나머지 화면은 범위 밖). 남은 우선순위는 8b(체크리스트 사후 부착) → 6(HTS 확장, 보류 중) → 7(모바일 템플릿) → 웹 UI 확장(assets/traffic 등 나머지 화면, 필요해지면).
 

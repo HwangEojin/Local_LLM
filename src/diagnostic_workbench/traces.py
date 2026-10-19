@@ -27,6 +27,12 @@ def search_all_worker_traces(conn, query: str = "", *, tool=None, status=None, e
                         (*params, limit)).fetchall()
 
 
+def get_run_trace(conn, run_id, limit=100):
+    """한 실행의 최근 Worker Activity(도구 호출 단계) — 웹 UI 모니터링 탭에서 쓴다."""
+    return conn.execute(f"SELECT {_COLS} {_FROM} WHERE ti.run_id = %s ORDER BY ti.started_at DESC LIMIT %s",
+                        (run_id, limit)).fetchall()
+
+
 def get_worker_trace(conn, backlog_item_id, step_nos=None):
     """작업 하나의 단계별 상세."""
     return conn.execute(

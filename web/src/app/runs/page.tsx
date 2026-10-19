@@ -24,7 +24,15 @@ function RunsTable() {
 
   return (
     <div className="p-6">
-      <h1 className="mb-4 text-lg font-semibold">실행(Run) 목록</h1>
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-lg font-semibold">실행(Run) 목록</h1>
+        <Link
+          href="/runs/new"
+          className="rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700"
+        >
+          + 새 진단
+        </Link>
+      </div>
       <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
         <table className="w-full text-sm">
           <thead className="bg-neutral-50 text-left text-neutral-500">
