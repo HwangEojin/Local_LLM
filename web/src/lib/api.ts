@@ -34,6 +34,9 @@ export const api = {
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
 };
 
+export const downloadUrl = (runId: string, evidenceId: string) =>
+  `${API_BASE}/api/runs/${runId}/evidence/${evidenceId}/download`;
+
 export type Run = {
   id: string;
   status: string;
@@ -78,6 +81,64 @@ export type RunDetail = {
   run: Run & { id: string; [k: string]: unknown };
   coverage: { verdicts: Record<string, number>; backlog: Record<string, number> };
   usage: { tools: number; explore_tools: number; evidence: number; findings: number; llm_calls: number };
+  loop_running: boolean;
+};
+
+export type Evidence = {
+  id: string;
+  tool: string;
+  tool_version: string;
+  requirement_id: string;
+  sha256: string | null;
+  size: number | null;
+  truncated: boolean;
+  success: boolean;
+  error: string | null;
+  media_type: string | null;
+  collected_at: string;
+  integrity: string | null;
+  integrity_detail: string | null;
+};
+
+export type ActivityEntry = {
+  id: string;
+  run_id: string;
+  backlog_item_id: string;
+  step_no: number;
+  tool: string;
+  tool_version: string;
+  args: unknown;
+  policy_decision: string;
+  policy_reason: string | null;
+  status: string;
+  error: string | null;
+  evidence_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  asset_kind: string | null;
+  asset_value: string | null;
+  task_kind: string | null;
+  task_reason: string | null;
+};
+
+export type Target = {
+  target_id: string;
+  type: string;
+  value: string;
+  platform?: string;
+  description?: string;
+};
+
+export type ChecklistRef = { checklist_id: string; version: string; sha256: string | null };
+
+export type DoctorRow = { status: "OK" | "WARN" | "FAIL" | "INFO"; name: string; detail: string };
+
+export type Environment = {
+  targets: Target[];
+  checklists: ChecklistRef[];
+  tools: { name: string; risk: string }[];
+  autonomy_levels: string[];
+  doctor: DoctorRow[];
 };
 
 export const FINDING_STATUSES = [

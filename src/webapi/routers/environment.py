@@ -1,0 +1,55 @@
+"""진단 환경 설정 화면이 쓰는 조회 전용 API: 대상/체크리스트/도구 목록 + 상태 점검.
+
+새 진단 로직은 없다 — scope.json/체크리스트/도구 레지스트리를 읽고 cli.cmd_doctor 와 같은 점검을
+그대로 다시 호출할 뿐이다(출력만 JSON으로 바꿈).
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
+
+from audit import config as audit_config
+from audit.checklist_engine import Checklists
+from diagnostic_workbench import runs as wb_runs
+
+from ..deps import current_user, get_cfg
+
+router = APIRouter(prefix="/api/environment", tags=["environment"])
+
+
+def _doctor_status(cfg) -> list[dict]:
+    rows = []
+
+    def check(name, fn, warn=False):
+        try:
+            rows.append({"status": "OK", "name": name, "detail": fn()})
+        except Exception as e:  # 점검은 하나가 실패해도 나머지를 계속 본다(cli.cmd_doctor 와 동일)
+            rows.append({"status": "WARN" if warn else "FAIL", "name": name, "detail": f"{type(e).__name__}: {e}"})
+
+    check("진단 범위(scope)", lambda: f"대상 {len(audit_config.load_scope(cfg.home)['targets'])}개, "
+                                    f"제외 {len(cfg.exclude)}개, 중지 스위치 {'켜짐' if cfg.stop_file.exists() else '꺼짐'}")
+
+    def ollama():
+        from audit.local_model import OllamaClient
+        info = OllamaClient(cfg.settings.ollama, cfg.settings.external_api_enabled).check_ready()
+        return f"v{info['version']} 모델={info['model']}"
+    check("로컬 LLM(Ollama)", ollama, warn=True)
+
+    for name, srv in audit_config.load_mcp_servers(cfg.home).items():
+        rows.append({"status": "INFO", "name": f"MCP {name}", "detail": "활성" if srv["enabled"] else "비활성"})
+    return rows
+
+
+@router.get("")
+def get_environment(cfg=Depends(get_cfg), user: str = Depends(current_user)):
+    scope = audit_config.load_scope(cfg.home)
+    cl = Checklists(cfg.settings.path("checklist_dir"))
+    checklists = [{"checklist_id": cid, "version": v["version"], "sha256": v.get("sha256")}
+                  for cid, v in cl.entries() if v["status"] == "active"]
+    tools = [{"name": name, "risk": spec.risk} for name, spec in sorted(wb_runs.registry(cfg).items())]
+    return {
+        "targets": scope["targets"],
+        "checklists": checklists,
+        "tools": tools,
+        "autonomy_levels": list(wb_runs.AUTONOMY_LEVELS),
+        "doctor": _doctor_status(cfg),
+    }

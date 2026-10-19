@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import deps
 from .routers import auth as auth_router
+from .routers import environment as environment_router
 from .routers import findings as findings_router
 from .routers import runs as runs_router
 
@@ -23,6 +24,7 @@ app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_credentials=Tru
                    allow_methods=["*"], allow_headers=["*"])
 
 app.include_router(auth_router.router)
+app.include_router(environment_router.router)
 app.include_router(runs_router.router)
 app.include_router(findings_router.router)
 
