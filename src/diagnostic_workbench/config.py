@@ -16,7 +16,10 @@ DSN_ENV = "WORKBENCH_PG_DSN"
 _POS = {"type": "integer", "minimum": 1}
 BUDGET = {"type": "object", "additionalProperties": False,
           "properties": {"max_tasks": _POS, "max_tool_calls": _POS, "timeout_s": _POS,
-                         "max_explorations": {"type": "integer", "minimum": 0}}}
+                         "max_explorations": {"type": "integer", "minimum": 0},
+                         # 체크리스트 도구 호출(max_tool_calls)과 완전히 분리된 탐색 전용 호출 예산.
+                         # 탐색이 이 pool 을 다 써도 체크리스트 쪽 호출은 그대로 남는다(CLAUDE.md §2).
+                         "max_tool_calls_exploration": _POS}}
 WORKBENCH = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -28,7 +31,8 @@ WORKBENCH = {
         "budget": BUDGET,
     },
 }
-DEFAULT_BUDGET = {"max_tasks": 2000, "max_tool_calls": 500, "timeout_s": 3600, "max_explorations": 3}
+DEFAULT_BUDGET = {"max_tasks": 2000, "max_tool_calls": 500, "timeout_s": 3600, "max_explorations": 3,
+                  "max_tool_calls_exploration": 50}
 
 
 @dataclass

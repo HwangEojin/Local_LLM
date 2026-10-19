@@ -13,7 +13,7 @@
           "description": "대상에 OPTIONS 요청을 보내 Allow 헤더를 확인",
           "tool": "mcp:burp/send_http1_request",
           "args": {"targetHostname": "{target}", "targetPort": 443, "usesHttps": true,
-                   "request": "OPTIONS / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n"}
+                   "content": "OPTIONS / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n"}
         }
       ],
       "rule": {"kind": "regex", "evidence": "options_response",

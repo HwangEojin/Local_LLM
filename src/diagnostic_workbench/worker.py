@@ -74,9 +74,16 @@ def set_verdict(conn, rci_id, verdict, reason, *, actor, decided_by, evidence_id
         "VALUES (%s,%s,%s,%s,%s,%s)", (rci_id, old["verdict"], verdict, reason, actor, list(evidence_ids)))
 
 
-def _tool_calls_used(ctx) -> int:
-    return ctx.conn.execute("SELECT count(*) AS n FROM tool_invocations WHERE run_id=%s AND status <> 'SKIPPED'",
-                            (ctx.run["id"],)).fetchone()["n"]
+def _tool_calls_used(ctx, kind: str) -> int:
+    """kind('checklist'|'exploration')별로 따로 센다 — 탐색이 체크리스트 예산을 먹거나 그 반대가 되지
+    않게 한다(CLAUDE.md §2 "각자의 예산... 따로 관리").
+    """
+    return ctx.conn.execute(
+        "SELECT count(*) AS n FROM tool_invocations ti JOIN backlog_items b ON b.id = ti.backlog_item_id "
+        "WHERE ti.run_id=%s AND ti.status <> 'SKIPPED' AND b.kind=%s", (ctx.run["id"], kind)).fetchone()["n"]
+
+
+_BUDGET_KEY = {"checklist": "max_tool_calls", "exploration": "max_tool_calls_exploration"}
 
 
 def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
@@ -84,8 +91,9 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
     common = dict(run_id=ctx.run["id"], asset_id=it["asset_id"], requirement_id=req_id, tool=tool,
                   rci_id=it.get("run_checklist_item_id"), backlog_item_id=it["id"])
     d = policy.decide(ctx, tool, args, it["asset_id"])
-    if d.decision == policy.ALLOW and _tool_calls_used(ctx) >= ctx.run["budget"]["max_tool_calls"]:
-        d = policy.Decision(policy.DENY, "실행 예산 max_tool_calls 에 도달함", d.args)
+    budget_key = _BUDGET_KEY[it["kind"]]
+    if d.decision == policy.ALLOW and _tool_calls_used(ctx, it["kind"]) >= ctx.run["budget"][budget_key]:
+        d = policy.Decision(policy.DENY, f"실행 예산 {budget_key} 에 도달함", d.args)
     if d.decision != policy.ALLOW:
         record_invocation(ctx, it, worker_run_id, step, tool, d, "SKIPPED", error=d.reason)
         db.audit(ctx.conn, ctx.run["id"], "policy_denied", {"backlog_item": str(it["id"]), "tool": tool,
@@ -242,26 +250,50 @@ def _run_checklist(ctx, it, wr) -> tuple[str, str | None]:
     return "NEEDS_REVIEW", None
 
 
-def _promote_exploration_finding(ctx, it, fact_id, evidence_id, args, data: bytes):
-    """탐색 fact 가 특정 취약점 클래스의 검증 신호와 일치하면 RULE_CONFIRMED finding 으로 승격한다(CLAUDE.md §7B).
+def _find_boolean_sibling(ctx, asset_id, exclude_evidence_id, want_classification, key):
+    """같은 자산에 대한 이전 증적 중, 반대 참/거짓 조건이면서 나머지(pairing_key)가 같은 것을 찾는다.
 
-    LLM 의견이 아니라 audit.signals 의 결정론적 checker 로만 승격한다. 일치하지 않으면 사실로만 남는다 —
-    체크리스트 판정은 바꾸지 않으며, 체크리스트 커버리지에 반영하려면 'trace tag' 로 사람이 따로 매핑해야 한다.
+    같은 주입 지점을 겨눈 짝인지 확인하는 것이 목적이다 — 다른 엔드포인트·다른 매개변수끼리 비교하면
+    응답이 다른 게 당연해서 차등 신호가 아무 의미가 없다.
     """
-    result = signals.check(args, data)
-    if result is None:
-        return
-    vclass, outcome = result
-    db.audit(ctx.conn, ctx.run["id"], "exploration_signal_checked",
-             {"fact": str(fact_id), "vuln_class": vclass, "matched": outcome.matched, "reason": outcome.reason})
-    if not outcome.matched:
-        return
+    rows = ctx.conn.execute(
+        "SELECT id, args, rel_path FROM evidence WHERE run_id=%s AND asset_id=%s AND success AND id <> %s "
+        "ORDER BY collected_at DESC LIMIT 50", (ctx.run["id"], asset_id, exclude_evidence_id)).fetchall()
+    for row in rows:
+        if (signals.classify_sqli_boolean(row["args"]) == want_classification
+                and signals.pairing_key(row["args"]) == key):
+            return row
+    return None
+
+
+def _check_sqli_boolean_diff(ctx, it, evidence_id, args, data: bytes):
+    """불린 기반 SQLi 차등 검증: 참/거짓 조건 짝을 찾아 응답이 의미 있게 달라지는지 본다(CLAUDE.md §7B,
+    SQL 오류 문구 없이도 확정할 수 있는 유일한 SQLi 경로). 짝을 못 찾으면 None(아직 판단 대상 아님).
+    """
+    classification = signals.classify_sqli_boolean(args)
+    key = signals.pairing_key(args)
+    if classification is None or key is None:
+        return None
+    want = "FALSE" if classification == "TRUE" else "TRUE"
+    sibling = _find_boolean_sibling(ctx, it["asset_id"], evidence_id, want, key)
+    if sibling is None:
+        return None
+    sibling_data = evidence.read_bytes(sibling, ctx.cfg.evidence_dir)
+    if sibling_data is None:
+        return None
+    true_body, false_body = (data, sibling_data) if classification == "TRUE" else (sibling_data, data)
+    outcome = signals.verify_sqli_boolean_diff(true_body, false_body)
+    return [evidence_id, sibling["id"]], outcome
+
+
+def _create_finding(ctx, it, fact_id, evidence_ids, vclass, outcome):
     f = ctx.conn.execute(
         "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification) "
         "VALUES (%s,%s,%s,%s,%s,%s,'RULE_CONFIRMED') RETURNING id",
         (ctx.run["id"], it["asset_id"], f"탐색 기반 발견: {vclass}", signals.SEVERITY[vclass], outcome.reason,
          signals.REMEDIATION[vclass])).fetchone()
-    ctx.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], evidence_id))
+    for eid in evidence_ids:
+        ctx.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], eid))
     # exploration_edges 는 양쪽 다 exploration_nodes 를 참조하므로(findings.id 를 직접 못 넣음) finding 을
     # 가리키는 전용 노드를 만들고, 그 노드만 exploration_anchors.finding_id 로 실제 findings 행과 연결한다.
     finding_node = ctx.conn.execute(
@@ -270,6 +302,32 @@ def _promote_exploration_finding(ctx, it, fact_id, evidence_id, args, data: byte
         (ctx.run["id"], Jsonb({"vuln_class": vclass, "finding_id": str(f["id"])}))).fetchone()["id"]
     ctx.conn.execute("INSERT INTO exploration_anchors (node_id, finding_id) VALUES (%s,%s)", (finding_node, f["id"]))
     ctx.conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'proves')", (fact_id, finding_node))
+
+
+def _promote_exploration_finding(ctx, it, fact_id, evidence_id, args, data: bytes):
+    """탐색 fact 가 특정 취약점 클래스의 검증 신호와 일치하면 RULE_CONFIRMED finding 으로 승격한다(CLAUDE.md §7B).
+
+    LLM 의견이 아니라 audit.signals 의 결정론적 checker 로만 승격한다. 일치하지 않으면 사실로만 남는다 —
+    체크리스트 판정은 바꾸지 않으며, 체크리스트 커버리지에 반영하려면 'trace tag' 로 사람이 따로 매핑해야 한다.
+    """
+    diff = _check_sqli_boolean_diff(ctx, it, evidence_id, args, data)
+    if diff is not None:
+        evidence_ids, outcome = diff
+        db.audit(ctx.conn, ctx.run["id"], "exploration_signal_checked",
+                 {"fact": str(fact_id), "vuln_class": "SQLI", "matched": outcome.matched, "reason": outcome.reason,
+                  "method": "boolean_diff"})
+        if outcome.matched:
+            _create_finding(ctx, it, fact_id, evidence_ids, "SQLI", outcome)
+            return
+    result = signals.check(args, data)
+    if result is None:
+        return
+    vclass, outcome = result
+    db.audit(ctx.conn, ctx.run["id"], "exploration_signal_checked",
+             {"fact": str(fact_id), "vuln_class": vclass, "matched": outcome.matched, "reason": outcome.reason})
+    if not outcome.matched:
+        return
+    _create_finding(ctx, it, fact_id, [evidence_id], vclass, outcome)
 
 
 def _run_exploration(ctx, it, wr) -> tuple[str, str | None]:
