@@ -1,4 +1,4 @@
-"""최초 탐색 라운드의 LLM 직접 실행 프로브(CLAUDE.md §1.1 예외 2번, 2026-10-19)를 확인한다.
+"""최초 탐색 라운드의 LLM 직접 실행 프로브(CLAUDE.md §1/§7)를 확인한다.
 
 - bootstrap 라운드에서 LLM이 지시한 read 전용 도구가 백로그 대기 없이 즉시 실행된다(worker.run_tool 재사용).
 - 실행 결과(증거)는 같은 라운드의 PROPOSALS 호출 citation 검증에 바로 쓸 수 있게 known 에 들어간다.

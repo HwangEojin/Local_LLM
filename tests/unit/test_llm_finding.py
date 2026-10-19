@@ -1,4 +1,4 @@
-"""LLM의 직접 finding 확정(CLAUDE.md §1.1 예외 3번, 2026-10-19)을 확인한다.
+"""LLM의 직접 finding 확정(CLAUDE.md §1/§7/§9)을 확인한다.
 
 - LLM이 실제로 존재하는 증거 id를 인용하면 verification='LLM_CONFIRMED', status='CONFIRMED'로 즉시 기록된다.
 - 실존하지 않는(인용한) 증거 id로는 기록되지 않는다(최소한의 데이터 무결성).

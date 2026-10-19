@@ -149,10 +149,10 @@ def create_retest(conn, run_id, finding_id, *, operator, reason) -> list:
 
 
 def create_llm_finding(conn, run_id, asset_id, *, title, severity, rationale, remediation, evidence_ids, model):
-    """LLM이 자신이 인용한 실존 증거를 근거로 finding을 직접 CONFIRMED로 기록한다(CLAUDE.md §1.1 예외 3번,
-    2026-10-19 결정). 인용한 증거 id가 이 실행(run)에 실제로 존재하는지만 확인하는
+    """LLM이 자신이 인용한 실존 증거를 근거로 finding을 직접 CONFIRMED로 기록한다(CLAUDE.md §1/§7/§9).
+    인용한 증거 id가 이 실행(run)에 실제로 존재하는지만 확인하는
     최소한의 데이터 무결성 검사이고, 주장(취약점이 실제로 있는지)의 실체는 검증하지 않는다 — 그게 이
-    예외의 요지다. finding_review_history 에 actor='llm:<model>' 로 남아 추적 가능하고, 사람은 이후에도
+    정책의 요지다. finding_review_history 에 actor='llm:<model>' 로 남아 추적 가능하고, 사람은 이후에도
     finding review 로 재검토·기각할 수 있다(그 이력도 보존됨).
 
     인용한 증거가 하나도 실존하지 않으면 아무것도 기록하지 않고 None 을 돌려준다.
@@ -184,7 +184,7 @@ def _tool_calls_used(ctx, kind: str) -> int:
         "WHERE ti.run_id=%s AND ti.status <> 'SKIPPED' AND b.kind=%s", (ctx.run["id"], kind)).fetchone()["n"]
 
 
-_BUDGET_KEY = {"checklist": "max_tool_calls"}  # 자율 탐색(exploration)에는 하드 리밋을 두지 않음(CLAUDE.md §1.1 예외 1번)
+_BUDGET_KEY = {"checklist": "max_tool_calls"}  # 자율 탐색(exploration)에는 하드 리밋을 두지 않음(CLAUDE.md §1/§5.4/§8)
 
 
 def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
