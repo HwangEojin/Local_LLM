@@ -5,11 +5,19 @@
   자산만 등록된다.
 - explore.propose 는 체크리스트 증거가 하나도 없어도(known 이 비어 있어도) 체크리스트가 없는 실행이면
   모델을 불러 최초 탐색을 제안하고, 그 제안은 증적 인용 없이도(bootstrap) 받아들여진다.
+- 보고서는 새 서식을 만들지 않고 audit.pentest_report 의 Word 서식(_Builder)을 그대로 쓴다. findings
+  테이블의 발견 사항을 그 서식이 기대하는 모양으로 변환해 넣을 뿐이다.
 """
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from audit.models import ConfigError
 from diagnostic_workbench import config, db, explore, reporting, runs
+
+ROOT = Path(__file__).resolve().parents[2]
+HAVE_WEB_TEMPLATE = any((ROOT / "templates" / "word").glob("웹*결과보고서*.docx"))
 
 
 class _FakeLLM:
@@ -75,20 +83,32 @@ class CreateRunWithoutChecklist(unittest.TestCase):
             (run["id"],)).fetchone()["n"]
         self.assertEqual(n, 1)
 
-    def test_report_generate_without_checklist_produces_exploration_report(self):
+    @unittest.skipUnless(HAVE_WEB_TEMPLATE, "templates/word 의 웹 결과보고서 템플릿이 필요함")
+    def test_report_reuses_pentest_report_format_with_db_findings(self):
         run = runs.create_run(self.conn, self.cfg, ["baseline-demo"], "pytest-autonomous",
                               checklist_id=None, use_llm=True)
+        asset_id = self.conn.execute("SELECT asset_id FROM run_assets WHERE run_id=%s", (run["id"],)).fetchone()["asset_id"]
+        self.conn.execute(
+            "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification) "
+            "VALUES (%s,%s,'테스트 발견 사항','high','신호 일치로 확정됨','패치 적용','RULE_CONFIRMED')",
+            (run["id"], asset_id))
         self.conn.execute("UPDATE runs SET status='COMPLETED', ended_at=now() WHERE id=%s", (run["id"],))
         self.conn.commit()
         run = db.resolve_run(self.conn, str(run["id"]))
-        res = reporting.generate(self.cfg, self.conn, run)
-        self.assertTrue(res["warnings"])  # PASS/FAIL 없음 경고가 있어야 함
+        with tempfile.TemporaryDirectory() as tmp:
+            meta_path = Path(tmp) / "meta.json"
+            meta_path.write_text(json.dumps({
+                "customer": "테스트고객사", "project": "테스트 프로젝트",
+                "targets": [{"target_id": "baseline-demo", "name": "baseline-demo", "url": "http://localhost:9999",
+                            "kind": "WEB"}]}, ensure_ascii=False), encoding="utf-8")
+            res = reporting.generate(self.cfg, self.conn, run, meta=meta_path)
+        self.assertEqual(res["problems"], [])
+        self.assertEqual(res["findings"], 1)
         from docx import Document
-        from openpyxl import load_workbook
         doc = Document(res["docx"])
-        self.assertTrue(any("초안" in p.text for p in doc.paragraphs))
-        wb = load_workbook(res["xlsx"], read_only=True)
-        self.assertEqual(set(wb.sheetnames), {"개요", "탐색", "발견사항", "증적"})
+        full = "\n".join(p.text for p in doc.paragraphs) + "\n" + \
+            "\n".join(c.text for t in doc.tables for r in t.rows for c in r.cells)
+        self.assertIn("테스트 발견 사항", full)
 
 
 if __name__ == "__main__":

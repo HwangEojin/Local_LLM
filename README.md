@@ -101,12 +101,12 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 
 ```powershell
 & $wb report <run> --meta report_meta.json [--findings findings.json]   # 회사 템플릿 서식의 결과보고서(기본, 체크리스트 실행)
-& $wb report <run> --basic                                              # 내부 점검 요약(Word 표 + Excel, 커버리지 포함, 체크리스트 실행)
-& $wb report <run>                                                      # 체크리스트 없는(자율 탐색 전용) 실행은 --meta/--basic 없이 이 형태만 가능
+& $wb report <run> --basic                                              # 내부 점검 요약(Word 표 + Excel, 커버리지 포함, 체크리스트 실행만)
+& $wb report <run> --meta report_meta.json                              # 체크리스트 없는(자율 탐색 전용) 실행도 같은 Word 서식, --basic 은 지원 안 함
 ```
 
-- 체크리스트 없는 실행은 PASS/FAIL 판정이 없으므로 `--meta`/`--basic`/`--type` 없이 탐색 그래프·발견 사항·증적만으로 만든 초안(Word/Excel)을 낸다. 발견 사항은 "사람 검토 전" 으로 명시되며 사람이 확인·승인하기 전까지 최종 결과가 아니다(검토 워크플로는 아직 없음, §8b).
-- 기본 보고서(체크리스트 실행)는 `templates/word/` 의 `웹*결과보고서*.docx` 서식을 그대로 쓰고, 보호대책은 `*웹*보안권고안*.docx` 에서 텍스트와 이미지만 가져온다. 템플릿 유형은 대상 platform 으로 정한다(현재 WEB 만 지원).
+- 체크리스트 없는 실행도 서식은 새로 만들지 않고 **같은 회사 템플릿(`audit.pentest_report`)을 그대로 쓴다**. 다른 점은 발견 사항의 출처뿐이다: 체크리스트 실행은 FAIL 판정 + `findings.json` 을 연동하고, 체크리스트 없는 실행은 `findings` 테이블(탐색 신호가 확정한 발견 사항)을 그 서식이 기대하는 모양으로 바로 채운다. `notes` 란에 "검증: RULE_CONFIRMED/REVIEWER_CONFIRMED (사람 최종 검토 전)" 을 명시해 아직 사람이 확인·승인하지 않았음을 적는다(검토 워크플로는 아직 없음, §8b). PASS/FAIL 집계·커버리지가 없으므로 `--basic` 은 지원하지 않는다.
+- 기본 보고서는 `templates/word/` 의 `웹*결과보고서*.docx` 서식을 그대로 쓰고, 보호대책은 `*웹*보안권고안*.docx` 에서 텍스트와 이미지만 가져온다. 템플릿 유형은 대상 platform 으로 정한다(현재 WEB 만 지원).
 - `report_meta.json`: 고객사, 프로젝트, 대상(`target_id`, 이름, URL), 일정, 인력. 형식은 `src/audit/schemas.py` 의 `REPORT_META`.
 - `findings.json`: `check_id` + `target_id` 가 DB 의 **FAIL 판정과 일치**해야 한다. 진단결과, 발생경로, 사례(CASE)와 단계(`text`/`code`/`image`/`caption`), 권고사항. 형식은 `FINDINGS`.
 - FAIL 인데 findings 에 없으면 `(작성 필요)` 로 포함하고 경고한다. 취약점명이 권고안 제목과 다르면 `recommendation_titles` 로 지정한다. 찾지 못한 보호대책은 지어내지 않는다.
@@ -124,7 +124,7 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 | `planner.py`, `backlog.py`, `coordinator.py` | 변경 기반 계획, 상태 전이와 `SKIP LOCKED` 점유, 실행 반복·중지·취소. 체크리스트 없는 실행은 매 주기 탐색을 시도(부트스트랩) |
 | `worker.py`, `evidence.py`, `tools.py` | 도구 호출 → 증적 → 규칙 판정 → 발견 사항, 단계별 Activity, 자산 관찰, Nmap |
 | `explore.py`, `traces.py` | LLM 탐색 제안과 검증, 탐색 그래프, Activity 검색, 체크리스트 사후 매핑(`tag_node`). 체크리스트 증거가 없는 실행은 목표(goal)·대상 자산만 근거로 최초 탐색을 제안(bootstrap) |
-| `reporting.py` | DB 기록을 보고서 모듈 형식으로 넘기는 어댑터, 커버리지. 체크리스트 없는 실행은 `generate_autonomous`가 탐색 그래프·발견 사항·증적만으로 Word/Excel 초안을 직접 생성(PASS/FAIL 표 없음) |
+| `reporting.py` | DB 기록을 보고서 모듈 형식으로 넘기는 어댑터, 커버리지. 체크리스트 없는 실행은 `generate_autonomous`가 `findings` 테이블을 `audit.pentest_report._Builder` 가 기대하는 모양으로 바꿔 **같은 Word 서식**에 채운다(새 서식을 만들지 않음) |
 | `src/audit/` | 공용 라이브러리: 스키마 검증, 범위 정책, 체크리스트 로더·가져오기, 규칙 판정, 오버레이, 탐색 발견 검증 신호(`signals.py`), MCP 클라이언트, Ollama 클라이언트, Word/Excel 보고서 |
 
 판정 값: `PASS, FAIL, NOT_APPLICABLE, NEEDS_REVIEW, INCONCLUSIVE, NOT_RUN`. 작업 상태: `PENDING → READY → RUNNING → SUCCEEDED | FAILED | BLOCKED | NEEDS_REVIEW | CANCELLED`.
@@ -136,7 +136,7 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 | 설정 검증 | 구현 | `doctor` 가 DSN 누락·미적용 마이그레이션을 FAIL 로 표시 |
 | PostgreSQL 스키마·마이그레이션 | 구현 | 전용 DB 에 5개 적용(0005: `runs.checklist_version_id` nullable), 추가 전용 트리거가 증적 삭제를 거부 |
 | **체크리스트 없는 자율 진단** | **구현** | CLAUDE.md §3.2/§5.1/§6 — 체크리스트는 필수 조건이 아니라 선택적으로 곁들이는 기능으로 분리. `runs.create_run`이 `checklist_id`를 선택 인자로 받아 없으면 checklist import·platform 검증을 전부 생략하고 goal 노드(`"자율 진단: <targets>"`)와 자산만 등록(`--llm` 없으면 `ConfigError`로 거부). `explore.propose`(`explore.py`)가 체크리스트 판정/사실이 전혀 없어도(`known` 이 비어 있어도) GOAL·TARGETS 만 근거로 1차 탐색을 제안하는 bootstrap 경로 추가(증적 인용 요구를 이 경우만 생략). `planner.plan`은 체크리스트 없는 실행에서 `verdict/fact/evidence/approval` 이벤트 유무와 무관하게 매 주기 탐색을 시도(체크리스트 있는 실행의 기존 게이트는 그대로 유지, 회귀 없음). CLI: `run create --targets .. --operator .. --llm`(체크리스트 생략), `run status` 의 체크리스트 표시 NoneType 버그도 실제로 CLI 를 돌려보다 발견해 수정. 단위테스트 3건(`tests/unit/test_autonomous_run.py`, 실제 PostgreSQL) + 기존 91건 전부 PASS. **실제 로컬 LLM(qwen2.5:7b)+실제 MCP(Burp)로 end-to-end 확인**: 체크리스트 없이 `baseline-demo` 대상 실행을 만들어 `run start` → LLM 이 사전 증거 없이 Burp 프록시 히스토리 수집을 1차 탐색으로 제안 → 정책 통과 → 실제 실행 → 증적 1건 생성 → 실행 `COMPLETED`까지 확인. 체크리스트 사후 부착(기존 run 에 나중에 체크리스트를 붙이는 기능)은 아직 미구현 |
-| **체크리스트 없는 실행의 보고서** | 구현 | `reporting.generate_autonomous` — 탐색 그래프(goal/intent/fact/finding)·발견 사항(`findings`)·증적(`evidence`)·LLM 호출 통계만으로 Word(6절)/Excel(4시트) 초안 생성. PASS/FAIL 집계·커버리지 표는 만들지 않는다(그런 판정이 없어서). 모든 발견 사항에 "사람 검토 전" 명시(CLAUDE.md §9/§10 — RULE_CONFIRMED 도 사람 최종 검토 전엔 확정이 아님을 보고서에 적음). `cmd_report`가 체크리스트 없는 실행이면 `--meta`/`--type` 요구를 생략하고 바로 이 경로로 보냄. 실제 end-to-end 확인: 위에서 만든 체크리스트 없는 실행으로 `report` 실행 → docx/xlsx 생성 → 다시 열어 6개 제목·4개 표·4개 시트(개요/탐색/발견사항/증적) 확인. 단위테스트 1건 추가(`test_report_generate_without_checklist_produces_exploration_report`). **미구현**: 사람이 finding 을 확정/기각하는 리뷰 워크플로 자체가 없어 "검토 전" 상태를 벗어날 방법이 아직 없음(§9 FAIL, 다음 과제) |
+| **체크리스트 없는 실행의 보고서** | 구현 | `reporting.generate_autonomous` — **새 보고서 서식을 만들지 않고 `audit.pentest_report` 의 Word 조립 로직(`_Builder`/`fill_overview`/`fill_summary`/`fill_improvements`/`fill_details`/`fill_protection`/`verify`)을 그대로 재사용**한다. 바뀐 건 발견 사항의 출처뿐: 체크리스트의 `collect_findings`(FAIL 판정 + findings.json 매칭) 대신 `_findings_for_pentest_report`가 `findings` 테이블을 같은 모양(`check_id`/`target_id`/`name`/`result`/`path`/`notes`/`cases`/`recommendation`/`rec_titles`)으로 변환해 넘긴다. `notes` 란에 검증 방식과 "사람 최종 검토 전"을 적어 RULE_CONFIRMED 도 확정이 아님을 보고서에 명시(CLAUDE.md §9/§10). `--meta` 는 체크리스트 실행과 동일하게 필요하고, PASS/FAIL 집계가 없어 `--basic` 은 거부. 실제 end-to-end 확인: `findings` 테이블에 행을 넣고 `report --meta ..` 실행 → 회사 템플릿 docx 생성 → 다시 열어 발견 사항 제목이 본문에 있는지(`pentest_report.verify`) 확인(문제 0건). 단위테스트 1건(`test_report_reuses_pentest_report_format_with_db_findings`, 실제 PostgreSQL + 실제 템플릿). **미구현**: 사람이 finding 을 확정/기각하는 리뷰 워크플로 자체가 없어 "검토 전" 상태를 벗어날 방법이 아직 없음(§9 FAIL, 다음 과제) |
 | 범위·정책 강제 | 부분 구현 | 범위 밖·경로 이탈·제외 대상·DNS·중지 스위치·허용 도구·승인·호출 간격 확인. 3단계 자율성 스위치(`approval`/`partial`/`full`)가 `scope.json` 의 `allowed_risks` 범위 안에서만 승인을 건너뛰는 것을 write(nmap)·dangerous(frida) 도구로 확인. 리다이렉트 이탈은 Playwright 출력만 검사하며 페이지의 하위 요청은 검사하지 않음 |
 | 체크리스트 가져오기 | 구현 | 활성·해시 고정 버전만 DB 로 가져오고 원문 보존(선택적 기능 — §4 참고) |
 | 결정론적 체크리스트 점검 | 구현 | 예시 체크리스트로 5가지 판정 확인. 공식 12종은 전 항목 사람 검토 |
@@ -181,7 +181,7 @@ CLAUDE.md 는 바뀌지 않는 규칙만 담는다. 단계별 계획은 상태�
 | 5 | 필수 체크리스트 작업과 탐색 작업의 예산 분리(§2 "굶지 않게 한다") | 구현(§7) — `max_tool_calls_exploration` 분리, DB 로 독립 집계 확인 |
 | 6 | HTS 등 다른 platform/체크리스트로 오버레이 확장 | 계획 — 데이터 추가만으로 가능하도록 설계(§7), 실제 확장은 미착수 |
 | 7 | 모바일 Word 템플릿, 리다이렉트 하위 요청 범위 검사, Burp 이력 기반 자산 추출 | 계획 — §7 의 기존 제한 사항 |
-| 8a | 체크리스트 없는 실행을 위한 보고서 생성 | **구현(§7)** — `reporting.generate_autonomous`가 탐색 그래프·발견 사항·증적만으로 Word/Excel 초안 생성(PASS/FAIL 표 없음, "사람 검토 전" 명시) |
+| 8a | 체크리스트 없는 실행을 위한 보고서 생성 | **구현(§7)** — 새 서식 없이 `audit.pentest_report` 를 그대로 재사용, `findings` 테이블만 그 모양으로 변환해 채움("사람 검토 전" 명시) |
 | 8b | 기존 실행에 체크리스트를 나중에 붙이는 기능 | 계획 — 아직 미착수 |
 
 3(자동 점검 A)은 오버레이 데이터 6/6건이 전부 등록돼 WEB 플랫폼의 config-check형 항목은 더 추가할 게 없다 — 남은 건 §6 HTS 등으로의 확장(§7A는 platform·checklist_id 를 하드코딩하지 않으므로 데이터만 추가하면 됨, 이번에는 보류). 4(자동 점검 B)는 §7B 가 이름 붙인 7종 신호·SQLi 차등 검증·실제 MCP 연동까지 전부 끝나 "구현"으로 올렸다. 5(예산 분리)도 완료. 0a(체크리스트 분리·자율 탐색 bootstrap)와 8a(자율 탐색 전용 보고서)도 완료. 남은 우선순위는 8b(체크리스트 사후 부착) → 6(HTS 확장, 보류 중) → 7(모바일 템플릿 등 기존 제한 사항).
