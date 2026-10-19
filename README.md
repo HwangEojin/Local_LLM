@@ -1,6 +1,6 @@
 # 로컬 LLM 보안 진단 워크벤치
 
-체크리스트 중심의 보안 진단 도구. PostgreSQL 작업 큐 위에서 실행하고, 판정은 **등록된 도구로 수집한 증적 + 결정론적 규칙 + 사람 검토**로 내린다. 로컬 LLM(Ollama)은 참고 의견과 후속 확인 제안만 낸다. 설계 원칙은 [CLAUDE.md](CLAUDE.md).
+체크리스트 없이도 시작하는 자율 보안 진단 워크벤치. PostgreSQL 작업 큐 위에서 실행하고, 판정은 **등록된 도구로 수집한 증적 + 결정론적 규칙 + 사람 검토**로 내린다. 로컬 LLM(Ollama)은 다음 탐색 작업을 제안하지만(체크리스트가 없어도), 실제 실행은 항상 Python 정책 계층을 통과해야 한다. 체크리스트는 공식 기준 점검이 필요할 때 곁들이는 선택적 기능이다. 설계 원칙은 [CLAUDE.md](CLAUDE.md).
 
 ## 1. 준비
 
@@ -56,6 +56,7 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 ## 4. 진단 실행
 
 ```powershell
+& $wb run create --targets baseline-demo --operator 이름 --llm [--max-explorations N]           # 자율 탐색만(체크리스트 없음)
 & $wb run create --checklist fsec-2026-1-web-mobile-hts@2026-1 --targets baseline-demo --operator 이름 [--llm] [--check-ids A,B] [--tools a,b] [--autonomy approval|partial|full]
 & $wb run plan  <run>      # 실행 예정 작업과 정책 분류 미리 보기
 & $wb run start <run>      # 시작/재개 (Ctrl+C → PAUSED)
@@ -78,6 +79,7 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 & $wb trace tag <탐색노드ID> --run <run> --check-id <check_id>   # 검증된 탐색 발견을 체크리스트에 사후 매핑(판정은 안 바꿈)
 ```
 
+- `--checklist` 는 선택이다. 생략하면(`--llm` 필요) 체크리스트 항목 없이 목표(goal) 노드와 대상 자산만 등록되고, 로컬 LLM 이 그 목표와 대상만 근거로 최초 탐색(정찰)을 제안한다 — 체크리스트 증거가 하나도 없어도 탐색이 시작된다. `--checklist` 를 주면 기존처럼 체크리스트 작업이 먼저 돌고, 그 판정 결과가 생긴 뒤에만 탐색이 보조로 이어진다(동작 변경 없음).
 - 실행 ID 는 앞 몇 글자만 써도 된다.
 - 도구 위험도: `read` 는 범위 안이면 실행, `write`/`dangerous` 는 `scope.json` 의 `allowed_risks` 에 있어야 한다. 그 안에서 승인이 얼마나 필요한지는 실행 생성 시 정한 `--autonomy` 로 정해진다(`approval` 기본값: 매번 승인 / `partial`: write 자동, dangerous 승인 / `full`: 둘 다 자동, 범위 내). 실행 중 바꿀 수 없다. 승인이 필요할 때는 실행·대상·도구·정확한 인자에 묶이며 24시간 유효.
 - `PASS`/`FAIL` 은 연결된 증적이 있어야 기록할 수 있다.
@@ -115,24 +117,25 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 | 위치 | 책임 |
 |---|---|
 | `migrations/*.sql`, `db.py` | 스키마, 마이그레이션 실행기(해시 고정), 감사·변경 이벤트 |
-| `config.py`, `runs.py` | 설정 로딩, 체크리스트 버전을 DB 로 가져오기, 자산 등록, 실행 컨텍스트, 도구 레지스트리 |
+| `config.py`, `runs.py` | 설정 로딩, 실행 생성(체크리스트는 선택), 체크리스트 버전을 DB 로 가져오기(있을 때만), 자산 등록, 실행 컨텍스트, 도구 레지스트리 |
 | `policy.py` | `ALLOW / ALLOW_WITH_APPROVAL / DENY / NEEDS_SCOPE_CONFIRMATION` 판정(범위·제외·DNS·중지·승인·도착 주소) |
-| `planner.py`, `backlog.py`, `coordinator.py` | 변경 기반 계획, 상태 전이와 `SKIP LOCKED` 점유, 실행 반복·중지·취소 |
+| `planner.py`, `backlog.py`, `coordinator.py` | 변경 기반 계획, 상태 전이와 `SKIP LOCKED` 점유, 실행 반복·중지·취소. 체크리스트 없는 실행은 매 주기 탐색을 시도(부트스트랩) |
 | `worker.py`, `evidence.py`, `tools.py` | 도구 호출 → 증적 → 규칙 판정 → 발견 사항, 단계별 Activity, 자산 관찰, Nmap |
-| `explore.py`, `traces.py` | LLM 탐색 제안과 검증, 탐색 그래프, Activity 검색, 체크리스트 사후 매핑(`tag_node`) |
+| `explore.py`, `traces.py` | LLM 탐색 제안과 검증, 탐색 그래프, Activity 검색, 체크리스트 사후 매핑(`tag_node`). 체크리스트 증거가 없는 실행은 목표(goal)·대상 자산만 근거로 최초 탐색을 제안(bootstrap) |
 | `reporting.py` | DB 기록을 보고서 모듈 형식으로 넘기는 어댑터, 커버리지 |
 | `src/audit/` | 공용 라이브러리: 스키마 검증, 범위 정책, 체크리스트 로더·가져오기, 규칙 판정, 오버레이, 탐색 발견 검증 신호(`signals.py`), MCP 클라이언트, Ollama 클라이언트, Word/Excel 보고서 |
 
 판정 값: `PASS, FAIL, NOT_APPLICABLE, NEEDS_REVIEW, INCONCLUSIVE, NOT_RUN`. 작업 상태: `PENDING → READY → RUNNING → SUCCEEDED | FAILED | BLOCKED | NEEDS_REVIEW | CANCELLED`.
 
-## 7. 구현 상태 (2026-10-16)
+## 7. 구현 상태 (2026-10-19)
 
 | 기능 | 상태 | 근거 및 제한 사항 |
 |---|---|---|
 | 설정 검증 | 구현 | `doctor` 가 DSN 누락·미적용 마이그레이션을 FAIL 로 표시 |
-| PostgreSQL 스키마·마이그레이션 | 구현 | 전용 DB 에 3개 적용, 추가 전용 트리거가 증적 삭제를 거부 |
+| PostgreSQL 스키마·마이그레이션 | 구현 | 전용 DB 에 5개 적용(0005: `runs.checklist_version_id` nullable), 추가 전용 트리거가 증적 삭제를 거부 |
+| **체크리스트 없는 자율 진단** | **구현** | CLAUDE.md §3.2/§5.1/§6 — 체크리스트는 필수 조건이 아니라 선택적으로 곁들이는 기능으로 분리. `runs.create_run`이 `checklist_id`를 선택 인자로 받아 없으면 checklist import·platform 검증을 전부 생략하고 goal 노드(`"자율 진단: <targets>"`)와 자산만 등록(`--llm` 없으면 `ConfigError`로 거부). `explore.propose`(`explore.py`)가 체크리스트 판정/사실이 전혀 없어도(`known` 이 비어 있어도) GOAL·TARGETS 만 근거로 1차 탐색을 제안하는 bootstrap 경로 추가(증적 인용 요구를 이 경우만 생략). `planner.plan`은 체크리스트 없는 실행에서 `verdict/fact/evidence/approval` 이벤트 유무와 무관하게 매 주기 탐색을 시도(체크리스트 있는 실행의 기존 게이트는 그대로 유지, 회귀 없음). CLI: `run create --targets .. --operator .. --llm`(체크리스트 생략), `run status` 의 체크리스트 표시 NoneType 버그도 실제로 CLI 를 돌려보다 발견해 수정. 단위테스트 3건(`tests/unit/test_autonomous_run.py`, 실제 PostgreSQL) + 기존 91건 전부 PASS. **실제 로컬 LLM(qwen2.5:7b)+실제 MCP(Burp)로 end-to-end 확인**: 체크리스트 없이 `baseline-demo` 대상 실행을 만들어 `run start` → LLM 이 사전 증거 없이 Burp 프록시 히스토리 수집을 1차 탐색으로 제안 → 정책 통과 → 실제 실행 → 증적 1건 생성 → 실행 `COMPLETED`까지 확인. 리포트 생성(`report`)과 체크리스트 사후 부착(기존 run 에 나중에 체크리스트를 붙이는 기능)은 아직 체크리스트 전제라 미구현 |
 | 범위·정책 강제 | 부분 구현 | 범위 밖·경로 이탈·제외 대상·DNS·중지 스위치·허용 도구·승인·호출 간격 확인. 3단계 자율성 스위치(`approval`/`partial`/`full`)가 `scope.json` 의 `allowed_risks` 범위 안에서만 승인을 건너뛰는 것을 write(nmap)·dangerous(frida) 도구로 확인. 리다이렉트 이탈은 Playwright 출력만 검사하며 페이지의 하위 요청은 검사하지 않음 |
-| 체크리스트 가져오기 | 구현 | 활성·해시 고정 버전만 DB 로 가져오고 원문 보존 |
+| 체크리스트 가져오기 | 구현 | 활성·해시 고정 버전만 DB 로 가져오고 원문 보존(선택적 기능 — §4 참고) |
 | 결정론적 체크리스트 점검 | 구현 | 예시 체크리스트로 5가지 판정 확인. 공식 12종은 전 항목 사람 검토 |
 | 자동 점검 (A) 결정론적 규칙 (WEB/Mobile) | 부분 구현 | `config/rule_overlays.json`(스키마 `RULE_OVERLAYS`) → `audit.overlays.load_overlays`(정규식·증거 참조 교차검증) → `runs.import_checklist`에서 원문 `pass_criteria`/`fail_criteria`는 그대로 두고 `verification_method`/`evidence_requirements`만 오버레이로 바꿔 `checklist_items.body`에 저장. 기존 `audit.verdict` 엔진이 그대로 판정(단위테스트 8건, `tests/unit/test_rule_overlays.py`), 판정 사유에 "오버레이(업계 표준 기법) 기준, 원문 판단기준 아님" 자동 표기(`worker.py`). `checklist overlays` CLI로 실제 DB의 활성 체크리스트(`fsec-2026-1-web-mobile-hts` WEB-SER-038)와 교차검증 확인. 이미 import 된 버전에 소급 적용하는 `runs.reapply_overlays` + `checklist reapply-overlays <id> <version>` CLI 추가. 로컬 PostgreSQL 18(+psycopg) 로 end-to-end 확인: `tests/fixtures/checklist` 의 sample-local-config 로 import → 오버레이 적용(재적용으로 AUTOMATABLE 전환, 원문 criteria 불변) → 오버레이 제거 후 재적용하면 다시 원문(MANUAL_REVIEW)으로 복귀 — 전부 PASS. **오버레이 데이터 6건 — WEB-SER-030/034~038 전부 작성**: HTTP 메서드(038, `mcp:burp/send_http1_request`) / 서버 인증서 무결성(030)·취약한 HTTPS 프로토콜(034, 신규 `tls.inspect` 도구 — stdlib `ssl`/`socket`만 사용, 새 의존성 없음) / 취약한 암호 알고리즘(035)·취약한 HTTPS 컴포넌트(036, 신규 `nmap.ssl_scan` 도구 — 이 PC 에 이미 설치된 nmap 의 NSE 스크립트 `ssl-enum-ciphers`/`ssl-heartbleed`/`ssl-ccs-injection` 고정 사용, 임의 `--script` 인자는 받지 않음) / **취약한 재협상(037, 신규 `tls.renegotiation` 도구 — 전용 스캐너 testssl.sh 3.2 도입**, 운영자 승인 하에 공식 저장소에서 다운로드해 `data/tools/testssl.sh/`에 설치, Git 에는 안 올라감). `tls.inspect`는 ① 검증 없이 인증서를 받아 만료·자체서명·CN/SAN-호스트명 일치를 보고 ② SSLv3/TLSv1/TLSv1.1 로 핸드셰이크를 강제 시도해 서버가 받아주는지 본다. 로컬에 자체서명 인증서로 TLS 서버를 띄워 실제 핸드셰이크로 확인(`tests/unit/test_tls_inspect.py` 4건, `nmap.ssl_scan`은 같은 서버에 실제 nmap 7.98 을 돌려 캡처한 실제 출력으로 회귀 테스트, `tests/unit/test_rule_overlays.py` 총 14건 — 전부 실 소켓/실 nmap 실행). **testssl.sh 연동**: Git-for-Windows MSYS 에 없는 `hexdump`/`pkill`을 testssl.sh 가 실제로 쓰는 호출 형태만 정확히 구현한 대체 스크립트(`data/tools/hexdump-shim/`)로 보완(GNU hexdump 출력과 바이트 단위로 대조 확인). 실제 testssl.sh 를 로컬 TLS 서버에 두 번(`-R` 단독, `-p -S` 전체) 돌려 재협상·프로토콜·인증서 판정이 정상 출력됨을 확인했고, `make_tools()`가 돌리는 실제 실행 경로로도 동일 결과를 재확인(`tests/unit/test_testssl_tool.py`, testssl.sh 미설치 환경에서는 자동 skip). **이 과정에서 실제 버그 발견·수정**: ① 취약 프로토콜 프로브가 최신 OpenSSL 기본 보안 레벨(SECLEVEL) 때문에 실제로 취약한 서버에도 전부 "rejected"(거짓 안전)로 보고하는 문제 — 프로브 측 cipher 를 `@SECLEVEL=0`으로 낮춰 수정(테스트로 "accepted" 경로까지 실측 확인). ② `tools.make_tools()`가 nmap 이 없으면 `tls.inspect`까지 통째로 등록하지 않던 버그(nmap 조건부 early-return 안에 있었음) — nmap 의존 도구와 분리해 수정. 나머지 ~12개 후보(세션/인증 등 행동형 항목)는 (A) 적용 대상이 아님으로 재분류 |
 | 자동 점검 (B) 탐색 기반 발견 승격 (WEB/Mobile) | 부분 구현 | `audit.signals`(순수 함수) — **CLAUDE.md §7B 가 이름 붙인 7종(SQLi/XSS/CSRF/SSRF/SSTI/XXE/명령 실행) 전부 구현**: `classify_payload`가 공격 페이로드 문자열 시그니처(SQLi/XSS/SSTI/XXE/CMDI) 또는 요청 구조(CSRF: 상태 변경 메서드+인증 쿠키+대상과 다른 Origin/Referer, 공격 "문자열"이 없어 다르게 접근)를 찾고, `verify_*`가 응답에서 클래스별로 다른 신호를 따로 확인 — 반사·오류 문구·성공 코드·평가값 하나만으로 확정하지 않음. SSRF 는 클라우드 메타데이터 응답 키/`/etc/passwd` 같은 "그 자원에만 있는 고유 내용", SSTI 는 "문자열 그대로 반사"가 아니라 "평가된 값(7*7→49)", XXE 는 "엔티티가 실제로 해석된 내부 파일 내용", 명령 실행은 "그 명령 고유의 출력 형태(uid=.., 커널 문자열)"를 요구. 패턴 매칭 순서가 중요함을 실제로 확인(XXE 의 `file://` URI 가 SSRF 스킴 패턴에도 걸려 더 구조적인 XXE 를 먼저 검사하도록 순서 수정 — 테스트로 발견). 단위테스트 34건(`tests/unit/test_signals.py`, 7종 전부). `worker._run_exploration`이 fact 생성 시 신호를 확인해 일치하면 `findings`에 `verification='RULE_CONFIRMED'`로 삽입하고, finding 전용 `exploration_nodes`(`kind='finding'`)를 만들어 `exploration_edges`에 `proves` 엣지를 연결(전부 `exploration_signal_checked` 감사 이벤트로 기록, 불일치해도 기록) — 새 클래스는 `SIGNALS`/`SEVERITY`/`REMEDIATION`에 등록만 하면 기존 배선을 그대로 타므로 `worker.py` 변경 없음. 체크리스트 사후 매핑은 `traces.tag_node` + `trace tag` CLI로 사람이 탐색 노드에 check_id 를 붙임(exploration_anchors.checklist_item_id, 판정 자체는 바꾸지 않음). 로컬 PostgreSQL 로 end-to-end 확인(21개 단언 전부 PASS, SQLi/XSS 기준): XSS 신호 일치 시 finding·finding_evidence·finding 전용 노드·proves 엣지·감사 이벤트가 모두 생성되고, 인코딩된 반사·알려진 시그니처 없음 케이스는 finding 을 만들지 않으며, `trace tag` 매핑과 존재하지 않는 check_id 거부도 확인. **이 과정에서 실제 버그 발견·수정**: ① `exploration_edges` 는 양쪽 다 `exploration_nodes` 를 참조하므로 `findings.id` 를 직접 넣으면 FK 위반 — finding 전용 노드를 만들어 anchor 하도록 수정. ② 분류 패턴 순서 충돌(위 XXE/SSRF). **모든 7종 DB end-to-end 확인 완료**(`tests/unit/test_signal_promotion_db.py`): CSRF/SSRF/SSTI/XXE/CMDI 각각 실제 PostgreSQL 에 finding·finding_evidence·finding 전용 노드·proves 엣지·`exploration_signal_checked` 감사 이벤트가 생성되고, 불일치(SSRF 주소만 있고 메타데이터 내용 없음)일 땐 finding 없이 감사 이벤트만 남는 것까지 확인. `evidence`/`audit_events` 는 추가 전용(DELETE 트리거로 막힘)이라 테스트는 commit 하지 않고 끝에서 rollback 해 실제 DB 에 아무것도 남기지 않는다(디버깅 중 실수로 commit 한 테스트 행 2건만 영구 잔존 — `TEST-SIGNAL-PROMOTION`, 무해한 합성 데이터). **SQLi 불린 기반 차등(diff) 검증 추가**: `classify_sqli_boolean`(`'1'='1'` 참/`'1'='2'` 거짓 구분) + `pairing_key`(참/거짓 리터럴만 같게 바꾼 나머지 인자가 같은지 — 다른 엔드포인트끼리 비교해서 의미 없는 차이를 신호로 오인하지 않게)로 같은 주입 지점의 참/거짓 짝을 찾고, `verify_sqli_boolean_diff`로 SQL 오류 문구 없이도 응답 길이가 의미 있게(잡음 수준 이상) 다르면 확정한다 — SQLi 중 유일한 비-오류-기반 신호. `worker._check_sqli_boolean_diff`가 같은 자산의 이전 증적(`evidence` 테이블)에서 짝을 찾아 `evidence.read_bytes`로 원본 파일을 다시 읽어 비교하고, 맞으면 참/거짓 증적 둘 다 `finding_evidence`로 연결한다. 짝을 못 찾으면 조용히 건너뛰고 기존 오류 기반 신호로 넘어간다. 실제 PostgreSQL + 실제 파일로 end-to-end 확인(`tests/unit/test_sqli_boolean_diff_db.py` 3건: 의미 있는 차이는 승격, 동일 응답은 승격 안 됨, 짝 없으면 조용히 건너뜀 — 전부 실제 파일 읽기/쓰기 포함) + 순수 함수 단위테스트 9건. **실제 MCP 도구 연동 확인 완료**: `baseline-demo`(docker-compose, `localhost:9999`) Level 1 게시판 검색에서 실제 불린 기반 SQLi(`searchType=title&keyword=zzz' OR '1'='1' -- `)를 찾아, 실제 Burp MCP(`send_http1_request`)로 참/거짓 요청을 보내고 그 실제 응답이 `worker._promote_exploration_finding`을 거쳐 finding(심각도 high)으로 승격되는 것까지 확인(`tests/unit/test_real_mcp_sqli.py`, 대상·Burp 가 없으면 자동 skip). **이 과정에서 실제 버그 3건 추가 발견·수정**: ① `verify_csrf`의 상태 코드 정규식이 줄 시작(`^`)에 고정돼 있어 실제 Burp MCP 응답 형식(`HttpRequestResponse{...httpResponse=HTTP/1.1 200...}`, 줄바꿈 없는 JSON 한 줄)에서는 절대 못 찾던 문제 — 줄 위치 고정을 없애 수정(요청 줄의 HTTP/1.1 뒤에는 숫자가 안 와서 혼동 안 됨). ② `classify_sqli_boolean`/`pairing_key`가 리터럴이 그대로(unencoded) 있다고 가정해 실제 GET 요청(URL 인코딩된 `%27%20OR%20...`)에서는 전혀 분류되지 않던 문제 — 원문과 URL 디코딩한 문자열을 둘 다 보도록 수정. ③ WEB-SER-038 오버레이가 Burp 의 실제 파라미터 이름(`content`)이 아니라 틀린 이름(`request`)을 써서 실제로는 호출이 실패했을 문제 — 실제 도구 스키마로 확인 후 수정. 길이 기반 차등만 구현(응답 시간 기반 블라인드 SQLi 는 미구현) |
@@ -166,7 +169,8 @@ CLAUDE.md 는 바뀌지 않는 규칙만 담는다. 단계별 계획은 상태�
 
 | 단계 | 내용 | 현재 상태 |
 |---|---|---|
-| 0 | 체크리스트 가져오기·판정·보고서 기본 경로 | 구현 (§7) |
+| 0a | **체크리스트를 선택 기능으로 분리, 체크리스트 없이 자율 탐색 시작(bootstrap)** | **구현(§7)** — `run create`가 체크리스트 없이도 동작, `explore.propose`/`planner.plan`이 사전 증거 없이도 탐색을 시작. 실제 LLM+MCP로 end-to-end 확인 |
+| 0 | 체크리스트 가져오기·판정·보고서 기본 경로 | 구현 (§7, 선택적 기능) |
 | 1 | 자산/탐색 이중 그래프, 다단계 탐색 체인, 자율성 스위치 | 구현 (§7) |
 | 2 | 공유 작업 큐·Worker 조정·Activity 검색 | 구현/부분 구현 (§7) |
 | 3 | 자동 점검 (A): WEB/Mobile 결정론적 규칙 등록(`check_id`→도구·인자·판정) | 부분 구현(§7) — 엔진·로더·CLI·재적용 명령 완료, **오버레이 데이터 6/6건**(HTTP 메서드·인증서 무결성·취약 프로토콜·취약 암호·취약 컴포넌트·재협상). 신규 도구 3개: `tls.inspect`(stdlib ssl), `nmap.ssl_scan`(기존 nmap NSE 고정 스크립트), `tls.renegotiation`(신규 도입 testssl.sh 3.2 + MSYS 용 hexdump/pkill 대체 스크립트). 테스트 24건 전부 실제 소켓/실제 nmap/실제 testssl.sh 로 확인(건수는 §7 참고). (A) 범위에 해당하는 WEB 후보는 모두 처리 — 나머지는 행동형 항목이라 범위 밖 |
@@ -174,8 +178,9 @@ CLAUDE.md 는 바뀌지 않는 규칙만 담는다. 단계별 계획은 상태�
 | 5 | 필수 체크리스트 작업과 탐색 작업의 예산 분리(§2 "굶지 않게 한다") | 구현(§7) — `max_tool_calls_exploration` 분리, DB 로 독립 집계 확인 |
 | 6 | HTS 등 다른 platform/체크리스트로 오버레이 확장 | 계획 — 데이터 추가만으로 가능하도록 설계(§7), 실제 확장은 미착수 |
 | 7 | 모바일 Word 템플릿, 리다이렉트 하위 요청 범위 검사, Burp 이력 기반 자산 추출 | 계획 — §7 의 기존 제한 사항 |
+| 8 | 체크리스트 없는 실행을 위한 보고서 생성, 기존 실행에 체크리스트를 나중에 붙이는 기능 | 계획 — 지금은 `report` 명령이 체크리스트 전제라 자율 탐색 전용 실행에서는 동작하지 않음 |
 
-3(자동 점검 A)은 오버레이 데이터 6/6건이 전부 등록돼 WEB 플랫폼의 config-check형 항목은 더 추가할 게 없다 — 남은 건 §6 HTS 등으로의 확장(§7A는 platform·checklist_id 를 하드코딩하지 않으므로 데이터만 추가하면 됨, 이번에는 보류). 4(자동 점검 B)는 §7B 가 이름 붙인 7종 신호·SQLi 차등 검증·실제 MCP 연동까지 전부 끝나 "구현"으로 올렸다. 5(예산 분리)도 완료. 남은 우선순위는 6(HTS 확장, 보류 중) → 7(모바일 템플릿 등 기존 제한 사항).
+3(자동 점검 A)은 오버레이 데이터 6/6건이 전부 등록돼 WEB 플랫폼의 config-check형 항목은 더 추가할 게 없다 — 남은 건 §6 HTS 등으로의 확장(§7A는 platform·checklist_id 를 하드코딩하지 않으므로 데이터만 추가하면 됨, 이번에는 보류). 4(자동 점검 B)는 §7B 가 이름 붙인 7종 신호·SQLi 차등 검증·실제 MCP 연동까지 전부 끝나 "구현"으로 올렸다. 5(예산 분리)도 완료. 0a(체크리스트 분리·자율 탐색 bootstrap)도 완료. 남은 우선순위는 8(자율 탐색 전용 보고서) → 6(HTS 확장, 보류 중) → 7(모바일 템플릿 등 기존 제한 사항).
 
 ## 9. 복구와 문제 해결
 

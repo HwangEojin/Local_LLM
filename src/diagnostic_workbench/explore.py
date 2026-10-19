@@ -116,8 +116,11 @@ def _context(ctx) -> tuple[str, set[str]]:
             "JOIN exploration_anchors an2 ON an2.node_id = n.id WHERE an2.evidence_id::text = %s AND n.kind='fact' "
             "LIMIT 1) LIMIT 1", (latest_fact["evidence_ids"][0],)).fetchone()
         latest_fact_target = row["target_id"] if row else None
+    goal = conn.execute("SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='goal' "
+                        "ORDER BY created_at LIMIT 1", (run_id,)).fetchone()
     dump = lambda o: mask_secrets(json.dumps(o, ensure_ascii=False, default=str))  # noqa: E731
     text = "\n".join([
+        "GOAL: " + dump((goal["payload"] if goal else {}).get("text", "")),
         "TARGETS: " + dump({ctx.target_ids[a]: f"{t.type}:{t.value}" for a, t in ctx.targets.items()}),
         "TOOLS: " + dump(tools)[:6000],
         # 가장 최근 사실을 맨 앞에 따로 둔다 — 이게 이번 라운드를 깨운 이유이므로 우선 인용 대상이다
@@ -133,14 +136,24 @@ def _context(ctx) -> tuple[str, set[str]]:
 
 
 def propose(ctx) -> int:
-    """받아들인 탐색 작업 수를 반환한다. 근거가 될 증적이 없거나 예산이 없으면 모델을 부르지 않는다."""
+    """받아들인 탐색 작업 수를 반환한다. 근거가 될 증적이 없거나 예산이 없으면 모델을 부르지 않는다.
+
+    체크리스트가 없는 실행(checklist_version_id IS NULL)은 예외다 — 체크리스트 판정이 없어도 자산 선언과
+    목표(GOAL)만으로 최초 탐색을 시작한다(CLAUDE.md §3.2/§5.1/§6: "초기 증거가 없어도 탐색을 시작한다").
+    체크리스트가 있는 실행의 기존 동작(증적 없으면 모델을 부르지 않음)은 그대로 둔다.
+    """
     conn, run_id = ctx.conn, ctx.run["id"]
     used = conn.execute("SELECT count(*) AS n FROM backlog_items WHERE run_id=%s AND kind='exploration'",
                         (run_id,)).fetchone()["n"]
     room = ctx.run["budget"]["max_explorations"] - used
     text, known, (latest_fact_id, latest_fact_target) = _context(ctx)
-    if room <= 0 or not known:
+    bootstrap = not known and ctx.run["checklist_version_id"] is None
+    if room <= 0 or (not known and not bootstrap):
         return 0
+    if bootstrap:
+        text = ("NOTICE(최초 탐색 라운드): 아직 RESULTS/FACTS 증거가 없습니다. GOAL 과 TARGETS 만 근거로 "
+                "안전한 read 전용 정찰(예: 디렉터리/서비스 나열, 배너 확인)을 제안하세요. based_on_evidence_ids 는 "
+                "빈 배열([])로 제출해도 됩니다.\n" + text)
     try:
         out = ctx.llm.structured_chat([{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}],
                                       PROPOSALS, "explore")
@@ -161,7 +174,7 @@ def propose(ctx) -> int:
             why = "등록되지 않았거나 read/write 가 아닌 도구(탐색은 dangerous 도구를 제안하지 않음)"
         elif p["risk"] != spec.risk:
             why = f"주장한 위험도 '{p['risk']}' 가 등록된 실제 위험도 '{spec.risk}' 와 다름"
-        elif not cited or not cited <= known:
+        elif not bootstrap and (not cited or not cited <= known):
             why = "근거 증적 id 가 없거나 존재하지 않는 id 를 인용함"
         elif latest_fact_id and p["target_id"] == latest_fact_target and latest_fact_id not in cited:
             # 같은 대상을 다루면서 방금 나온 사실을 인용하지 않으면 체인을 잇지 않고 새 가지를 친 것으로 본다.
