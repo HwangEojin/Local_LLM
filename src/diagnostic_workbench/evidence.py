@@ -35,6 +35,16 @@ def store(conn, evidence_dir: Path, *, run_id, asset_id, requirement_id, tool, a
     return eid
 
 
+def read_bytes(row: dict, evidence_dir: Path) -> bytes | None:
+    """이전에 저장한 증적 원본을 다시 읽는다(차등 검증처럼 다른 증적과 비교할 때 씀). 없으면 None."""
+    if not row.get("rel_path"):
+        return None
+    try:
+        return (Path(evidence_dir) / row["rel_path"]).read_bytes()
+    except OSError:
+        return None
+
+
 def verify(row: dict, evidence_dir: Path) -> str | None:
     """DB 행과 원본 파일이 일치하면 None, 아니면 문제 설명."""
     if not row["success"]:

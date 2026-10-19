@@ -186,11 +186,16 @@ def _status(conn, run):
     print("  판정: " + (", ".join(f"{k}={v}" for k, v in cov["verdicts"].items()) or "없음"))
     print("  작업: " + (", ".join(f"{k}={v}" for k, v in cov["backlog"].items()) or "없음"))
     n = conn.execute(
-        "SELECT (SELECT count(*) FROM tool_invocations WHERE run_id=%(r)s AND status<>'SKIPPED') AS tools, "
+        "SELECT (SELECT count(*) FROM tool_invocations ti JOIN backlog_items b ON b.id=ti.backlog_item_id "
+        " WHERE ti.run_id=%(r)s AND ti.status<>'SKIPPED' AND b.kind='checklist') AS tools, "
+        "(SELECT count(*) FROM tool_invocations ti JOIN backlog_items b ON b.id=ti.backlog_item_id "
+        " WHERE ti.run_id=%(r)s AND ti.status<>'SKIPPED' AND b.kind='exploration') AS explore_tools, "
         "(SELECT count(*) FROM evidence WHERE run_id=%(r)s AND success) AS ev, "
         "(SELECT count(*) FROM findings WHERE run_id=%(r)s) AS findings, "
         "(SELECT count(*) FROM model_calls WHERE run_id=%(r)s) AS llm", {"r": rid}).fetchone()
-    print(f"  도구 호출={n['tools']}/{run['budget']['max_tool_calls']}  증적={n['ev']}  발견 사항={n['findings']}  "
+    print(f"  도구 호출={n['tools']}/{run['budget']['max_tool_calls']}"
+          f"(탐색 별도 {n['explore_tools']}/{run['budget'].get('max_tool_calls_exploration', '-')})  "
+          f"증적={n['ev']}  발견 사항={n['findings']}  "
           f"LLM 호출={n['llm']}  탐색={len(cov['explorations'])}/{run['budget']['max_explorations']}")
     for b in cov["blocked"]:
         print(f"  차단: [{b['policy_class'] or '선행대기'}] {b['reason']} — {b['blocked_reason']}")

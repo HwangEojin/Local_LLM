@@ -8,7 +8,9 @@ checker 가 그 응답(evidence)에서 클래스별 증거를 따로 확인한�
 """
 from __future__ import annotations
 
+import json
 import re
+import urllib.parse
 from dataclasses import dataclass
 
 _INJECTION_PATTERNS = {
@@ -107,6 +109,64 @@ def verify_sqli(args: dict, body: bytes) -> SignalResult:
                               "(오류 기반 신호 — 차등/행동 검증 아님)")
 
 
+_BOOL_TRUE = re.compile(r"'\s*(or|and)\s*'1'\s*=\s*'1", re.I)
+_BOOL_FALSE = re.compile(r"'\s*(or|and)\s*'1'\s*=\s*'2", re.I)
+
+
+def classify_sqli_boolean(args: dict) -> str | None:
+    """'1'='1'(참) / '1'='2'(거짓) 같은 불린 기반 SQLi 프로브를 구분한다. 차등 검증의 짝을 찾는 데 쓴다.
+
+    실제 GET 요청에서는 이 리터럴이 URL 인코딩된 채로(`%27%20OR%20...`) args 에 들어온다 — 원문과
+    디코딩한 문자열을 둘 다 본다(실제 Burp MCP 트래픽으로 확인한 문제).
+    """
+    for value in _flatten_strings(args):
+        for candidate in (value, urllib.parse.unquote(value)):
+            if _BOOL_FALSE.search(candidate):
+                return "FALSE"
+            if _BOOL_TRUE.search(candidate):
+                return "TRUE"
+    return None
+
+
+def _normalize_bool(value):
+    if isinstance(value, str):
+        decoded = urllib.parse.unquote(value)  # 인코딩된 요청도 같은 정규화 결과가 나오게 디코딩부터 한다
+        return _BOOL_FALSE.sub("'1'='BOOL'", _BOOL_TRUE.sub("'1'='BOOL'", decoded))
+    if isinstance(value, dict):
+        return {k: _normalize_bool(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_bool(v) for v in value]
+    return value
+
+
+def pairing_key(args: dict) -> str | None:
+    """참/거짓 리터럴만 같은 값으로 바꾼 뒤, 나머지 인자가 완전히 같은지 보기 위한 정규화 키.
+
+    같은 주입 지점을 겨눈 참/거짓 짝인지 확인하는 용도다 — 엔드포인트·다른 매개변수가 다른 요청끼리
+    비교하면 응답이 다른 게 당연해서 차등 신호가 아무 의미도 없다. 불린 프로브가 아니면 None.
+    """
+    if classify_sqli_boolean(args) is None:
+        return None
+    return json.dumps(_normalize_bool(args), sort_keys=True, ensure_ascii=False)
+
+
+def verify_sqli_boolean_diff(true_body: bytes, false_body: bytes) -> SignalResult:
+    """참/거짓 조건을 제외하면 완전히 같은 요청인데, 응답이 의미 있게 달라지는지만 본다(차등/행동 기반).
+
+    SQL 오류 문구가 전혀 없어도 이 신호만으로 확정할 수 있다 — SQLi 중 유일한 비-오류-기반 신호. 길이
+    차이가 너무 작으면(동적 타임스탬프 등 잡음) 우연으로 보고 매치로 치지 않는다.
+    """
+    t, f = true_body.decode("utf-8", errors="replace"), false_body.decode("utf-8", errors="replace")
+    if t == f:
+        return SignalResult(False, "참/거짓 조건 응답이 완전히 동일함(차이 없음)")
+    delta = abs(len(t) - len(f))
+    threshold = max(20, int(0.02 * max(len(t), len(f))))  # 아주 작은 길이 차이는 잡음으로 본다
+    if delta < threshold:
+        return SignalResult(False, f"참/거짓 응답 길이 차이({delta}자)가 잡음 수준이라 판단 보류(기준 {threshold}자)")
+    return SignalResult(True, f"참({len(t)}자)/거짓({len(f)}자) 조건 응답 길이가 {delta}자 다름 "
+                              "(불린 기반 차등 신호 — SQL 오류 문구 없이도 주입 지점이 응답을 바꿈을 시사)")
+
+
 def verify_xss(args: dict, body: bytes) -> SignalResult:
     """입력이 그대로(인코딩 없이) 응답에 반사됐는지와 그 반사 지점의 문맥을 함께 본다.
 
@@ -127,7 +187,9 @@ def verify_xss(args: dict, body: bytes) -> SignalResult:
     return SignalResult(True, f"보낸 페이로드 '{probe[:60]}' 가 인코딩 없이 응답에 그대로 반사됨(실행 가능한 문맥으로 추정)")
 
 
-_STATUS_LINE = re.compile(r"^HTTP/\d\.\d\s+(\d{3})", re.M)
+_STATUS_LINE = re.compile(r"HTTP/\d\.\d\s+(\d{3})")  # 줄 시작 고정 안 함: Burp MCP 는 응답을
+# HttpRequestResponse{...httpResponse=HTTP/1.1 200 ...} 형태로 감싸서 줄바꿈 없이 돌려준다(실측). 요청
+# 줄의 "HTTP/1.1" 뒤에는 숫자 3자리가 오지 않으므로 줄 위치를 안 봐도 요청/응답을 혼동하지 않는다.
 _REJECTION_MARKERS = re.compile(r"\b(csrf|forbidden|invalid.{0,10}token|cross.site|same.origin|access denied)\b", re.I)
 _SUCCESS_CODES = {200, 201, 202, 204, 301, 302, 303}
 

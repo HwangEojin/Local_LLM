@@ -68,6 +68,56 @@ class VerifySqli(unittest.TestCase):
         self.assertTrue(r.matched)
 
 
+class ClassifySqliBoolean(unittest.TestCase):
+    def test_true_condition_classified(self):
+        self.assertEqual(signals.classify_sqli_boolean({"q": "1' AND '1'='1"}), "TRUE")
+
+    def test_false_condition_classified(self):
+        self.assertEqual(signals.classify_sqli_boolean({"q": "1' AND '1'='2"}), "FALSE")
+
+    def test_unrelated_value_returns_none(self):
+        self.assertIsNone(signals.classify_sqli_boolean({"q": "hello"}))
+
+
+class PairingKey(unittest.TestCase):
+    def test_true_and_false_variants_share_a_key(self):
+        true_args = {"q": "1' AND '1'='1", "page": "2"}
+        false_args = {"q": "1' AND '1'='2", "page": "2"}
+        self.assertEqual(signals.pairing_key(true_args), signals.pairing_key(false_args))
+
+    def test_different_other_params_do_not_share_a_key(self):
+        true_args = {"q": "1' AND '1'='1", "page": "2"}
+        other_endpoint = {"q": "1' AND '1'='1", "page": "3"}
+        self.assertNotEqual(signals.pairing_key(true_args), signals.pairing_key(other_endpoint))
+
+    def test_non_boolean_probe_has_no_pairing_key(self):
+        self.assertIsNone(signals.pairing_key({"q": "hello"}))
+
+    def test_url_encoded_true_and_false_share_a_key(self):
+        # 실제 GET 요청에서 리터럴이 퍼센트 인코딩된 채로 들어오는 경우(실제 Burp MCP 트래픽으로 발견).
+        true_args = {"content": "GET /x?q=zzz%27%20OR%20%271%27%3D%271%27 HTTP/1.1\r\nHost: a\r\n\r\n"}
+        false_args = {"content": "GET /x?q=zzz%27%20OR%20%271%27%3D%272%27 HTTP/1.1\r\nHost: a\r\n\r\n"}
+        self.assertEqual(signals.classify_sqli_boolean(true_args), "TRUE")
+        self.assertEqual(signals.classify_sqli_boolean(false_args), "FALSE")
+        self.assertEqual(signals.pairing_key(true_args), signals.pairing_key(false_args))
+
+
+class VerifySqliBooleanDiff(unittest.TestCase):
+    def test_identical_responses_do_not_match(self):
+        r = signals.verify_sqli_boolean_diff(b"<html>5 results</html>", b"<html>5 results</html>")
+        self.assertFalse(r.matched)
+
+    def test_tiny_length_difference_is_treated_as_noise(self):
+        r = signals.verify_sqli_boolean_diff(b"<html>page rendered at 10:00:01</html>",
+                                             b"<html>page rendered at 10:00:02</html>")
+        self.assertFalse(r.matched)
+
+    def test_meaningfully_different_length_matches(self):
+        r = signals.verify_sqli_boolean_diff(b"<html>" + b"result row " * 50 + b"</html>",
+                                             b"<html>no results found</html>")
+        self.assertTrue(r.matched)
+
+
 class VerifyXss(unittest.TestCase):
     def test_no_reflection_does_not_match(self):
         r = signals.verify_xss({"q": "<script>alert(1)</script>"}, b"<html>nothing here</html>")
@@ -95,6 +145,14 @@ class VerifyCsrf(unittest.TestCase):
 
     def test_success_without_rejection_wording_matches(self):
         r = signals.verify_csrf({}, b"HTTP/1.1 302 Found\r\nLocation: /account\r\n\r\n")
+        self.assertTrue(r.matched)
+
+    def test_status_line_matches_inside_burp_json_wrapper(self):
+        # 실제 Burp MCP 응답은 "HttpRequestResponse{...httpResponse=HTTP/1.1 200 ...}" 처럼 줄바꿈 없는
+        # 하나의 JSON 문자열로 온다 — 줄 시작(^)에 고정된 패턴이면 못 찾는다(실제 트래픽으로 발견한 버그).
+        body = (b'{"content": [{"text": "HttpRequestResponse{httpRequest=GET /x HTTP/1.1\\\\r\\\\n, '
+               b'httpResponse=HTTP/1.1 200 \\\\r\\\\nSet-Cookie: x\\\\r\\\\n\\\\r\\\\n<html>ok</html>}"}]}')
+        r = signals.verify_csrf({}, body)
         self.assertTrue(r.matched)
 
 
