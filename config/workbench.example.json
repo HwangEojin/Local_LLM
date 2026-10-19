@@ -5,5 +5,6 @@
   "approval_ttl_h": 24,
   "min_call_interval_ms": 0,
   "nmap_path": "C:/Program Files (x86)/Nmap/nmap.exe",
+  "testssl_path": "data/tools/testssl.sh/testssl.sh",
   "budget": {"max_tasks": 2000, "max_tool_calls": 500, "timeout_s": 3600, "max_explorations": 3}
 }

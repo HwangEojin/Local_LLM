@@ -24,6 +24,7 @@ WORKBENCH = {
         "lease_s": _POS, "max_attempts": _POS, "approval_ttl_h": _POS,
         "min_call_interval_ms": {"type": "integer", "minimum": 0},
         "nmap_path": {"type": "string", "minLength": 1},
+        "testssl_path": {"type": "string", "minLength": 1},
         "budget": BUDGET,
     },
 }
@@ -41,7 +42,8 @@ class Config:
     approval_ttl_h: int
     budget: dict
     min_call_interval_ms: int = 0  # 도구 호출 사이 최소 간격(요청 속도 제한)
-    nmap_path: str | None = None   # 없으면 PATH 와 기본 설치 경로에서 찾는다
+    nmap_path: str | None = None    # 없으면 PATH 와 기본 설치 경로에서 찾는다
+    testssl_path: str | None = None  # testssl.sh 스크립트 경로(없으면 재협상 점검 도구를 등록하지 않음)
 
     @property
     def stop_file(self) -> Path:  # 전체 중지 스위치: 이 파일이 있으면 모든 도구 호출을 거부한다
@@ -79,7 +81,7 @@ def load(home: str | None) -> Config:
               "timeout_s": settings.limits["run_timeout_s"], **wb.get("budget", {})}
     return Config(root, settings, dsn, wb.get("exclude", []), wb.get("lease_s", 300),
                   wb.get("max_attempts", 2), wb.get("approval_ttl_h", 24), budget,
-                  wb.get("min_call_interval_ms", 0), wb.get("nmap_path"))
+                  wb.get("min_call_interval_ms", 0), wb.get("nmap_path"), wb.get("testssl_path"))
 
 
 def validate_budget(budget: dict) -> dict:
