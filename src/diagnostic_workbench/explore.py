@@ -29,7 +29,7 @@ _PROBE_SCHEMA = {
 PROBE_SYSTEM = (
     "You are starting the very first exploration round for an authorized security audit with zero prior "
     "evidence. You may directly run up to 3 read-only reconnaissance probes before planning the next-round "
-    "proposals (CLAUDE.md §1.1 exception 2, 2026-10-19) — these execute immediately, not as a later proposal. "
+    "proposals (CLAUDE.md §1/§7) — these execute immediately, not as a later proposal. "
     "Only read-only tools listed in TOOLS are available here; dangerous or write tools are off-limits even "
     "here, and so are targets not listed in TARGETS. Reply with one probe per turn: {tool, target_id, args, "
     "rationale}. Set tool to an empty string (\"\") to stop early once you believe nothing else is worth "
@@ -77,7 +77,7 @@ SYSTEM = (
     "that shows how far the issue extends on the same target (for example listing the target or reading a "
     "closely related item inside it). A proposal is a hypothesis to check, not a finding. If nothing is worth "
     "checking, return an empty list. "
-    "CLAUDE.md §1.1 exception 3 (2026-10-19): if, and only if, the evidence already in RESULTS/FACTS/LATEST_FACT "
+    "CLAUDE.md §1/§7/§9: if, and only if, the evidence already in RESULTS/FACTS/LATEST_FACT "
     "(not a proposal you are about to make) actually demonstrates a real vulnerability, you may report it "
     "directly in the optional findings field instead of only describing it in a proposal's rationale. Every "
     "finding's evidence_ids must cite ids that already appear in the input — never a proposal you are making in "
@@ -169,7 +169,7 @@ def _context(ctx) -> tuple[str, set[str]]:
 
 
 def _bootstrap_probes(ctx, base_text: str, assets: dict) -> tuple[set[str], str]:
-    """최초 탐색 라운드에 한해 LLM이 read 전용 도구를 최대 3회까지 직접 실행한다(CLAUDE.md §1.1 예외 2번).
+    """최초 탐색 라운드에 한해 LLM이 read 전용 도구를 최대 3회까지 직접 실행한다(CLAUDE.md §1/§7).
     백로그 대기·운영자 승인 대기는 건너뛰지만 Scope·제외 목록 검사(policy.decide, worker.run_tool
     을 그대로 재사용)는 모든 호출에서 그대로 거친다 — read 도구는 원래도 승인 대기가 없었으므로 실질적인
     변화는 '백로그 지연 없이 같은 라운드에서 즉시 실행'뿐이다.
@@ -217,7 +217,7 @@ def propose(ctx) -> int:
     체크리스트가 있는 실행의 기존 동작(증적 없으면 모델을 부르지 않음)은 그대로 둔다.
     """
     conn, run_id = ctx.conn, ctx.run["id"]
-    # 자율 탐색의 호출 수에는 하드 리밋을 두지 않는다(CLAUDE.md §1.1 예외 1번) — 벽시계 타임아웃과
+    # 자율 탐색의 호출 수에는 하드 리밋을 두지 않는다(CLAUDE.md §1/§5.4/§8) — 벽시계 타임아웃과
     # "유효한 후속 작업 없음"만으로 끝낸다. max_explorations 는 더 이상 강제하지 않는다.
     text, known, (latest_fact_id, latest_fact_target) = _context(ctx)
     bootstrap = not known and ctx.run["checklist_version_id"] is None
@@ -296,7 +296,7 @@ def propose(ctx) -> int:
 
 
 def _report_llm_finding(ctx, fnd: dict, assets: dict, known: set[str]) -> None:
-    """CLAUDE.md §1.1 예외 3번(2026-10-19): LLM이 인용한 실존 증거만으로 finding 을 직접 CONFIRMED 기록한다.
+    """CLAUDE.md §1/§7/§9: LLM이 인용한 실존 증거만으로 finding 을 직접 CONFIRMED 기록한다.
 
     인용 증거가 known(이번 입력에 실제로 있던 증거 id)의 부분집합이어야 한다 — proposal 의 인용 검증과
     같은 최소 무결성 기준이며, 주장의 실체(취약점이 진짜인지)는 검증하지 않는다.
