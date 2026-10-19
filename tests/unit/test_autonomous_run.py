@@ -6,11 +6,10 @@
 - explore.propose 는 체크리스트 증거가 하나도 없어도(known 이 비어 있어도) 체크리스트가 없는 실행이면
   모델을 불러 최초 탐색을 제안하고, 그 제안은 증적 인용 없이도(bootstrap) 받아들여진다.
 """
-import types
 import unittest
 
 from audit.models import ConfigError
-from diagnostic_workbench import config, db, explore, runs
+from diagnostic_workbench import config, db, explore, reporting, runs
 
 
 class _FakeLLM:
@@ -75,6 +74,21 @@ class CreateRunWithoutChecklist(unittest.TestCase):
             "SELECT count(*) AS n FROM backlog_items WHERE run_id=%s AND kind='exploration'",
             (run["id"],)).fetchone()["n"]
         self.assertEqual(n, 1)
+
+    def test_report_generate_without_checklist_produces_exploration_report(self):
+        run = runs.create_run(self.conn, self.cfg, ["baseline-demo"], "pytest-autonomous",
+                              checklist_id=None, use_llm=True)
+        self.conn.execute("UPDATE runs SET status='COMPLETED', ended_at=now() WHERE id=%s", (run["id"],))
+        self.conn.commit()
+        run = db.resolve_run(self.conn, str(run["id"]))
+        res = reporting.generate(self.cfg, self.conn, run)
+        self.assertTrue(res["warnings"])  # PASS/FAIL 없음 경고가 있어야 함
+        from docx import Document
+        from openpyxl import load_workbook
+        doc = Document(res["docx"])
+        self.assertTrue(any("초안" in p.text for p in doc.paragraphs))
+        wb = load_workbook(res["xlsx"], read_only=True)
+        self.assertEqual(set(wb.sheetnames), {"개요", "탐색", "발견사항", "증적"})
 
 
 if __name__ == "__main__":

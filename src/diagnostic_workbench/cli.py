@@ -480,6 +480,12 @@ def cmd_graph(args):
 def cmd_report(args):
     cfg, conn = _open(args)
     run = db.resolve_run(conn, args.run)
+    if run["checklist_version_id"] is None:  # 체크리스트가 없는 실행: 탐색 그래프 기반 보고서(초안)만 가능
+        res = reporting.generate(cfg, conn, run)
+        print(f"docx: {res['docx']}\nxlsx: {res['xlsx']}")
+        for w in res.get("warnings", []):
+            print(f"  경고: {w}")
+        return 0
     # 기본은 회사 템플릿 서식의 결과보고서다. 내부 점검 요약(표 양식 Word + Excel)은 --basic 으로 만든다.
     kind = None if args.basic else (args.type or reporting.default_kind(conn, run))
     if kind is None and not args.basic:
