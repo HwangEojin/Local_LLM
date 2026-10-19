@@ -17,7 +17,7 @@ from psycopg.types.json import Jsonb
 from audit import schemas, signals
 from audit.checklist_engine import is_applicable, render_args
 from audit.local_model import LLMError, build_analysis_messages
-from audit.models import PolicyDenied, ToolError, ToolOutput
+from audit.models import AuditError, PolicyDenied, ToolError, ToolOutput
 from audit.policy import mask_secrets, redact, secret_values
 from audit.verdict import decide, evaluate_rule
 
@@ -72,6 +72,34 @@ def set_verdict(conn, rci_id, verdict, reason, *, actor, decided_by, evidence_id
     conn.execute(
         "INSERT INTO verdict_history (run_checklist_item_id, old_verdict, new_verdict, reason, actor, evidence_ids) "
         "VALUES (%s,%s,%s,%s,%s,%s)", (rci_id, old["verdict"], verdict, reason, actor, list(evidence_ids)))
+
+
+FINDING_STATUSES = ("CANDIDATE", "NEEDS_REVIEW", "CONFIRMED", "REJECTED", "INCONCLUSIVE", "NOT_TESTED")
+
+
+def set_finding_status(conn, finding_id, status, reason, *, actor, evidence_ids=()):
+    """사람의 Finding 검토 판정을 기록한다(CLAUDE.md §9/§10).
+
+    기존 findings 행과 finding_evidence 는 지우지 않고 finding_review_history 에 이력만 추가한다.
+    CONFIRMED 는 연결된 증거가 있어야만 허용한다 — LLM 이나 규칙의 주장만으로 확정하지 않는다(§9 확정 조건).
+    """
+    f = conn.execute("SELECT status FROM findings WHERE id=%s FOR UPDATE", (finding_id,)).fetchone()
+    if f is None:
+        raise AuditError(f"finding {finding_id} 를 찾을 수 없음")
+    for eid in evidence_ids:
+        conn.execute("INSERT INTO finding_evidence VALUES (%s,%s) ON CONFLICT DO NOTHING", (finding_id, eid))
+    if status == "CONFIRMED":
+        n = conn.execute(
+            "SELECT count(*) AS n FROM finding_evidence WHERE finding_id=%s", (finding_id,)).fetchone()["n"]
+        if n == 0:
+            raise AuditError("CONFIRMED 에는 연결된 증거가 필요함(CLAUDE.md §9) — 증거 없이 확정할 수 없음. "
+                             "먼저 증적을 연결하거나 NEEDS_REVIEW/INCONCLUSIVE 로 두세요")
+    conn.execute(
+        "UPDATE findings SET status=%s, reviewed_by=%s, reviewed_at=now(), review_reason=%s WHERE id=%s",
+        (status, actor, reason, finding_id))
+    conn.execute(
+        "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
+        "VALUES (%s,%s,%s,%s,%s,%s)", (finding_id, f["status"], status, reason, actor, list(evidence_ids)))
 
 
 def _tool_calls_used(ctx, kind: str) -> int:

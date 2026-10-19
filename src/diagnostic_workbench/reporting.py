@@ -193,27 +193,35 @@ def default_kind(conn, run: dict) -> str | None:
     return kinds.pop() if len(kinds) == 1 else None
 
 
-def _findings_for_pentest_report(conn, run: dict, meta: dict) -> list[dict]:
+def _findings_for_pentest_report(conn, run: dict, meta: dict) -> tuple[list[dict], dict[str, int]]:
     """findings 테이블(체크리스트 없는 실행이 자율 탐색으로 쌓은 발견 사항) 을 audit.pentest_report._Builder
     가 기대하는 findings 리스트 모양으로 변환한다. check_id/target_id 는 FAIL 판정과 맞추는 용도가 아니라
     _Builder 가 쓰는 필드 이름일 뿐이므로 체크리스트 없이도 채울 수 있다.
+
+    REJECTED(오탐으로 확인됨)는 본문에서 뺀다 — 기각된 후보를 발견 사항처럼 싣는 것은 CLAUDE.md §3.3 위반이다.
+    나머지 상태(status 반환값으로 집계)는 모두 싣고, notes 에 실제 검토 상태를 적어 사람이 아직 보지 않은
+    CANDIDATE/NEEDS_REVIEW 를 CONFIRMED 와 구분할 수 있게 한다(§9/§10).
     """
     targets = {t["target_id"]: t for t in meta.get("targets", [])}
     rows = conn.execute(
         "SELECT f.*, ra.target_id FROM findings f "
         "JOIN run_assets ra ON ra.run_id = f.run_id AND ra.asset_id = f.asset_id "
-        "WHERE f.run_id=%s ORDER BY f.created_at", (run["id"],)).fetchall()
+        "WHERE f.run_id=%s AND f.status <> 'REJECTED' ORDER BY f.created_at", (run["id"],)).fetchall()
+    status_counts: dict[str, int] = {}
     out = []
     for r in rows:
+        status_counts[r["status"]] = status_counts.get(r["status"], 0) + 1
         tinfo = targets.get(r["target_id"]) or {"name": r["target_id"], "url": "", "kind": "WEB"}
+        notes = (f"검토 확정(reviewer): {r['reviewed_by']}" if r["status"] == "CONFIRMED" and r["reviewed_by"]
+                 else f"검증: {r['verification']} ({r['status']}, 사람 최종 검토 전 — CLAUDE.md §9/§10)")
         out.append({
             "check_id": str(r["id"])[:8], "target_id": r["target_id"], "target_name": tinfo["name"],
             "url": tinfo.get("url", ""), "kind": tinfo.get("kind", "WEB"), "name": r["title"],
             "result": mask_secrets(r["rationale"]), "path": tinfo.get("url", "") or r["target_id"],
-            "notes": f"검증: {r['verification']} (사람 최종 검토 전 — CLAUDE.md §9/§10)",
-            "cases": [], "recommendation": r["remediation"] or "", "rec_titles": [], "reason": r["rationale"],
+            "notes": notes, "cases": [], "recommendation": r["remediation"] or "", "rec_titles": [],
+            "reason": r["rationale"],
         })
-    return out
+    return out, status_counts
 
 
 def generate_autonomous(cfg, conn, run: dict, meta_path, findings_path=None) -> dict:
@@ -229,7 +237,7 @@ def generate_autonomous(cfg, conn, run: dict, meta_path, findings_path=None) -> 
     run_id = str(run["id"])
     meta = pentest_report._load_json(meta_path, schemas.REPORT_META, "report meta")
     tpl, rec_paths = pentest_report.find_templates(cfg.settings.path("templates_dir"), "web")
-    findings = _findings_for_pentest_report(conn, run, meta)
+    findings, status_counts = _findings_for_pentest_report(conn, run, meta)
     b = pentest_report._Builder(tpl, pentest_report.load_recommendations(rec_paths), meta, findings)
     if findings_path:
         b.improvements = json.loads(Path(findings_path).read_text(encoding="utf-8")).get("improvements", [])
@@ -244,9 +252,13 @@ def generate_autonomous(cfg, conn, run: dict, meta_path, findings_path=None) -> 
     out = pentest_report._free(out_dir / f"web_pentest_report_{run_id}.docx")
     b.doc.save(str(out))
     problems, warnings = pentest_report.verify(out, findings, b.unmatched)
+    rejected_n = conn.execute(
+        "SELECT count(*) AS n FROM findings WHERE run_id=%s AND status='REJECTED'", (run["id"],)).fetchone()["n"]
     result = {"docx": str(out), "template": tpl.name, "findings": len(findings),
+              "findings_by_status": status_counts, "rejected_excluded": rejected_n,
               "unmatched_recommendations": sorted(set(b.unmatched)),
-              "warnings": ["체크리스트 없는 실행: 발견 사항은 findings 테이블(사람 최종 검토 전)에서 가져옴"] + warnings,
+              "warnings": ["체크리스트 없는 실행: 발견 사항은 findings 테이블(사람 최종 검토 후 반영)에서 가져옴. "
+                          "REJECTED 는 본문에서 제외, CONFIRMED 가 아닌 항목은 notes 란에 검토 상태를 표시함"] + warnings,
               "problems": problems}
     db.audit(conn, run["id"], "pentest_report_generated", result)
     conn.commit()
