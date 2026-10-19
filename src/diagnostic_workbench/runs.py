@@ -98,8 +98,8 @@ def reapply_overlays(conn, checklists: Checklists, checklist_id: str, version: s
     return changed
 
 
-# 항상 승인 | 전부 자동(범위 내). 2026-10-19 결정으로 기존 3단계(partial)를 없애고 artex 와 같은 이분법으로
-# 단순화했다(CLAUDE.md 가 3단계를 요구한 적은 없어 규칙 예외는 아님). 기존 'partial' 실행은 더 안전한 쪽인
+# 항상 승인 | 전부 자동(범위 내). 2026-10-19 결정으로 기존 3단계(partial)를 없애고 이분법으로 단순화했다
+# (CLAUDE.md 가 3단계를 요구한 적은 없어 규칙 예외는 아님). 기존 'partial' 실행은 더 안전한 쪽인
 # 'approval'로 백필됨(migrations/0007).
 AUTONOMY_LEVELS = ("approval", "full")
 

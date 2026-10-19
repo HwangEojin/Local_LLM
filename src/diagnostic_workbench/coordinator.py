@@ -11,7 +11,7 @@ from . import backlog, db, explore, planner, worker
 from .runs import build_context
 
 
-_DEBOUNCE_S = 0.8   # artex 설계 참고: 거의 동시에 들어온 이벤트 여러 건을 한 번의 재계획으로 묶는다
+_DEBOUNCE_S = 0.8   # 거의 동시에 들어온 이벤트 여러 건을 한 번의 재계획으로 묶는다
 _HEARTBEAT_S = 600  # 이벤트를 놓쳤어도 이 간격마다 한 번은 다시 계획을 시도한다(폴백)
 _POLL_S = 0.5       # DB 폴링 간격(Postgres LISTEN/NOTIFY 는 쓰지 않음 — change_events 테이블을 그냥 본다)
 
@@ -28,8 +28,8 @@ def _stop_reason(conn, run_id, cfg, deadline) -> str | None:
 
 def _wait_for_wake(ctx, conn, run_id, cfg, name, deadline):
     """할 일이 당장 없을 때 기다린다. 이벤트+디바운스(800ms)+하트비트(600s) 로 깨어나 다시 계획해 본다
-    (artex 설계 참고 — Postgres 를 짧은 간격으로 폴링한다는 점만 다르고, 효과는 같다: 거의 동시에 온
-    이벤트를 한 번에 묶고, 이벤트를 놓쳐도 하트비트가 안전망이 된다). 새 작업을 찾으면 (작업, None) 을,
+    (Postgres 를 짧은 간격으로 폴링한다 — 거의 동시에 온 이벤트를 한 번에 묶고, 이벤트를 놓쳐도 하트비트가
+    안전망이 된다). 새 작업을 찾으면 (작업, None) 을,
     끝내야 하면 (None, 사유) 를 돌려준다. 하트비트에도 새 작업이 없으면 (None, "NO_WORK") — "유효한
     후속 작업 없음"(CLAUDE.md §5.4)이며 PAUSED 가 아니라 기존과 같이 COMPLETED 로 이어진다.
     """
