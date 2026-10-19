@@ -109,7 +109,7 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 & $wb report <run> --meta report_meta.json                              # 체크리스트 없는(자율 탐색 전용) 실행도 같은 Word 서식, --basic 은 지원 안 함
 ```
 
-- 체크리스트 없는 실행도 서식은 새로 만들지 않고 **같은 회사 템플릿(`audit.pentest_report`)을 그대로 쓴다**. 다른 점은 발견 사항의 출처뿐이다: 체크리스트 실행은 FAIL 판정 + `findings.json` 을 연동하고, 체크리스트 없는 실행은 `findings` 테이블(탐색 신호가 확정한 발견 사항)을 그 서식이 기대하는 모양으로 바로 채운다. `notes` 란에 "검증: RULE_CONFIRMED/REVIEWER_CONFIRMED (사람 최종 검토 전)" 을 명시해 아직 사람이 확인·승인하지 않았음을 적는다(검토 워크플로는 아직 없음, §8b). PASS/FAIL 집계·커버리지가 없으므로 `--basic` 은 지원하지 않는다.
+- 체크리스트 없는 실행도 서식은 새로 만들지 않고 **같은 회사 템플릿(`audit.pentest_report`)을 그대로 쓴다**. 다른 점은 발견 사항의 출처뿐이다: 체크리스트 실행은 FAIL 판정 + `findings.json` 을 연동하고, 체크리스트 없는 실행은 `findings` 테이블(탐색 신호가 확정한 발견 사항)을 그 서식이 기대하는 모양으로 바로 채운다. `notes` 란에 실제 검토 상태를 적어 CONFIRMED 와 아직 검토 전인 CANDIDATE/NEEDS_REVIEW 를 구분하고, REJECTED(사람이 오탐으로 확인)는 본문에서 뺀다. 검토 자체는 CLI(`finding review`/`finding retest`)나 웹 UI(`workbench web`, §5a)로 한다. PASS/FAIL 집계·커버리지가 없으므로 `--basic` 은 지원하지 않는다.
 - 기본 보고서는 `templates/word/` 의 `웹*결과보고서*.docx` 서식을 그대로 쓰고, 보호대책은 `*웹*보안권고안*.docx` 에서 텍스트와 이미지만 가져온다. 템플릿 유형은 대상 platform 으로 정한다(현재 WEB 만 지원).
 - `report_meta.json`: 고객사, 프로젝트, 대상(`target_id`, 이름, URL), 일정, 인력. 형식은 `src/audit/schemas.py` 의 `REPORT_META`.
 - `findings.json`: `check_id` + `target_id` 가 DB 의 **FAIL 판정과 일치**해야 한다. 진단결과, 발생경로, 사례(CASE)와 단계(`text`/`code`/`image`/`caption`), 권고사항. 형식은 `FINDINGS`.
@@ -117,6 +117,23 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 - 생성 후 파일을 다시 열어 취약점 누락을 확인한다. 기존 파일은 덮어쓰지 않는다(`-2`, `-3`).
 - Word 에서 `필드를 업데이트하시겠습니까?` 가 나오면 `예`(목차·번호 갱신). 화면상의 모양은 직접 확인해야 한다.
 - 보고서와 감사 로그에서 비밀 값 패턴은 마스킹된다. 원본 증적은 `data/evidence/` 에 그대로 남는다.
+
+## 5a. 웹 UI (선택 기능, 2026-10-19 신규)
+
+artex 의 `function/findings`·`function/tasks` 화면을 참고한 로컬 대시보드. **새 진단 로직은 없다** — `src/webapi`(FastAPI)가 기존 `diagnostic_workbench` 모듈(`worker.set_finding_status`/`worker.create_retest`/`reporting.coverage`/`backlog.counts` 등)을 그대로 부르는 HTTP 어댑터일 뿐이고, `web/`(Next.js)이 그 위에 얇게 얹힌다. CLI 는 이 없이도 완전히 동작한다.
+
+```powershell
+pip install -e '.[web]'                 # fastapi, uvicorn, itsdangerous(선택 의존성)
+# .env 에 WORKBENCH_WEB_USER/WORKBENCH_WEB_PASSWORD/WORKBENCH_WEB_SECRET 설정(.env.example 참고) — 없으면 시작 거부
+& $wb web --port 8420                   # 백엔드(FastAPI)
+cd web && npm install && npm run dev    # 프론트엔드(Next.js, 기본 :3000)
+```
+
+- **인증**: 가벼운 단일 운영자 로그인(artex 의 다중 사용자·역할 체계는 없음). 아이디/비밀번호는 `.env` 의 환경 변수로만 받고(DB·설정 파일에 평문 저장 안 함), 로그인하면 서명된 쿠키(`itsdangerous`, 12시간) 로 세션을 유지한다. 비밀번호·서명 비밀이 없으면 서버가 시작을 거부한다(기본 거부, CLAUDE.md §8-4 와 같은 원칙).
+- **화면**: `/runs`(실행 목록) → `/runs/[id]`(상태·예산 사용량 + Findings/Backlog 탭). Findings 탭에서 행을 클릭하면 `finding review`/`finding retest` CLI 와 똑같은 입력(상태·사유·증적 id)으로 바로 검토·재검증을 기록한다 — CONFIRMED 는 연결된 증거가 없으면 API 가 그대로 거부한다(CLI 와 동일한 `AuditError`, 우회 경로 없음).
+- **API**: `GET /api/runs`, `GET /api/runs/{id}`, `GET /api/runs/{id}/backlog`, `GET /api/runs/{id}/findings`, `POST .../findings/{id}/review`, `POST .../findings/{id}/retest`. OpenAPI 문서는 `/api/docs`.
+- **범위**: 이번에 만든 건 findings + runs(tasks) 화면뿐이다. artex 의 assets/traffic/agents/mcp/tools/settings/chat 같은 관리자용 화면은 만들지 않았다(§7 "다음 구현 단계" 참고 — artex 자체가 Go 4만줄 + TS 5.8만줄짜리 제품이라 전체 복제는 범위 밖으로 판단함).
+- **실제 확인**: 로컬 PostgreSQL + 실제 Chromium(headless) 으로 로그인 → runs 목록 → run 상세(findings/backlog 탭) → finding 상태를 브라우저에서 직접 바꿔 `finding_review_history` 에 `actor='reviewer:<웹 로그인 아이디>'` 로 기록되는 것까지 확인. `npm run build`/`tsc --noEmit`/`eslint` 전부 통과.
 
 ## 6. 구조
 
@@ -130,6 +147,7 @@ Windows 가 8034–8133 포트를 예약해 둔 PC 에서는 8080·8090 을 쓸 
 | `explore.py`, `traces.py` | LLM 탐색 제안과 검증, 탐색 그래프, Activity 검색, 체크리스트 사후 매핑(`tag_node`). 체크리스트 증거가 없는 실행은 목표(goal)·대상 자산만 근거로 최초 탐색을 제안(bootstrap) |
 | `reporting.py` | DB 기록을 보고서 모듈 형식으로 넘기는 어댑터, 커버리지. 체크리스트 없는 실행은 `generate_autonomous`가 `findings` 테이블을 `audit.pentest_report._Builder` 가 기대하는 모양으로 바꿔 **같은 Word 서식**에 채운다(새 서식을 만들지 않음) |
 | `src/audit/` | 공용 라이브러리: 스키마 검증, 범위 정책, 체크리스트 로더·가져오기, 규칙 판정, 오버레이, 탐색 발견 검증 신호(`signals.py`), MCP 클라이언트, Ollama 클라이언트, Word/Excel 보고서 |
+| `src/webapi/`(선택), `web/`(선택) | 로컬 웹 UI(§5a). `webapi` 는 새 진단 로직 없이 위 모듈을 그대로 부르는 FastAPI 어댑터, `web` 은 Next.js 프론트엔드. CLI 는 이 없이도 완전히 동작 |
 
 판정 값: `PASS, FAIL, NOT_APPLICABLE, NEEDS_REVIEW, INCONCLUSIVE, NOT_RUN`. 작업 상태: `PENDING → READY → RUNNING → SUCCEEDED | FAILED | BLOCKED | NEEDS_REVIEW | CANCELLED`.
 
@@ -191,8 +209,9 @@ CLAUDE.md 는 바뀌지 않는 규칙만 담는다. 단계별 계획은 상태�
 | 8b | 기존 실행에 체크리스트를 나중에 붙이는 기능 | 계획 — 아직 미착수 |
 | 9 | Finding 검토 워크플로(사람의 확정/기각, CLAUDE.md §9/§10) | **구현(§7)** — `findings.status` 6 종 상태 전환 + `finding_review_history` 이력 + `finding review`/`finding retest` CLI. CONFIRMED 는 증거 필수 |
 | 10 | artex 자율성 동등화(사용자 승인, 2026-10-19) | **구현(§7, CLAUDE.md §1.1)** — 탐색 호출 수 무제한·LLM 최초 라운드 직접 실행·LLM 직접 finding 확정(3건 모두 CLAUDE.md 영구 규칙의 기록된 예외) + 자율성 이분법·Kill Switch 즉시 취소·디바운스+하트비트 wake-up(3건은 규칙 충돌 없는 설계 변경) |
+| 11 | 웹 UI MVP(findings/runs, artex 화면 참고, 2026-10-19) | **구현(§5a)** — FastAPI(`src/webapi`, 새 진단 로직 없음) + Next.js(`web/`). 로그인, runs 목록/상세, finding review/retest. 실제 Chromium 으로 end-to-end 확인. assets/traffic/agents/mcp/tools/settings/chat 등 나머지 artex 화면은 범위 밖 |
 
-3(자동 점검 A)은 오버레이 데이터 6/6건이 전부 등록돼 WEB 플랫폼의 config-check형 항목은 더 추가할 게 없다 — 남은 건 §6 HTS 등으로의 확장(§7A는 platform·checklist_id 를 하드코딩하지 않으므로 데이터만 추가하면 됨, 이번에는 보류). 4(자동 점검 B)는 §7B 가 이름 붙인 7종 신호·SQLi 차등 검증·실제 MCP 연동까지 전부 끝나 "구현"으로 올렸다. 5(예산 분리)도 완료(단, 10 번으로 탐색 쪽 강제는 없어짐). 0a(체크리스트 분리·자율 탐색 bootstrap), 8a(자율 탐색 전용 보고서), 9(Finding 검토 워크플로), 10(artex 자율성 동등화)도 완료. 7은 웹 관련 두 항목(리다이렉트 하위 요청 범위 검사, Burp 이력 기반 자산 추출)을 2026-10-19 에 마무리했고 모바일 Word 템플릿만 남았다. 남은 우선순위는 8b(체크리스트 사후 부착) → 6(HTS 확장, 보류 중) → 7(모바일 템플릿) → 웹 UI(artex 의 findings/tasks 화면 참고, 신규 착수).
+3(자동 점검 A)은 오버레이 데이터 6/6건이 전부 등록돼 WEB 플랫폼의 config-check형 항목은 더 추가할 게 없다 — 남은 건 §6 HTS 등으로의 확장(§7A는 platform·checklist_id 를 하드코딩하지 않으므로 데이터만 추가하면 됨, 이번에는 보류). 4(자동 점검 B)는 §7B 가 이름 붙인 7종 신호·SQLi 차등 검증·실제 MCP 연동까지 전부 끝나 "구현"으로 올렸다. 5(예산 분리)도 완료(단, 10 번으로 탐색 쪽 강제는 없어짐). 0a(체크리스트 분리·자율 탐색 bootstrap), 8a(자율 탐색 전용 보고서), 9(Finding 검토 워크플로), 10(artex 자율성 동등화)도 완료. 7은 웹 관련 두 항목(리다이렉트 하위 요청 범위 검사, Burp 이력 기반 자산 추출)을 2026-10-19 에 마무리했고 모바일 Word 템플릿만 남았다. **웹 UI(§5a)도 2026-10-19 에 findings/runs(tasks) MVP 를 구현**(artex 의 나머지 화면은 범위 밖). 남은 우선순위는 8b(체크리스트 사후 부착) → 6(HTS 확장, 보류 중) → 7(모바일 템플릿) → 웹 UI 확장(artex 의 assets/traffic 등 나머지 화면, 필요해지면).
 
 ## 9. 복구와 문제 해결
 
