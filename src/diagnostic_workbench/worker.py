@@ -15,6 +15,7 @@ from urllib.parse import urldefrag, urljoin
 from psycopg.types.json import Jsonb
 
 from audit import schemas, signals
+from audit.adapters import burp as burp_adapter
 from audit.checklist_engine import is_applicable, render_args
 from audit.local_model import LLMError, build_analysis_messages
 from audit.models import AuditError, PolicyDenied, ToolError, ToolOutput
@@ -25,6 +26,11 @@ from . import backlog, db, evidence, policy, tools
 
 _LEGACY_TO_DB = {"MANUAL_REVIEW": "NEEDS_REVIEW"}
 _LINK = re.compile(r"/url: (\S+)")  # Playwright 스냅샷의 링크 표기
+# Burp 이력/Organizer/Scanner 결과 — 전부 adapters.burp.scope_filter(post) 가 같은 모양({"items": [...]})
+# 으로 걸러준 뒤 증적에 저장되므로(범위 밖은 이미 제거됨), 같은 방식으로 자산을 추출한다
+# (README §7 "Burp 이력 기반 자산 추출", 2026-10-19 구현).
+_BURP_HISTORY_TOOLS = {"mcp:burp/get_proxy_http_history", "mcp:burp/get_proxy_http_history_regex",
+                       "mcp:burp/get_organizer_items", "mcp:burp/get_scanner_issues"}
 
 
 def load_item(ctx, item: dict) -> dict:
@@ -287,6 +293,19 @@ def _observe_assets(ctx, it, tool, args, out, evidence_id):
             except PolicyDenied:
                 continue
             edge(page, "links_to", asset("url", link))
+    elif tool in _BURP_HISTORY_TOOLS:
+        try:
+            items = json.loads(out.data).get("items", [])
+        except ValueError:
+            return
+        for raw in items:
+            for url in burp_adapter.request_urls(raw):
+                url = urldefrag(url).url
+                try:  # scope_filter 가 호스트 기준으로 이미 걸렀지만, 전체 URL 기준으로 다시 확인한다
+                    ctx.policy.check_url(url, it["target"])
+                except PolicyDenied:
+                    continue
+                edge(it["asset_id"], "serves", asset("url", url))
 
 
 def _analyze(ctx, body, target, ev: dict) -> dict:

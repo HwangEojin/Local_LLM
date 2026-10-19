@@ -86,6 +86,9 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
 
 
 _PAGE_URL = re.compile(r"Page URL: (\S+)")
+# @playwright/mcp 의 browser_network_requests 출력 형식(packages/playwright-core/src/tools/backend/network.ts
+# renderRequestLine): "N. [METHOD] url => [STATUS] statusText" 또는 "=> [FAILED] errorText".
+_NETWORK_REQUEST_LINE = re.compile(r"^\d+\.\s+\[\w+\]\s+(\S+)", re.MULTILINE)
 
 
 def _texts(data: bytes) -> str:
@@ -97,22 +100,39 @@ def _texts(data: bytes) -> str:
         return raw
 
 
+def _check_landed_url(ctx, target, url: str) -> str | None:
+    if url.startswith("about:"):
+        return None
+    try:
+        ctx.policy.check_url(url, target)
+    except PolicyDenied as e:
+        return f"도구가 범위 밖 주소에 도착함: {e}"
+    hit = _excluded(url, ctx.cfg.exclude)
+    if hit:
+        return f"도구가 제외 대상 '{hit}' 에 도착함: {url}"
+    return None
+
+
 def landed_out_of_scope(ctx, tool: str, data: bytes, asset_id) -> str | None:
     """도구가 실제로 도착한 주소가 범위를 벗어났으면 그 설명을 돌려준다(리다이렉트로 인한 범위 이탈).
 
-    ponytail: 출력 형식을 실제로 확인한 Playwright MCP('Page URL: ...')만 본다. 다른 도구는 형식 확인 후 추가.
+    ponytail: 출력 형식을 실제로 확인한 Playwright MCP 만 본다. 다른 도구는 형식 확인 후 추가.
+    Page URL(최상위 탐색 결과)은 모든 browser_* 호출 공통 꼬리말에 붙는다. browser_network_requests 는
+    그 페이지가 실제로 보낸 하위 요청(XHR/fetch/스크립트/이미지 등)까지 같은 범위 검사를 받는다 — 페이지
+    자체는 범위 안이어도 그 안의 하위 요청이 범위 밖으로 나가는 경우를 잡는다(§7 "리다이렉트 하위 요청
+    범위 검사", 2026-10-19 구현).
     """
     if not tool.startswith("mcp:playwright/"):
         return None
     target = ctx.targets[asset_id]
-    for url in _PAGE_URL.findall(_texts(data)):
-        if url.startswith("about:"):
-            continue
-        try:
-            ctx.policy.check_url(url, target)
-        except PolicyDenied as e:
-            return f"도구가 범위 밖 주소에 도착함: {e}"
-        hit = _excluded(url, ctx.cfg.exclude)
-        if hit:
-            return f"도구가 제외 대상 '{hit}' 에 도착함: {url}"
+    text = _texts(data)
+    for url in _PAGE_URL.findall(text):
+        err = _check_landed_url(ctx, target, url)
+        if err:
+            return err
+    if tool == "mcp:playwright/browser_network_requests":
+        for url in _NETWORK_REQUEST_LINE.findall(text):
+            err = _check_landed_url(ctx, target, url)
+            if err:
+                return f"하위 요청 중 {err}"
     return None
