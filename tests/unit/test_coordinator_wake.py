@@ -49,7 +49,7 @@ class WakeConditionTest(unittest.TestCase):
         name = "pytest-worker"
         deadline = time.monotonic() + 10
         start = time.monotonic()
-        item, reason = coordinator._wait_for_wake(ctx, self.conn, run["id"], self.cfg, name, deadline)
+        item, reason = coordinator._wait_for_wake(ctx, self.conn, run["id"], self.cfg, name, deadline, lambda *a, **k: None)
         elapsed = time.monotonic() - start
         self.assertIsNone(item)
         self.assertEqual(reason, "NO_WORK")
@@ -66,7 +66,7 @@ class WakeConditionTest(unittest.TestCase):
             self.cfg.stop_file.touch()
         threading.Thread(target=trigger, daemon=True).start()
         try:
-            item, reason = coordinator._wait_for_wake(ctx, self.conn, run["id"], self.cfg, name, deadline)
+            item, reason = coordinator._wait_for_wake(ctx, self.conn, run["id"], self.cfg, name, deadline, lambda *a, **k: None)
         finally:
             self.cfg.stop_file.unlink(missing_ok=True)
         self.assertIsNone(item)
@@ -92,7 +92,7 @@ class WakeConditionTest(unittest.TestCase):
         self.conn.commit()
         deadline = time.monotonic() + 10
         start = time.monotonic()
-        item, reason = coordinator._wait_for_wake(ctx, self.conn, run["id"], self.cfg, name, deadline)
+        item, reason = coordinator._wait_for_wake(ctx, self.conn, run["id"], self.cfg, name, deadline, lambda *a, **k: None)
         elapsed = time.monotonic() - start
         self.assertIsNotNone(item)
         self.assertIsNone(reason)

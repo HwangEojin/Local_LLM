@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import collections
 import threading
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -21,6 +23,26 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 _LOCK = threading.Lock()
 _RUNNING_LOOPS: dict[str, threading.Thread] = {}
 
+# coordinator.run_loop 가 찍는 진행 메시지(log=print 가 원래 받는 것)를 run_id 별로 모아 둔다. 증거가
+# 아니라 사람이 보는 콘솔 출력일 뿐이므로 DB 가 아니라 메모리에만 둔다(§11: 증거/감사와는 다른 것).
+# _RUNNING_LOOPS 와 같은 제약: 이 프로세스 안에서만 유효, 재시작하면 비워진다.
+_LOG_MAXLEN = 500
+_RUN_LOGS: dict[str, collections.deque] = {}
+
+
+def _append_log(run_id: str, message: str) -> None:
+    with _LOCK:
+        buf = _RUN_LOGS.setdefault(run_id, collections.deque(maxlen=_LOG_MAXLEN))
+        buf.append({"ts": datetime.now(timezone.utc).isoformat(), "message": message})
+
+
+def _make_logger(run_id: str):
+    def log(*args, **kwargs):
+        message = " ".join(str(a) for a in args)
+        print(message, **kwargs)  # 터미널(백엔드 프로세스 stdout)에서도 그대로 보이게 유지
+        _append_log(run_id, message)
+    return log
+
 
 def _loop_running(run_id) -> bool:
     with _LOCK:
@@ -31,11 +53,12 @@ def _run_loop_background(cfg, run_id: str) -> None:
     conn = wb_db.connect(cfg.dsn)
     try:
         run = wb_db.resolve_run(conn, run_id)
-        coordinator.run_loop(cfg, conn, run, log=lambda *_a, **_k: None)
+        coordinator.run_loop(cfg, conn, run, log=_make_logger(run_id))
     except Exception as e:
         # 백그라운드 스레드의 예외는 아무도 받지 않는다(요청-응답 주기가 이미 끝난 뒤). run_loop 이
         # RUNNING 으로 바꾸기 전에 실패하면(예: LLM 연결 불가) runs 테이블에 아무 흔적도 안 남으므로,
         # 여기서 PAUSED + 사유로 명시적으로 남겨 모니터링 화면에서 왜 멈췄는지 보이게 한다.
+        _append_log(run_id, f"[web] run {run_id} 백그라운드 루프 오류: {type(e).__name__}: {e}")
         print(f"[web] run {run_id} 백그라운드 루프 오류: {type(e).__name__}: {e}")
         try:
             conn.rollback()
@@ -235,3 +258,15 @@ def download_evidence(run_ref: str, evidence_ref: str,
 def get_activity(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
     run = _load_run(conn, run_ref)
     return traces.get_run_trace(conn, run["id"], limit=200)
+
+
+@router.get("/{run_ref}/server-log")
+def get_server_log(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """`run start` 가 백그라운드 스레드에서 찍는 진행 메시지(CLI 의 log=print 와 같은 것). 증거가 아니라
+    사람이 보는 콘솔 출력이라 DB 가 아니라 이 프로세스 메모리에서만 보관한다(위 _RUN_LOGS 참고) — 웹
+    서버를 재시작하면 비워지고, 그 사이 기록은 터미널 stdout 에 그대로 남아 있다.
+    """
+    run = _load_run(conn, run_ref)
+    with _LOCK:
+        buf = _RUN_LOGS.get(str(run["id"]))
+        return list(buf) if buf else []
