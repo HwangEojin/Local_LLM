@@ -26,7 +26,18 @@ def _stop_reason(conn, run_id, cfg, deadline) -> str | None:
     return None
 
 
-def _wait_for_wake(ctx, conn, run_id, cfg, name, deadline):
+def _plan_and_log(ctx, log) -> dict:
+    """planner.plan 을 부르고 그 결과를 로그에 남긴다 — LLM 탐색 제안은 수십 초 걸릴 수 있어(§2), 그
+    사이 서버 로그(웹 UI "서버 로그" 탭)가 비어 보이지 않게 호출 전후로 상태를 찍는다.
+    """
+    log("  계획 수립 중... (탐색 제안이 있으면 LLM 호출 포함, 최대 수십 초)")
+    stats = planner.plan(ctx)
+    log(f"  계획 완료: 새 체크리스트 작업 {stats['created']}건, 탐색 제안 {stats['explorations']}건, "
+        f"임대 회수 {stats['reclaimed']}건")
+    return stats
+
+
+def _wait_for_wake(ctx, conn, run_id, cfg, name, deadline, log):
     """할 일이 당장 없을 때 기다린다. 이벤트+디바운스(800ms)+하트비트(600s) 로 깨어나 다시 계획해 본다
     (Postgres 를 짧은 간격으로 폴링한다 — 거의 동시에 온 이벤트를 한 번에 묶고, 이벤트를 놓쳐도 하트비트가
     안전망이 된다). 새 작업을 찾으면 (작업, None) 을,
@@ -46,7 +57,7 @@ def _wait_for_wake(ctx, conn, run_id, cfg, name, deadline):
             debounce_until = now + _DEBOUNCE_S
         heartbeat_due = now > heartbeat_at
         if heartbeat_due or (has_event and debounce_until is not None and now >= debounce_until):
-            planner.plan(ctx)
+            _plan_and_log(ctx, log)
             item = backlog.claim(conn, run_id, name, cfg.lease_s)
             if item is not None:
                 return item, None
@@ -94,14 +105,14 @@ def run_loop(cfg, conn, run: dict, log=print) -> dict:
             woke = conn.execute("SELECT 1 FROM change_events WHERE run_id=%s AND processed_at IS NULL LIMIT 1",
                                 (run_id,)).fetchone()
             if first or woke:
-                planner.plan(ctx)
+                _plan_and_log(ctx, log)
                 first = False
             item = backlog.claim(conn, run_id, name, cfg.lease_s)
             if item is None:
-                planner.plan(ctx)  # 깨우기 신호를 놓쳤어도 DB 상태에서 복구한다
+                _plan_and_log(ctx, log)  # 깨우기 신호를 놓쳤어도 DB 상태에서 복구한다
                 item = backlog.claim(conn, run_id, name, cfg.lease_s)
             if item is None:
-                item, wait_stop = _wait_for_wake(ctx, conn, run_id, cfg, name, deadline)
+                item, wait_stop = _wait_for_wake(ctx, conn, run_id, cfg, name, deadline, log)
                 if wait_stop == "CANCELLED":
                     conn.commit()
                     return db.resolve_run(conn, str(run_id))

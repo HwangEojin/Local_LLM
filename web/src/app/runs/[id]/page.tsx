@@ -16,6 +16,7 @@ import {
   Finding,
   FINDING_STATUSES,
   RunDetail,
+  ServerLogEntry,
 } from "@/lib/api";
 
 function RunControls({ detail, onChanged }: { detail: RunDetail; onChanged: () => void }) {
@@ -415,6 +416,45 @@ function EvidenceTab({ runId }: { runId: string }) {
   );
 }
 
+function ResultPreview({ runId, entry }: { runId: string; entry: ActivityEntry }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!entry.evidence_id) return null;
+  const isText = !entry.evidence_media_type || /^(text\/|application\/(json|xml))/.test(entry.evidence_media_type);
+
+  async function toggle() {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (text !== null || error) return;
+    try {
+      const res = await fetch(downloadUrl(runId, entry.evidence_id!), { credentials: "include" });
+      if (!res.ok) throw new Error(`결과를 불러오지 못함 (HTTP ${res.status})`);
+      const body = isText ? await res.text() : `[이진 데이터, ${entry.evidence_size ?? "?"}바이트] 다운로드로 확인`;
+      setText(body.length > 4000 ? body.slice(0, 4000) + "\n... (잘림)" : body);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "결과를 불러오지 못함");
+    }
+  }
+
+  return (
+    <div className="mt-0.5">
+      <button onClick={toggle} className="text-blue-700 hover:underline">
+        {open ? "결과 접기" : "결과 보기"}
+      </button>
+      {open && (
+        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-neutral-50 p-2 text-[11px] text-neutral-700">
+          {error ?? text ?? "불러오는 중..."}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function ActivityTab({ runId }: { runId: string }) {
   const [items, setItems] = useState<ActivityEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -442,8 +482,42 @@ function ActivityTab({ runId }: { runId: string }) {
           <span className="text-neutral-700">#{t.step_no}</span>{" "}
           <span className="font-semibold">{t.tool}</span>{" "}
           <StatusBadge value={t.status} />{" "}
+          <span className="text-neutral-400">{t.policy_decision}</span>{" "}
           <span className="text-neutral-500">{t.asset_kind ? `${t.asset_kind}:${t.asset_value}` : ""}</span>
+          {t.args != null && (
+            <div className="mt-0.5 text-neutral-600">명령어: {JSON.stringify(t.args)}</div>
+          )}
+          {t.policy_reason && <div className="mt-0.5 text-neutral-400">정책: {t.policy_reason}</div>}
           {t.error && <div className="mt-0.5 text-red-600">오류: {t.error}</div>}
+          <ResultPreview runId={runId} entry={t} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ServerLogTab({ runId }: { runId: string }) {
+  const [items, setItems] = useState<ServerLogEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchLog = () =>
+      api.get<ServerLogEntry[]>(`/api/runs/${runId}/server-log`).then(setItems).catch((e) => setError(e.message));
+    fetchLog();
+    const id = setInterval(fetchLog, 2000); // 명령 실행 로그보다 더 자주(실시간처럼) 갱신
+    return () => clearInterval(id);
+  }, [runId]);
+
+  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  if (!items) return <p className="text-sm text-neutral-500">불러오는 중...</p>;
+  if (items.length === 0)
+    return <p className="text-sm text-neutral-500">아직 서버 로그 없음 (실행을 시작하면 여기에 쌓임)</p>;
+
+  return (
+    <div className="max-h-[32rem] overflow-auto rounded-lg border border-neutral-200 bg-neutral-900 p-3 font-mono text-xs text-neutral-100">
+      {items.map((l, i) => (
+        <div key={i} className="whitespace-pre-wrap">
+          <span className="text-neutral-500">{new Date(l.ts).toLocaleTimeString()}</span> {l.message}
         </div>
       ))}
     </div>
@@ -453,7 +527,7 @@ function ActivityTab({ runId }: { runId: string }) {
 function RunDetailBody({ runId }: { runId: string }) {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"findings" | "backlog" | "evidence" | "activity">("findings");
+  const [tab, setTab] = useState<"findings" | "backlog" | "evidence" | "activity" | "server-log">("findings");
 
   const load = useCallback(() => {
     api
@@ -477,7 +551,7 @@ function RunDetailBody({ runId }: { runId: string }) {
       <h1 className="mb-4 font-mono text-sm text-neutral-500">{runId}</h1>
       <Overview detail={detail} onChanged={load} />
       <div className="mb-3 flex gap-4 border-b border-neutral-200 text-sm">
-        {(["findings", "backlog", "evidence", "activity"] as const).map((t) => (
+        {(["findings", "backlog", "evidence", "activity", "server-log"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -485,7 +559,13 @@ function RunDetailBody({ runId }: { runId: string }) {
               tab === t ? "border-neutral-900 font-medium" : "border-transparent text-neutral-500"
             }`}
           >
-            {{ findings: "Findings", backlog: "Backlog", evidence: "Evidence", activity: "Activity(모니터링)" }[t]}
+            {{
+              findings: "Findings",
+              backlog: "Backlog",
+              evidence: "Evidence",
+              activity: "Activity(명령·결과)",
+              "server-log": "서버 로그(실시간)",
+            }[t]}
           </button>
         ))}
       </div>
@@ -493,6 +573,7 @@ function RunDetailBody({ runId }: { runId: string }) {
       {tab === "backlog" && <BacklogTab runId={runId} />}
       {tab === "evidence" && <EvidenceTab runId={runId} />}
       {tab === "activity" && <ActivityTab runId={runId} />}
+      {tab === "server-log" && <ServerLogTab runId={runId} />}
     </div>
   );
 }
