@@ -119,7 +119,12 @@ export type ActivityEntry = {
   asset_value: string | null;
   task_kind: string | null;
   task_reason: string | null;
+  evidence_media_type: string | null;
+  evidence_size: number | null;
+  evidence_success: boolean | null;
 };
+
+export type ServerLogEntry = { ts: string; message: string };
 
 export type Target = {
   target_id: string;
