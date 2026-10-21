@@ -34,6 +34,7 @@ def cmd_web(args):
         print("웹 UI 의존성이 없음: pip install -e '.[web]' 로 설치하세요", file=sys.stderr)
         return 2
     import os
+    config.load(args.home)  # .env 를 지금 읽어 둔다 — 아래 환경 변수 검사가 .env 값을 보게 하려면 필요함
     if not os.environ.get("WORKBENCH_WEB_PASSWORD") or not os.environ.get("WORKBENCH_WEB_SECRET"):
         print("환경 변수 WORKBENCH_WEB_PASSWORD, WORKBENCH_WEB_SECRET 이 .env 에 필요합니다", file=sys.stderr)
         return 2
