@@ -4,7 +4,6 @@
 하는 단위테스트 범위를 벗어남) — check_ready 가 '설치는 됐지만 로그인 안 됨'을 제대로 구분하는지,
 그리고 explore.make_llm 이 환경 변수로 Ollama/claude_cli 를 올바르게 고르는지만 확인한다.
 """
-import os
 import types
 import unittest
 from unittest import mock
@@ -38,28 +37,25 @@ class CheckReadyTest(unittest.TestCase):
 
 
 class MakeLlmProviderSelectionTest(unittest.TestCase):
-    """explore.make_llm 이 환경 변수만으로 Ollama/claude_cli 를 정확히 고르는지, 실제 네트워크/
-    서브프로세스 호출 없이(check_ready 를 스텁으로 바꿔) 확인한다.
+    """explore.make_llm 이 runs.llm_provider(실행 생성 시 고정된 값)만으로 Ollama/claude_cli 를
+    정확히 고르는지, 실제 네트워크/서브프로세스 호출 없이(check_ready 를 스텁으로 바꿔) 확인한다.
     """
-    def _fake_ctx(self, raw: dict):
+    def _fake_ctx(self, raw: dict, llm_provider: str):
         settings = types.SimpleNamespace(ollama={"base_url": "http://127.0.0.1:11434", "model": "x",
                                                   "timeout_s": 1, "max_request_bytes": 1, "max_response_bytes": 1,
                                                   "max_calls_per_run": 1, "max_retries": 0},
                                          external_api_enabled=False, raw=raw)
         cfg = types.SimpleNamespace(settings=settings)
-        return types.SimpleNamespace(cfg=cfg, conn=mock.Mock(), run={"id": "test-run"})
+        return types.SimpleNamespace(cfg=cfg, conn=mock.Mock(), run={"id": "test-run", "llm_provider": llm_provider})
 
     def test_defaults_to_ollama(self):
-        os.environ.pop("WORKBENCH_LLM_PROVIDER", None)
-        ctx = self._fake_ctx({})
+        ctx = self._fake_ctx({}, "ollama")
         with mock.patch("audit.local_model.OllamaClient.check_ready", return_value={}):
             llm = explore.make_llm(ctx)
         self.assertEqual(type(llm).__name__, "OllamaClient")
 
-    def test_env_var_selects_claude_cli(self):
-        os.environ["WORKBENCH_LLM_PROVIDER"] = "claude_cli"
-        self.addCleanup(os.environ.pop, "WORKBENCH_LLM_PROVIDER", None)
-        ctx = self._fake_ctx({"claude_cli": {"model": "claude-sonnet-4-5"}})
+    def test_run_provider_selects_claude_cli(self):
+        ctx = self._fake_ctx({"claude_cli": {"model": "claude-sonnet-4-5"}}, "claude_cli")
         with mock.patch("audit.claude_cli_model.ClaudeCliClient.check_ready", return_value={}):
             llm = explore.make_llm(ctx)
         self.assertEqual(type(llm).__name__, "ClaudeCliClient")

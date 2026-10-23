@@ -103,16 +103,22 @@ def reapply_overlays(conn, checklists: Checklists, checklist_id: str, version: s
 # 'approval'로 백필됨(migrations/0007).
 AUTONOMY_LEVELS = ("approval", "full")
 
+# ollama: 기본값(로컬). claude_cli: 임시 테스트용 — 이 PC 에 로그인된 claude CLI(Claude Code 구독,
+# API 과금 아님) 호출. scope/autonomy 와 같은 방식으로 생성 시점에 고정하고 실행 중 바꾸지 않는다.
+LLM_PROVIDERS = ("ollama", "claude_cli")
+
 
 def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id: str | None = None,
                version: str | None = None, check_ids: list[str] | None = None, use_llm: bool = False,
                budget: dict | None = None, allowed_tools: list[str] | None = None, autonomy: str = "approval",
-               goal_text: str | None = None) -> dict:
+               goal_text: str | None = None, llm_provider: str = "ollama") -> dict:
     """실행 생성. checklist_id 가 없으면 체크리스트 항목 없이 자율 탐색만 하는 실행이 된다 — 체크리스트는
     필수 조건이 아니라 선택적으로 곁들이는 기능이다(CLAUDE.md §3.2/§13).
     """
     if autonomy not in AUTONOMY_LEVELS:
         raise ConfigError(f"autonomy 는 {AUTONOMY_LEVELS} 중 하나여야 함: {autonomy}")
+    if llm_provider not in LLM_PROVIDERS:
+        raise ConfigError(f"llm_provider 는 {LLM_PROVIDERS} 중 하나여야 함: {llm_provider}")
     if not checklist_id and not use_llm:
         raise ConfigError("체크리스트 없이 실행하려면 --llm 이 필요함(자율 탐색은 LLM 제안에 의존함)")
     scope = audit_config.load_scope(cfg.home)
@@ -143,9 +149,9 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
 
     run = conn.execute(
         "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm, allowed_tools, "
-        "autonomy) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "autonomy, llm_provider) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (scope["engagement_id"], operator, cv["id"] if cv else None, Jsonb(scope),
-         Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy)).fetchone()
+         Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy, llm_provider)).fetchone()
     default_goal = f"체크리스트 {checklist_id}@{version} 진단" if checklist_id else f"자율 진단: {', '.join(target_ids)}"
     goal = conn.execute(
         "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'goal','operator',%s) RETURNING id",
@@ -170,7 +176,7 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
         "plan": {"plan_id": str(run["id"]), "checklist_id": checklist_id, "checklist_version": version,
                  "targets": [tid for tid, _ in targets], "use_llm": use_llm},
         "scope": scope, "tasks": tasks, "use_llm": use_llm, "operator": operator, "budget": run["budget"],
-        "allowed_tools": allowed_tools, "autonomy": autonomy})
+        "allowed_tools": allowed_tools, "autonomy": autonomy, "llm_provider": llm_provider})
     db.notify_change(conn, run["id"], "run_created")
     conn.commit()
     return run

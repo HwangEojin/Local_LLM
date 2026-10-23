@@ -240,9 +240,10 @@ def cmd_run(args):
         run = runs.create_run(conn, cfg, args.targets.split(","), args.operator, checklist_id=cid, version=ver,
                               check_ids=args.check_ids.split(",") if args.check_ids else None, use_llm=args.llm,
                               budget=budget, allowed_tools=args.tools.split(",") if args.tools else None,
-                              autonomy=args.autonomy, goal_text=args.goal)
+                              autonomy=args.autonomy, goal_text=args.goal, llm_provider=args.llm_provider)
         print(f"실행 생성됨: {run['id']}  자율 모드={run['autonomy']}"
-              + ("" if cid else "  (체크리스트 없음 — 자율 탐색 전용)"))
+              + ("" if cid else "  (체크리스트 없음 — 자율 탐색 전용)")
+              + (f"  LLM={run['llm_provider']}" if run["llm_provider"] != "ollama" else ""))
         if run["autonomy"] == "full":
             print("  주의: 위험도 'write/dangerous' 도구가 범위 내에서 사람 승인 없이 자동 실행됩니다. "
                   "실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
@@ -626,6 +627,9 @@ def build_parser():
                    help="approval(기본, 항상 승인) | full(모두 자동, 범위 내). "
                         "진단 시작 전에만 정하며 실행 중 바꿀 수 없음")
     r.add_argument("--llm", action="store_true", help="로컬 LLM 참고 의견과 탐색 제안 사용")
+    r.add_argument("--llm-provider", choices=runs.LLM_PROVIDERS, default="ollama",
+                   help="ollama(기본, 로컬) | claude_cli(임시 테스트 — 이 PC 에 로그인된 claude CLI 구독 호출, "
+                        "API 과금 아님). --llm 과 함께 쓸 때만 의미 있음")
     r.add_argument("--max-tasks", type=int)
     r.add_argument("--max-explorations", type=int)
     b = sub.add_parser("backlog", help="작업 큐(TodoList) 조회")

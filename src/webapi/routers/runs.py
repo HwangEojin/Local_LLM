@@ -96,7 +96,7 @@ def list_runs(conn=Depends(get_conn), user: str = Depends(current_user), q: str 
     order_sql = "ASC" if order.lower() == "asc" else "DESC"
     total = conn.execute(f"SELECT count(*) AS n FROM runs r {where_sql}", params).fetchone()["n"]
     rows = conn.execute(
-        f"SELECT r.id, r.status, r.operator, r.autonomy, r.use_llm, r.created_at, r.stop_reason, "
+        f"SELECT r.id, r.status, r.operator, r.autonomy, r.use_llm, r.llm_provider, r.created_at, r.stop_reason, "
         f"r.checklist_version_id IS NOT NULL AS has_checklist, "
         f"(SELECT count(*) FROM findings f WHERE f.run_id = r.id) AS findings_count "
         f"FROM runs r {where_sql} ORDER BY {sort_col} {order_sql}, r.id LIMIT %(limit)s OFFSET %(offset)s",
@@ -122,6 +122,7 @@ class CreateRunBody(BaseModel):
     max_tasks: int | None = None
     max_explorations: int | None = None
     goal: str | None = None
+    llm_provider: str = "ollama"
 
 
 @router.post("")
@@ -136,7 +137,8 @@ def create_run(body: CreateRunBody, cfg=Depends(get_cfg), conn=Depends(get_conn)
         budget = wb_config.validate_budget(budget_in) if budget_in else None
         run = wb_runs.create_run(conn, cfg, body.targets, body.operator, checklist_id=cid, version=ver,
                                  check_ids=body.check_ids, use_llm=body.use_llm, budget=budget,
-                                 allowed_tools=body.tools, autonomy=body.autonomy, goal_text=body.goal)
+                                 allowed_tools=body.tools, autonomy=body.autonomy, goal_text=body.goal,
+                                 llm_provider=body.llm_provider)
     except AuditError as e:
         conn.rollback()
         raise HTTPException(400, str(e)) from None
