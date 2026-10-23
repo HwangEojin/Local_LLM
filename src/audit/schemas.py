@@ -152,7 +152,9 @@ SCOPE = {
                 "required": ["target_id", "type", "value"],
                 "properties": {"target_id": _ID, "type": {"enum": ["path", "host", "url"]},
                                "value": _STR, "description": {"type": "string"},
-                               "platform": _STR},
+                               "platform": _STR,
+                               # 진단 ID 의 대상 약어(선택). 없으면 target_id 에서 자동으로 만든다.
+                               "code": {"type": "string", "pattern": r"^[A-Z0-9]{2,6}$"}},
             },
         },
     },

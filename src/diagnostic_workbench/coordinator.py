@@ -84,6 +84,8 @@ def run_loop(cfg, conn, run: dict, log=print) -> dict:
     """
     if run["status"] == "CANCELLED":
         raise AuditError(f"실행 {run['id']} 은(는) 이미 {run['status']} 상태임")
+    if run.get("deleted_at"):
+        raise AuditError(f"삭제된 진단은 시작할 수 없음: {run['run_code']} (먼저 복원하세요)")
     ctx = build_context(cfg, conn, run)
     if run["use_llm"]:
         ctx.llm = explore.make_llm(ctx)

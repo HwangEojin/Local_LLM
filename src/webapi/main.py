@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import deps
+from .routers import admin as admin_router
 from .routers import auth as auth_router
 from .routers import environment as environment_router
 from .routers import findings as findings_router
@@ -27,6 +28,7 @@ app.include_router(auth_router.router)
 app.include_router(environment_router.router)
 app.include_router(runs_router.router)
 app.include_router(findings_router.router)
+app.include_router(admin_router.router)
 
 
 @app.get("/api/health")

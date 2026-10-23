@@ -32,6 +32,22 @@ def list_findings(run_ref: str, conn=Depends(get_conn), user: str = Depends(curr
     return conn.execute("SELECT * FROM findings WHERE run_id=%s ORDER BY created_at DESC", (run["id"],)).fetchall()
 
 
+@router.get("/{finding_ref}")
+def get_finding(run_ref: str, finding_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """상세 패널용: finding + 연결된 증적(메타만) + 검토 이력. 읽기 전용."""
+    run = _load_run(conn, run_ref)
+    f = _load_finding(conn, run["id"], finding_ref)
+    evidence = conn.execute(
+        "SELECT e.id, e.tool, e.success, e.size, e.media_type, e.collected_at FROM finding_evidence fe "
+        "JOIN evidence e ON e.id = fe.evidence_id WHERE fe.finding_id=%s ORDER BY e.collected_at", (f["id"],)
+    ).fetchall()
+    history = conn.execute(
+        "SELECT old_status, new_status, reason, actor, evidence_ids, changed_at "
+        "FROM finding_review_history WHERE finding_id=%s ORDER BY changed_at DESC", (f["id"],)
+    ).fetchall()
+    return {"finding": f, "evidence": evidence, "history": history}
+
+
 class ReviewBody(BaseModel):
     status: str
     reason: str

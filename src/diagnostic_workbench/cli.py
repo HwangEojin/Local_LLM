@@ -250,8 +250,9 @@ def cmd_run(args):
         print(f"미리 보기: run plan {run['id']}   시작: run start {run['id']}")
         return 0
     if args.action == "list":
-        for r in conn.execute("SELECT id, status, operator, created_at FROM runs ORDER BY created_at DESC LIMIT 30"):
-            print(f"{r['id']}  {r['status']:<10} {r['operator']:<16} {r['created_at']:%Y-%m-%d %H:%M}Z")
+        for r in conn.execute("SELECT id, run_code, status, operator, created_at FROM runs "
+                              "WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 30"):  # 삭제 표시된 진단은 숨김
+            print(f"{r['run_code']}  {r['id']}  {r['status']:<10} {r['operator']:<16} {r['created_at']:%Y-%m-%d %H:%M}Z")
         return 0
     if not args.run:
         print(f"run {args.action} 에는 실행 ID(접두어 가능)가 필요합니다", file=sys.stderr)
