@@ -77,7 +77,7 @@ _SORT_COLUMNS = {"created_at": "r.created_at", "status": "r.status", "operator":
 @router.get("")
 def list_runs(conn=Depends(get_conn), user: str = Depends(current_user), q: str | None = None,
               status: str | None = None, sort: str = "created_at", order: str = "desc",
-              limit: int = 20, offset: int = 0):
+              limit: int = 20, offset: int = 0, deleted: str = "exclude", tests: str = "hide"):
     """검색(q: 실행 ID·운영자 부분 일치)·상태 필터(status: 콤마로 여러 개)·정렬·페이징.
     프론트가 모르는 값을 보내도 안전하게 기본값으로 떨어지게 한다(정렬 컬럼·방향은 화이트리스트).
     """
@@ -85,18 +85,29 @@ def list_runs(conn=Depends(get_conn), user: str = Depends(current_user), q: str 
     offset = max(0, offset)
     where, params = [], {}
     if q and q.strip():
-        where.append("(r.id::text ILIKE %(q)s OR r.operator ILIKE %(q)s)")
+        where.append("(r.run_code ILIKE %(q)s OR r.id::text ILIKE %(q)s OR r.operator ILIKE %(q)s)")
         params["q"] = f"%{q.strip()}%"
     statuses = [s.strip() for s in (status or "").split(",") if s.strip()]
     if statuses:
         where.append("r.status = ANY(%(statuses)s)")
         params["statuses"] = statuses
+    # 삭제 표시된 진단: 기본은 숨김, only=삭제된 것만, all=전부(알 수 없는 값은 기본으로 떨어진다)
+    if deleted == "only":
+        where.append("r.deleted_at IS NOT NULL")
+    elif deleted != "all":
+        where.append("r.deleted_at IS NULL")
+    # 테스트 진단: 운영자 이름이 'pytest' 로 시작하면 자동 테스트가 만든 진단으로 본다. 기본은 숨김(hide), show=포함, only=테스트만.
+    # (파라미터를 쓰는 쿼리라 LIKE 의 % 는 %% 로 쓴다)
+    if tests == "only":
+        where.append("r.operator ILIKE 'pytest%%'")
+    elif tests != "show":
+        where.append("r.operator NOT ILIKE 'pytest%%'")
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     sort_col = _SORT_COLUMNS.get(sort, _SORT_COLUMNS["created_at"])
     order_sql = "ASC" if order.lower() == "asc" else "DESC"
     total = conn.execute(f"SELECT count(*) AS n FROM runs r {where_sql}", params).fetchone()["n"]
     rows = conn.execute(
-        f"SELECT r.id, r.status, r.operator, r.autonomy, r.use_llm, r.llm_provider, r.created_at, r.stop_reason, "
+        f"SELECT r.id, r.run_code, r.deleted_at, r.delete_reason, r.status, r.operator, r.autonomy, r.use_llm, r.llm_provider, r.created_at, r.stop_reason, "
         f"r.checklist_version_id IS NOT NULL AS has_checklist, "
         f"(SELECT count(*) FROM findings f WHERE f.run_id = r.id) AS findings_count "
         f"FROM runs r {where_sql} ORDER BY {sort_col} {order_sql}, r.id LIMIT %(limit)s OFFSET %(offset)s",
@@ -159,14 +170,18 @@ def get_run(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_us
         "(SELECT count(*) FROM findings WHERE run_id=%(r)s) AS findings, "
         "(SELECT count(*) FROM model_calls WHERE run_id=%(r)s) AS llm_calls",
         {"r": run["id"]}).fetchone()
-    return {"run": run, "coverage": {"verdicts": cov["verdicts"], "backlog": counts}, "usage": n,
-            "loop_running": _loop_running(run["id"])}
+    targets = [r["target_id"] for r in conn.execute(
+        "SELECT target_id FROM run_assets WHERE run_id=%s ORDER BY target_id", (run["id"],))]
+    return {"run": run, "targets": targets, "coverage": {"verdicts": cov["verdicts"], "backlog": counts},
+            "usage": n, "loop_running": _loop_running(run["id"])}
 
 
 @router.post("/{run_ref}/start")
 def start_run(run_ref: str, cfg=Depends(get_cfg), conn=Depends(get_conn), user: str = Depends(current_user)):
     run = _load_run(conn, run_ref)
     run_id = str(run["id"])
+    if run["deleted_at"]:
+        raise HTTPException(400, f"삭제된 진단은 시작할 수 없음: {run['run_code']} (먼저 복원하세요)")
     if run["status"] == "CANCELLED":
         raise HTTPException(400, f"실행 {run_id} 은(는) 이미 CANCELLED 상태임")
     with _LOCK:
@@ -190,6 +205,64 @@ def cancel_run(run_ref: str, conn=Depends(get_conn), user: str = Depends(current
     return {"cancelled_items": n}
 
 
+class DeleteBody(BaseModel):
+    reason: str
+    confirm: bool = False
+
+
+class BulkDeleteBody(DeleteBody):
+    refs: list[str]
+
+
+def _delete_one(conn, ref: str, user: str, reason: str) -> None:
+    run = _load_run(conn, ref)
+    if _loop_running(run["id"]):
+        raise HTTPException(409, f"{run['run_code']}: 실행 중인 진단은 삭제할 수 없음. 먼저 취소하세요")
+    try:
+        wb_runs.soft_delete_run(conn, run, f"web:{user}", reason)
+    except AuditError as e:
+        conn.rollback()
+        raise HTTPException(400, str(e)) from None
+
+
+@router.post("/bulk-delete")
+def bulk_delete_runs(body: BulkDeleteBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """여러 진단을 한 번에 삭제 표시한다. 일부가 실패해도 나머지는 진행하고, 건별 결과를 돌려준다."""
+    if not body.confirm:
+        raise HTTPException(400, "확인(confirm)이 필요한 변경입니다")
+    if not body.refs or len(body.refs) > 200:
+        raise HTTPException(422, "refs 는 1~200개여야 함")
+    if not body.reason.strip():
+        raise HTTPException(422, "삭제 사유를 입력하세요")
+    deleted, skipped = [], []
+    for ref in dict.fromkeys(body.refs):
+        try:
+            _delete_one(conn, ref, user, body.reason)
+            deleted.append(ref)
+        except HTTPException as e:
+            skipped.append({"ref": ref, "reason": e.detail})
+    return {"deleted": deleted, "skipped": skipped}
+
+
+@router.post("/{run_ref}/delete")
+def delete_run(run_ref: str, body: DeleteBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    if not body.confirm:
+        raise HTTPException(400, "확인(confirm)이 필요한 변경입니다")
+    _delete_one(conn, run_ref, user, body.reason)
+    return {"deleted": run_ref}
+
+
+@router.post("/{run_ref}/restore")
+def restore_run(run_ref: str, body: DeleteBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    run = _load_run(conn, run_ref)
+    try:
+        wb_runs.restore_run(conn, run, f"web:{user}", body.reason)
+    except AuditError as e:
+        conn.rollback()
+        raise HTTPException(400, str(e)) from None
+    return {"restored": run["run_code"]}
+
+
 @router.get("/{run_ref}/backlog")
 def get_backlog(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
     run = _load_run(conn, run_ref)
@@ -205,6 +278,31 @@ def _backlog_item(conn, run, ref: str) -> dict:
     if len(rows) != 1:
         raise HTTPException(404, f"작업 '{ref}' 을(를) 하나로 특정할 수 없음 ({len(rows)}건)")
     return rows[0]
+
+
+class RetryBody(BaseModel):
+    reason: str
+
+
+@router.post("/{run_ref}/backlog/{item_ref}/retry")
+def retry_backlog_item(run_ref: str, item_ref: str, body: RetryBody, conn=Depends(get_conn),
+                       user: str = Depends(current_user)):
+    """cli.cmd_retry 와 같은 동작: FAILED/BLOCKED 작업을 정책 판정부터 다시 받도록 PENDING 으로 되돌린다."""
+    if not body.reason.strip():
+        raise HTTPException(422, "재시도 사유를 입력하세요")
+    run = _load_run(conn, run_ref)
+    item = _backlog_item(conn, run, item_ref)
+    if item["status"] not in ("FAILED", "BLOCKED"):
+        raise HTTPException(400, f"FAILED/BLOCKED 작업만 다시 시도할 수 있음 (현재 {item['status']})")
+    conn.execute("UPDATE backlog_items SET status='PENDING', policy_class=NULL, blocked_reason=NULL, attempts=0, "
+                 "updated_at=now() WHERE id=%s", (item["id"],))
+    wb_db.audit(conn, run["id"], "retry_requested", {"backlog_item": str(item["id"]), "operator": f"web:{user}",
+                                                      "reason": body.reason.strip()})
+    wb_db.notify_change(conn, run["id"], "retry", item["id"])
+    if run["status"] == "COMPLETED":
+        conn.execute("UPDATE runs SET status='PAUSED', stop_reason='재시도 요청', ended_at=NULL WHERE id=%s", (run["id"],))
+    conn.commit()
+    return {"retried": str(item["id"])}
 
 
 class ApproveBody(BaseModel):

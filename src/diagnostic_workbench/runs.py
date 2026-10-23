@@ -1,7 +1,9 @@
 """실행 생성: 체크리스트 버전을 DB 로 가져오고, 범위 내 대상을 자산으로 등록하고, 실행별 체크리스트 행을 만든다."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import datetime
 
 from psycopg.types.json import Jsonb
 
@@ -108,6 +110,25 @@ AUTONOMY_LEVELS = ("approval", "full")
 LLM_PROVIDERS = ("ollama", "claude_cli")
 
 
+def target_abbr(target_id: str, code: str | None = None) -> str:
+    """진단 ID 의 대상 약어. scope 의 대상에 code 가 있으면 그것을, 없으면 target_id 의 첫 단어 앞 4글자를 쓴다.
+    (migrations/0009 의 백필과 같은 규칙)"""
+    if code:
+        return code
+    words = re.sub(r"[^A-Za-z0-9]+", " ", target_id).split()
+    return words[0][:4].upper() if words else "RUN"
+
+
+def next_run_code(conn, abbr: str) -> str:
+    """<약어>-<YYYYMMDD>-<일련번호>. 같은 약어·날짜 안에서 1부터 늘어난다.
+    advisory lock 은 호출한 트랜잭션이 끝날 때(create_run 의 commit)까지 유지돼 동시 생성 시 번호가 겹치지 않는다."""
+    day = datetime.now().strftime("%Y%m%d")
+    conn.execute("SELECT pg_advisory_xact_lock(hashtext('run_code'))")
+    last = conn.execute("SELECT max(substring(run_code from '-(\\d+)$')::int) AS n FROM runs WHERE run_code LIKE %s",
+                        (f"{abbr}-{day}-%",)).fetchone()["n"]
+    return f"{abbr}-{day}-{(last or 0) + 1:02d}"
+
+
 def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id: str | None = None,
                version: str | None = None, check_ids: list[str] | None = None, use_llm: bool = False,
                budget: dict | None = None, allowed_tools: list[str] | None = None, autonomy: str = "approval",
@@ -147,11 +168,14 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
                 raise ConfigError(f"대상 '{tid}' 의 platform '{t.platform}' 이(가) 체크리스트에 없음 (scope.json). "
                                   f"사용 가능: {', '.join(platforms)}")
 
+    first = targets[0][0]
+    code = next((t.get("code") for t in scope["targets"] if t["target_id"] == first), None)
+    run_code = next_run_code(conn, target_abbr(first, code))
     run = conn.execute(
         "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm, allowed_tools, "
-        "autonomy, llm_provider) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "autonomy, llm_provider, run_code) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (scope["engagement_id"], operator, cv["id"] if cv else None, Jsonb(scope),
-         Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy, llm_provider)).fetchone()
+         Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy, llm_provider, run_code)).fetchone()
     default_goal = f"체크리스트 {checklist_id}@{version} 진단" if checklist_id else f"자율 진단: {', '.join(target_ids)}"
     goal = conn.execute(
         "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'goal','operator',%s) RETURNING id",
@@ -180,6 +204,33 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
     db.notify_change(conn, run["id"], "run_created")
     conn.commit()
     return run
+
+
+def soft_delete_run(conn, run: dict, actor: str, reason: str) -> None:
+    """진단을 '삭제됨'으로 표시한다. 행·증적·감사 로그는 그대로 보존된다(0011 참고). 복원 가능.
+
+    '실행 중인 루프가 있는지'는 이 프로세스의 상태라 호출하는 쪽(웹 라우터)이 먼저 확인한다.
+    """
+    if run.get("deleted_at"):
+        raise ConfigError(f"이미 삭제된 진단: {run['run_code']}")
+    if not reason.strip():
+        raise ConfigError("삭제 사유가 필요함")
+    conn.execute("UPDATE runs SET deleted_at=now(), deleted_by=%s, delete_reason=%s, updated_at=now() WHERE id=%s",
+                 (actor, reason.strip(), run["id"]))
+    db.audit(conn, run["id"], "run_deleted", {"run_code": run["run_code"], "status": run["status"],
+                                              "actor": actor, "reason": reason.strip()})
+    conn.commit()
+
+
+def restore_run(conn, run: dict, actor: str, reason: str) -> None:
+    if not run.get("deleted_at"):
+        raise ConfigError(f"삭제되지 않은 진단: {run['run_code']}")
+    conn.execute("UPDATE runs SET deleted_at=NULL, deleted_by=NULL, delete_reason=NULL, updated_at=now() "
+                 "WHERE id=%s", (run["id"],))
+    db.audit(conn, run["id"], "run_restored", {"run_code": run["run_code"], "actor": actor,
+                                               "reason": reason.strip(), "was_deleted_by": run["deleted_by"],
+                                               "was_delete_reason": run["delete_reason"]})
+    conn.commit()
 
 
 @dataclass

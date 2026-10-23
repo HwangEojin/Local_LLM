@@ -91,6 +91,10 @@ def notify_change(conn, run_id, kind: str, ref_id=None):
 
 
 def resolve_run(conn, ref: str) -> dict:
+    """진단 ID(run_code, 대소문자 무시) 정확히 일치를 먼저 보고, 없으면 UUID 접두어로 찾는다."""
+    by_code = conn.execute("SELECT * FROM runs WHERE upper(run_code) = upper(%s)", (ref.strip(),)).fetchone()
+    if by_code:
+        return by_code
     rows = conn.execute("SELECT * FROM runs WHERE id::text LIKE %s",
                         (ref.replace("%", "").replace("_", "") + "%",)).fetchall()
     if len(rows) != 1:
