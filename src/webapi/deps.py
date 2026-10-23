@@ -27,6 +27,12 @@ def get_cfg() -> wb_config.Config:
     return _CFG
 
 
+def reset_cfg() -> None:
+    """관리 API 가 설정 파일을 바꾼 뒤 호출한다. 다음 요청에서 설정을 다시 읽는다."""
+    global _CFG
+    _CFG = None
+
+
 def get_conn(cfg: wb_config.Config = Depends(get_cfg)) -> Generator:
     conn = wb_db.connect(cfg.dsn)
     try:
