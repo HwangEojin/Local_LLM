@@ -2,7 +2,7 @@
   "ollama": {
     "base_url": "http://127.0.0.1:11434",
     "model": "qwen2.5:7b-instruct",
-    "timeout_s": 120,
+    "timeout_s": 240,
     "max_request_bytes": 65536,
     "max_response_bytes": 65536,
     "max_calls_per_run": 200,

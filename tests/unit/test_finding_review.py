@@ -103,12 +103,33 @@ class FindingReviewTest(unittest.TestCase):
         worker.set_finding_status(self.conn, rejected["id"], "REJECTED", "오탐 확인", actor="reviewer:pytest")
         self._finding(run["id"], asset_id, title="아직 미검토")  # CANDIDATE 로 남음
         meta = {"targets": [{"target_id": "baseline-demo", "name": "baseline-demo", "url": "", "kind": "WEB"}]}
-        findings, status_counts = reporting._findings_for_pentest_report(self.conn, run, meta)
+        findings, status_counts = reporting._findings_for_pentest_report(self.conn, self.cfg.evidence_dir, run, meta)
         titles = {f["name"] for f in findings}
         self.assertIn("확정될 발견", titles)
         self.assertIn("아직 미검토", titles)
         self.assertNotIn("오탐", titles)
         self.assertEqual(status_counts, {"CONFIRMED": 1, "CANDIDATE": 1})
+
+    def test_report_attaches_linked_screenshot_evidence_as_case_image(self):
+        """finding 에 연결된 image/png 증적이 실제로 디스크에 있으면 보고서용 변환이 그 경로를
+        case/step 의 image 로 채운다(pentest_report._Builder 가 Word 에 그대로 삽입함).
+        """
+        run, asset_id = self._run_and_asset()
+        f = self._finding(run["id"], asset_id, title="스크린샷 있는 발견")
+        img_path = self.cfg.evidence_dir / "test" / "pytest-shot.png"
+        img_path.parent.mkdir(parents=True, exist_ok=True)
+        img_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)  # 내용은 중요하지 않음, 파일 존재만 확인하면 됨
+        self.addCleanup(img_path.unlink, missing_ok=True)
+        eid = self.conn.execute(
+            "INSERT INTO evidence (run_id, asset_id, requirement_id, tool, args, success, rel_path, sha256, size, "
+            "media_type) VALUES (%s,%s,'TEST-IMG','test.screenshot','{}',true,'test/pytest-shot.png',"
+            "repeat('a',64),20,'image/png') RETURNING id", (run["id"], asset_id)).fetchone()["id"]
+        self.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], eid))
+        meta = {"targets": [{"target_id": "baseline-demo", "name": "baseline-demo", "url": "", "kind": "WEB"}]}
+        findings, _ = reporting._findings_for_pentest_report(self.conn, self.cfg.evidence_dir, run, meta)
+        found = next(x for x in findings if x["name"] == "스크린샷 있는 발견")
+        self.assertEqual(len(found["cases"]), 1)
+        self.assertEqual(found["cases"][0]["steps"][0]["image"], str(img_path))
 
     def test_retest_requeues_original_tool_call_and_logs_request(self):
         run, asset_id = self._run_and_asset()
