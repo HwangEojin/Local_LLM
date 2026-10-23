@@ -76,8 +76,9 @@ class ToolCallsUsedByKind(unittest.TestCase):
         self.assertEqual(worker._tool_calls_used(ctx, "exploration"), 1)
 
     def test_budget_key_mapping_matches_kind(self):
+        # CLAUDE.md §1/§5.4/§8: 자율 탐색(exploration)에는 하드 리밋을 두지 않는다 — 체크리스트만 예산 키가 있다.
         self.assertEqual(worker._BUDGET_KEY["checklist"], "max_tool_calls")
-        self.assertEqual(worker._BUDGET_KEY["exploration"], "max_tool_calls_exploration")
+        self.assertNotIn("exploration", worker._BUDGET_KEY)
 
 
 if __name__ == "__main__":
