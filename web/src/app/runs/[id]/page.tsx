@@ -1,11 +1,27 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+import { Check, Copy, CopyPlus, Download, Pause, Play, RotateCcw, RotateCw, Square, Trash2, Undo2, X } from "lucide-react";
 
 import { AuthGate } from "@/components/AuthGate";
+import { FindingPanel, EvidenceViewer } from "@/components/FindingPanel";
 import { Header } from "@/components/Header";
 import { StatusBadge } from "@/components/StatusBadge";
+import {
+  Banner,
+  btnDanger,
+  btnGhost,
+  btnPrimary,
+  btnSecondary,
+  Card,
+  ConfirmDialog,
+  Empty,
+  inputCls,
+  SkeletonRows,
+  useToast,
+} from "@/components/ui";
 import {
   ActivityEntry,
   api,
@@ -18,579 +34,810 @@ import {
   RunDetail,
   ServerLogEntry,
 } from "@/lib/api";
+import {
+  AUTONOMY_LABEL,
+  describe,
+  formatBytes,
+  formatTime,
+  SEVERITY_ORDER,
+  VERIFICATION_LABEL,
+} from "@/lib/labels";
+import { usePolling } from "@/lib/usePolling";
 
+type TabKey = "findings" | "backlog" | "evidence" | "activity" | "server-log";
+const TAB_KEYS: TabKey[] = ["findings", "backlog", "evidence", "activity", "server-log"];
+const TAB_LABEL: Record<TabKey, string> = {
+  findings: "발견 사항",
+  backlog: "작업 큐",
+  evidence: "증적",
+  activity: "실행 기록",
+  "server-log": "서버 로그",
+};
+
+type FindingFilter = { statuses: string[]; severities: string[]; q: string };
+const NO_FILTER: FindingFilter = { statuses: [], severities: [], q: "" };
+const REVIEW_PENDING = ["CANDIDATE", "NEEDS_REVIEW"];
+
+const needsApproval = (it: BacklogItem) => it.status === "BLOCKED" && it.policy_class === "ALLOW_WITH_APPROVAL";
+
+const chip = (on: boolean) =>
+  `rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+    on ? "border-accent bg-accent/15 text-accent" : "border-line text-muted hover:border-faint hover:text-ink"
+  }`;
+
+const th = "px-4 py-2 font-medium";
+
+// ── 실행 제어 ──
 function RunControls({ detail, onChanged }: { detail: RunDetail; onChanged: () => void }) {
   const { run, loop_running } = detail;
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const canStart = run.status !== "CANCELLED" && !loop_running;
-  const canCancel = run.status !== "CANCELLED" && run.status !== "COMPLETED";
+  const router = useRouter();
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleted = !!run.deleted_at; // 삭제된 진단은 복원하기 전에는 시작·취소할 수 없다
+  const canStart = run.status !== "CANCELLED" && !loop_running && !deleted;
+  const canCancel = run.status !== "CANCELLED" && run.status !== "COMPLETED" && !deleted;
 
-  async function start() {
+  async function remove(reason: string) {
     setBusy(true);
-    setError(null);
     try {
-      await api.post(`/api/runs/${run.id}/start`);
-      onChanged();
+      await api.post(`/api/runs/${run.run_code}/delete`, { reason, confirm: true });
+      toast("ok", `${run.run_code} 을(를) 삭제했습니다`);
+      router.push("/runs");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "시작 실패");
-    } finally {
+      toast("danger", e instanceof ApiError ? e.message : "삭제에 실패했습니다");
       setBusy(false);
+      setConfirmDelete(false);
     }
   }
 
-  async function cancel() {
+  async function act(path: string, ok: string, fail: string) {
     setBusy(true);
-    setError(null);
     try {
-      await api.post(`/api/runs/${run.id}/cancel`);
+      await api.post(`/api/runs/${run.id}/${path}`);
+      toast("ok", ok);
       onChanged();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "취소 실패");
+      toast("danger", e instanceof ApiError ? e.message : fail);
     } finally {
       setBusy(false);
+      setConfirmCancel(false);
     }
   }
 
   return (
     <div className="flex items-center gap-2">
-      {loop_running && (
-        <span className="inline-flex items-center gap-1 text-xs text-blue-700">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" /> 진행 중
-        </span>
-      )}
       <button
         disabled={busy || !canStart}
-        onClick={start}
-        className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700 disabled:opacity-40"
+        onClick={() => act("start", "진단을 시작했습니다", "시작에 실패했습니다")}
+        className={btnPrimary}
       >
-        시작/재개
+        <Play className="h-4 w-4" aria-hidden />
+        {run.status === "CREATED" ? "시작" : "재개"}
       </button>
+      {confirmCancel ? (
+        <>
+          <button disabled={busy} onClick={() => act("cancel", "진단을 취소했습니다", "취소에 실패했습니다")} className={btnDanger}>
+            <Square className="h-4 w-4" aria-hidden /> 취소 확정
+          </button>
+          <button onClick={() => setConfirmCancel(false)} className={btnGhost}>
+            <Undo2 className="h-4 w-4" aria-hidden /> 돌아가기
+          </button>
+        </>
+      ) : (
+        <button disabled={busy || !canCancel} onClick={() => setConfirmCancel(true)} className={btnSecondary}>
+          <Square className="h-4 w-4" aria-hidden /> 취소
+        </button>
+      )}
       <button
-        disabled={busy || !canCancel}
-        onClick={cancel}
-        className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100 disabled:opacity-40"
+        disabled={busy || loop_running || deleted}
+        onClick={() => setConfirmDelete(true)}
+        className={btnGhost}
+        title={loop_running ? "실행 중인 진단은 먼저 취소해야 삭제할 수 있습니다" : "진단 삭제"}
+        aria-label="진단 삭제"
       >
-        취소
+        <Trash2 className="h-4 w-4" aria-hidden />
       </button>
-      {error && <span className="text-sm text-red-600">{error}</span>}
+      {confirmDelete && (
+        <ConfirmDialog title={`${run.run_code} 을(를) 삭제할까요?`} confirmLabel="삭제" danger withReason busy={busy} onConfirm={remove} onCancel={() => setConfirmDelete(false)}>
+          목록에서 숨겨지고 시작할 수 없게 됩니다. 증적, 발견 사항, 감사 기록은 그대로 보존되며 ‘삭제된 진단 보기’에서 복원할 수 있습니다.
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
 
-function Overview({ detail, onChanged }: { detail: RunDetail; onChanged: () => void }) {
-  const { run, usage } = detail;
-  return (
-    <div className="mb-3 flex items-start justify-between gap-4 rounded-lg border border-neutral-200 bg-white p-4">
-    <div className="grid flex-1 grid-cols-2 gap-4 text-sm sm:grid-cols-5">
-      <div>
-        <div className="text-neutral-500">상태</div>
-        <div className="mt-1">
-          <StatusBadge value={run.status as string} />
-          {run.stop_reason ? <div className="mt-1 text-xs text-neutral-400">{run.stop_reason as string}</div> : null}
-        </div>
-      </div>
-      <div>
-        <div className="text-neutral-500">운영자</div>
-        <div className="mt-1">{run.operator as string}</div>
-      </div>
-      <div>
-        <div className="text-neutral-500">자율성</div>
-        <div className="mt-1">{run.autonomy as string}</div>
-      </div>
-      <div>
-        <div className="text-neutral-500">LLM</div>
-        <div className="mt-1">{run.use_llm ? (run.llm_provider as string) : "사용 안 함"}</div>
-      </div>
-      <div>
-        <div className="text-neutral-500">증적 / 발견 사항</div>
-        <div className="mt-1">
-          {usage.evidence} / {usage.findings}
-        </div>
-      </div>
-    </div>
-    <RunControls detail={detail} onChanged={onChanged} />
-    </div>
-  );
-}
-
-function ReviewForm({ finding, runId, onDone }: { finding: Finding; runId: string; onDone: () => void }) {
-  const [status, setStatus] = useState(finding.status);
-  const [reason, setReason] = useState("");
-  const [evidenceIds, setEvidenceIds] = useState("");
+function DeletedBanner({ detail, onChanged }: { detail: RunDetail; onChanged: () => void }) {
+  const { run } = detail;
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  if (!run.deleted_at) return null;
 
-  async function submitReview() {
+  async function restore() {
     setBusy(true);
-    setError(null);
     try {
-      await api.post(`/api/runs/${runId}/findings/${finding.id}/review`, {
-        status,
-        reason,
-        evidence_ids: evidenceIds
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-      });
-      onDone();
+      await api.post(`/api/runs/${run.run_code}/restore`, { reason: "복원" });
+      toast("ok", `${run.run_code} 을(를) 복원했습니다`);
+      onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "검토 기록 실패");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitRetest() {
-    if (!reason) {
-      setError("재검증 요청에도 사유(reason)가 필요함");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await api.post(`/api/runs/${runId}/findings/${finding.id}/retest`, { reason });
-      onDone();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "재검증 요청 실패");
+      toast("danger", e instanceof ApiError ? e.message : "복원에 실패했습니다");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <tr className="border-t border-neutral-100 bg-neutral-50">
-      <td colSpan={6} className="px-4 py-3">
-        <div className="mb-2 text-sm text-neutral-700">{finding.rationale}</div>
-        <div className="flex flex-wrap items-end gap-2">
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="rounded border border-neutral-300 px-2 py-1 text-sm"
-          >
-            {FINDING_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <input
-            placeholder="사유(reason)"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            className="min-w-48 flex-1 rounded border border-neutral-300 px-2 py-1 text-sm"
-          />
-          <input
-            placeholder="증적 id(쉼표 구분, CONFIRMED 에 필요할 수 있음)"
-            value={evidenceIds}
-            onChange={(e) => setEvidenceIds(e.target.value)}
-            className="min-w-56 flex-1 rounded border border-neutral-300 px-2 py-1 text-sm"
-          />
-          <button
-            disabled={busy || !reason}
-            onClick={submitReview}
-            className="rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-700 disabled:opacity-50"
-          >
-            검토 기록
-          </button>
-          <button
-            disabled={busy}
-            onClick={submitRetest}
-            className="rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100 disabled:opacity-50"
-          >
-            재검증 요청
-          </button>
-        </div>
-        {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-      </td>
-    </tr>
-  );
-}
-
-function FindingsTab({ runId }: { runId: string }) {
-  const [findings, setFindings] = useState<Finding[] | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    api
-      .get<Finding[]>(`/api/runs/${runId}/findings`)
-      .then(setFindings)
-      .catch((e) => setError(e.message));
-  }, [runId]);
-
-  useEffect(load, [load]);
-
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!findings) return <p className="text-sm text-neutral-500">불러오는 중...</p>;
-  if (findings.length === 0) return <p className="text-sm text-neutral-500">발견 사항 없음</p>;
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <table className="w-full text-sm">
-        <thead className="bg-neutral-50 text-left text-neutral-500">
-          <tr>
-            <th className="px-4 py-2 font-medium">제목</th>
-            <th className="px-4 py-2 font-medium">심각도</th>
-            <th className="px-4 py-2 font-medium">검증</th>
-            <th className="px-4 py-2 font-medium">상태</th>
-            <th className="px-4 py-2 font-medium">검토자</th>
-            <th className="px-4 py-2 font-medium" />
-          </tr>
-        </thead>
-        <tbody>
-          {findings.map((f) => (
-            <Fragment key={f.id}>
-              <tr
-                className="cursor-pointer border-t border-neutral-100 hover:bg-neutral-50"
-                onClick={() => setOpenId(openId === f.id ? null : f.id)}
-              >
-                <td className="px-4 py-2">{f.title}</td>
-                <td className="px-4 py-2">
-                  <StatusBadge value={f.severity} />
-                </td>
-                <td className="px-4 py-2 text-neutral-500">{f.verification}</td>
-                <td className="px-4 py-2">
-                  <StatusBadge value={f.status} />
-                </td>
-                <td className="px-4 py-2 text-neutral-500">{f.reviewed_by ?? "검토 전"}</td>
-                <td className="px-4 py-2 text-right text-neutral-400">{openId === f.id ? "▲" : "▼"}</td>
-              </tr>
-              {openId === f.id && (
-                <ReviewForm
-                  key={`${f.id}-form`}
-                  finding={f}
-                  runId={runId}
-                  onDone={() => {
-                    setOpenId(null);
-                    load();
-                  }}
-                />
-              )}
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
+    <div role="status" className="mb-4 flex items-center justify-between gap-3 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
+      <span>
+        삭제된 진단입니다 ({formatTime(run.deleted_at)}
+        {run.delete_reason ? ` · 사유: ${run.delete_reason}` : ""}). 목록에서 숨겨져 있고 복원하기 전에는 시작할 수 없습니다. 증적과 기록은 그대로입니다.
+      </span>
+      <button disabled={busy} onClick={restore} className={btnSecondary}>
+        <RotateCcw className="h-4 w-4" aria-hidden /> 복원
+      </button>
     </div>
   );
 }
 
-function BacklogTab({ runId }: { runId: string }) {
-  const [items, setItems] = useState<BacklogItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+// ── 요약 대시보드 ──
+function Summary({
+  detail,
+  findings,
+  backlog,
+  onFilterFindings,
+  onShowTab,
+  onChanged,
+}: {
+  detail: RunDetail;
+  findings: Finding[] | null;
+  backlog: BacklogItem[] | null;
+  onFilterFindings: (f: FindingFilter) => void;
+  onShowTab: (t: TabKey) => void;
+  onChanged: () => void;
+}) {
+  const { run, usage, coverage, loop_running } = detail;
+  const toast = useToast();
 
-  const load = useCallback(() => {
-    api
-      .get<BacklogItem[]>(`/api/runs/${runId}/backlog`)
-      .then(setItems)
-      .catch((e) => setError(e.message));
-  }, [runId]);
+  const bySeverity = useMemo(() => {
+    const m: Record<string, number> = {};
+    (findings ?? []).forEach((f) => (m[f.severity] = (m[f.severity] ?? 0) + 1));
+    return m;
+  }, [findings]);
+  const pendingReview = (findings ?? []).filter((f) => REVIEW_PENDING.includes(f.status)).length;
+  const approvals = (backlog ?? []).filter(needsApproval).length;
 
-  useEffect(load, [load]);
+  const q = coverage.backlog;
+  const qTotal = Object.values(q).reduce((a, b) => a + b, 0);
+  const segs: { key: string; cls: string }[] = [
+    { key: "SUCCEEDED", cls: "bg-ok" },
+    { key: "READY", cls: "bg-info" },
+    { key: "PENDING", cls: "bg-faint" },
+    { key: "BLOCKED", cls: "bg-warn" },
+    { key: "FAILED", cls: "bg-danger" },
+  ];
 
-  async function decide(itemId: string, reject: boolean) {
-    setBusyId(itemId);
-    setError(null);
+  async function copyId() {
     try {
-      await api.post(`/api/runs/${runId}/backlog/${itemId}/approve`, { reject });
-    } catch (e) {
-      // 승인 대기가 이미 처리됐거나(다른 라운드가 먼저 소비함) 상태가 막 바뀐 경우 흔히 나는 오류라
-      // 목록 전체를 지우지 않고 배너로만 보여준다 — 아래서 다시 불러오면 최신 상태로 알아서 반영된다.
-      setError(e instanceof ApiError ? e.message : "승인 처리 실패");
-    } finally {
-      setBusyId(null);
-      load(); // 성공/실패 어느 쪽이든 최신 상태를 다시 받아온다(실패해도 다른 항목은 그대로 조작 가능해야 함)
+      await navigator.clipboard.writeText(run.run_code);
+      toast("ok", "진단 ID를 복사했습니다");
+    } catch {
+      toast("danger", "복사하지 못했습니다");
     }
   }
 
-  if (!items) return <p className="text-sm text-neutral-500">불러오는 중...</p>;
-  if (items.length === 0) return <p className="text-sm text-neutral-500">작업 없음</p>;
+  return (
+    <Card className="mb-4 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="font-mono text-lg font-semibold">{run.run_code}</h1>
+            <button onClick={copyId} title="진단 ID 복사" aria-label="진단 ID 복사" className="rounded p-1 text-muted hover:bg-raised hover:text-ink">
+              <Copy className="h-4 w-4" aria-hidden />
+            </button>
+            <Link href={`/runs/new?from=${encodeURIComponent(run.run_code)}`} className="flex items-center gap-1 rounded p-1 text-xs text-muted hover:bg-raised hover:text-ink" title="이 진단의 설정으로 새 진단 만들기">
+              <CopyPlus className="h-4 w-4" aria-hidden /> 복제
+            </Link>
+            <StatusBadge value={run.status as string} />
+            {loop_running && (
+              <span className="h-2 w-2 animate-pulse rounded-full bg-info" role="img" aria-label="루프 동작 중" title="루프 동작 중" />
+            )}
+          </div>
+          <p className="mt-1 text-sm text-muted">
+            운영자 {run.operator as string} · 자율성 {AUTONOMY_LABEL[run.autonomy as string] ?? (run.autonomy as string)} · LLM{" "}
+            {run.use_llm ? (run.llm_provider as string) : "사용 안 함"}
+            {run.stop_reason ? <> · 종료 사유: {run.stop_reason as string}</> : null}
+          </p>
+        </div>
+        <RunControls detail={detail} onChanged={onChanged} />
+      </div>
+
+      {approvals > 0 && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
+          <span className="text-warn">사람의 승인을 기다리는 작업이 {approvals}건 있습니다. 승인하기 전에는 실행되지 않습니다.</span>
+          <button onClick={() => onShowTab("backlog")} className={btnSecondary}>
+            승인하러 가기
+          </button>
+        </div>
+      )}
+
+      <div className="mt-4 grid gap-4 border-t border-line pt-4 md:grid-cols-3">
+        <div>
+          <div className="mb-2 text-xs font-medium text-muted">발견 사항 · 심각도별</div>
+          <div className="flex flex-wrap gap-1.5">
+            {SEVERITY_ORDER.map((s) => (
+              <button
+                key={s}
+                disabled={!bySeverity[s]}
+                onClick={() => {
+                  onFilterFindings({ ...NO_FILTER, severities: [s] });
+                  onShowTab("findings");
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-xs transition-colors hover:bg-raised disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                <StatusBadge value={s} />
+                <span className="tabular font-medium">{bySeverity[s] ?? 0}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            disabled={pendingReview === 0}
+            onClick={() => {
+              onFilterFindings({ ...NO_FILTER, statuses: REVIEW_PENDING });
+              onShowTab("findings");
+            }}
+            className="mt-2 text-xs text-accent hover:underline disabled:text-faint disabled:no-underline"
+          >
+            검토 대기 {pendingReview}건 보기
+          </button>
+        </div>
+
+        <div>
+          <div className="mb-2 text-xs font-medium text-muted">
+            작업 큐 · 전체 <span className="tabular">{qTotal}</span>건
+          </div>
+          {qTotal === 0 ? (
+            <p className="text-xs text-faint">아직 생성된 작업이 없습니다.</p>
+          ) : (
+            <>
+              <div className="flex h-2 overflow-hidden rounded-full bg-raised" role="img" aria-label="작업 큐 상태 분포">
+                {segs.map(({ key, cls }) =>
+                  q[key] ? <div key={key} className={cls} style={{ width: `${(q[key] / qTotal) * 100}%` }} /> : null,
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
+                {Object.entries(q).map(([k, v]) => (
+                  <span key={k} className="tabular">
+                    {describe(k).label} {v}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div>
+          <div className="mb-2 text-xs font-medium text-muted">실행량</div>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <dt className="text-muted">도구 호출</dt>
+            <dd className="tabular text-right">{usage.tools}</dd>
+            <dt className="text-muted">탐색 도구 호출</dt>
+            <dd className="tabular text-right">{usage.explore_tools}</dd>
+            <dt className="text-muted">증적</dt>
+            <dd className="tabular text-right">{usage.evidence}</dd>
+            <dt className="text-muted">LLM 호출</dt>
+            <dd className="tabular text-right">{usage.llm_calls}</dd>
+          </dl>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ── 발견 사항 ──
+function FindingsTab({
+  findings,
+  filter,
+  setFilter,
+  selectedId,
+  onSelect,
+}: {
+  findings: Finding[] | null;
+  filter: FindingFilter;
+  setFilter: (f: FindingFilter) => void;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const toggle = (key: "statuses" | "severities", v: string) =>
+    setFilter({ ...filter, [key]: filter[key].includes(v) ? filter[key].filter((x) => x !== v) : [...filter[key], v] });
+
+  const rows = useMemo(() => {
+    if (!findings) return null;
+    const q = filter.q.trim().toLowerCase();
+    return findings
+      .filter((f) => !filter.statuses.length || filter.statuses.includes(f.status))
+      .filter((f) => !filter.severities.length || filter.severities.includes(f.severity))
+      .filter((f) => !q || f.title.toLowerCase().includes(q) || f.rationale.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const sa = SEVERITY_ORDER.indexOf(a.severity as (typeof SEVERITY_ORDER)[number]);
+        const sb = SEVERITY_ORDER.indexOf(b.severity as (typeof SEVERITY_ORDER)[number]);
+        return (sa < 0 ? 99 : sa) - (sb < 0 ? 99 : sb) || b.created_at.localeCompare(a.created_at);
+      });
+  }, [findings, filter]);
+
+  if (!findings) return <SkeletonRows />;
+  if (findings.length === 0) return <Empty title="아직 발견 사항이 없습니다" hint="진단이 진행되면 취약점 후보가 여기에 쌓입니다." />;
+
+  const filtering = filter.statuses.length > 0 || filter.severities.length > 0 || filter.q !== "";
 
   return (
     <div>
-      {error && (
-        <p className="mb-2 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-600">
-          {error}{" "}
-          <button onClick={() => setError(null)} className="ml-2 underline">
-            닫기
-          </button>
-        </p>
-      )}
-      <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <table className="w-full text-sm">
-        <thead className="bg-neutral-50 text-left text-neutral-500">
-          <tr>
-            <th className="px-4 py-2 font-medium">종류</th>
-            <th className="px-4 py-2 font-medium">상태</th>
-            <th className="px-4 py-2 font-medium">사유</th>
-            <th className="px-4 py-2 font-medium">시도</th>
-            <th className="px-4 py-2 font-medium" />
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((it) => {
-            const needsApproval = it.status === "BLOCKED" && it.policy_class === "ALLOW_WITH_APPROVAL";
-            return (
-              <tr key={it.id} className="border-t border-neutral-100">
-                <td className="px-4 py-2">{it.kind}</td>
-                <td className="px-4 py-2">
-                  <StatusBadge value={it.status} />
-                </td>
-                <td className="px-4 py-2 text-neutral-600">{it.blocked_reason ?? it.reason}</td>
-                <td className="px-4 py-2 text-neutral-500">{it.attempts}</td>
-                <td className="px-4 py-2 text-right">
-                  {needsApproval && (
-                    <div className="flex justify-end gap-1">
-                      <button
-                        disabled={busyId === it.id}
-                        onClick={() => decide(it.id, false)}
-                        className="rounded bg-neutral-900 px-2 py-1 text-xs text-white hover:bg-neutral-700 disabled:opacity-40"
-                      >
-                        승인
-                      </button>
-                      <button
-                        disabled={busyId === it.id}
-                        onClick={() => decide(it.id, true)}
-                        className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 disabled:opacity-40"
-                      >
-                        거부
-                      </button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      </div>
-    </div>
-  );
-}
-
-function EvidenceTab({ runId }: { runId: string }) {
-  const [items, setItems] = useState<Evidence[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api
-      .get<Evidence[]>(`/api/runs/${runId}/evidence`)
-      .then(setItems)
-      .catch((e) => setError(e.message));
-  }, [runId]);
-
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!items) return <p className="text-sm text-neutral-500">불러오는 중...</p>;
-  if (items.length === 0) return <p className="text-sm text-neutral-500">증적 없음</p>;
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <table className="w-full text-sm">
-        <thead className="bg-neutral-50 text-left text-neutral-500">
-          <tr>
-            <th className="px-4 py-2 font-medium">도구</th>
-            <th className="px-4 py-2 font-medium">요구사항</th>
-            <th className="px-4 py-2 font-medium">크기</th>
-            <th className="px-4 py-2 font-medium">무결성</th>
-            <th className="px-4 py-2 font-medium">수집 시각</th>
-            <th className="px-4 py-2 font-medium" />
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((e) => (
-            <tr key={e.id} className="border-t border-neutral-100" title={e.integrity_detail ?? undefined}>
-              <td className="px-4 py-2 font-mono text-xs">
-                {e.tool}
-                {e.truncated && <span className="ml-1 text-amber-600">(잘림)</span>}
-              </td>
-              <td className="px-4 py-2 text-neutral-500">{e.requirement_id}</td>
-              <td className="px-4 py-2 text-neutral-500">{e.success ? `${e.size ?? 0}B` : "-"}</td>
-              <td className="px-4 py-2">
-                {e.success ? (
-                  <StatusBadge value={e.integrity === "확인됨" ? "SUCCEEDED" : "FAILED"} />
-                ) : (
-                  <span className="text-xs text-red-600">{e.error ?? "수집 실패"}</span>
-                )}
-              </td>
-              <td className="px-4 py-2 text-neutral-500">{new Date(e.collected_at).toLocaleString()}</td>
-              <td className="px-4 py-2 text-right">
-                {e.success && e.integrity === "확인됨" && (
-                  <a
-                    href={downloadUrl(runId, e.id)}
-                    className="text-xs text-blue-700 hover:underline"
-                  >
-                    다운로드
-                  </a>
-                )}
-              </td>
-            </tr>
+      <div className="mb-3 space-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            value={filter.q}
+            onChange={(e) => setFilter({ ...filter, q: e.target.value })}
+            placeholder="제목·근거 검색"
+            aria-label="발견 사항 검색"
+            className={`${inputCls} !w-60`}
+          />
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="판정 상태 필터">
+            {FINDING_STATUSES.map((s) => (
+              <button key={s} aria-pressed={filter.statuses.includes(s)} onClick={() => toggle("statuses", s)} className={chip(filter.statuses.includes(s))}>
+                {describe(s).label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="심각도 필터">
+          {SEVERITY_ORDER.map((s) => (
+            <button key={s} aria-pressed={filter.severities.includes(s)} onClick={() => toggle("severities", s)} className={chip(filter.severities.includes(s))}>
+              {describe(s).label}
+            </button>
           ))}
-        </tbody>
-      </table>
+          {filtering && (
+            <button onClick={() => setFilter(NO_FILTER)} className={btnGhost}>
+              필터 초기화
+            </button>
+          )}
+          <span className="ml-auto text-xs text-faint tabular">
+            {rows?.length ?? 0} / {findings.length}건
+          </span>
+        </div>
+      </div>
+
+      {rows && rows.length === 0 ? (
+        <Empty title="조건에 맞는 발견 사항이 없습니다" hint="필터를 줄여 보세요." />
+      ) : (
+        <Card className="overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-raised text-left text-muted">
+              <tr>
+                <th scope="col" className={th}>제목</th>
+                <th scope="col" className={th}>심각도</th>
+                <th scope="col" className={th}>판정</th>
+                <th scope="col" className={th}>검증 방식</th>
+                <th scope="col" className={th}>검토자</th>
+                <th scope="col" className={th}>발견 시각</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows?.map((f) => (
+                <tr
+                  key={f.id}
+                  tabIndex={0}
+                  aria-selected={selectedId === f.id}
+                  onClick={() => onSelect(f.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelect(f.id);
+                    }
+                  }}
+                  className={`cursor-pointer border-t border-line transition-colors hover:bg-raised/60 ${selectedId === f.id ? "bg-raised" : ""}`}
+                >
+                  <td className="px-4 py-2 font-medium">{f.title}</td>
+                  <td className="px-4 py-2"><StatusBadge value={f.severity} /></td>
+                  <td className="px-4 py-2"><StatusBadge value={f.status} /></td>
+                  <td className="px-4 py-2 text-muted">{VERIFICATION_LABEL[f.verification] ?? f.verification}</td>
+                  <td className="px-4 py-2 text-muted">{f.reviewed_by ?? "검토 전"}</td>
+                  <td className="px-4 py-2 text-muted">{formatTime(f.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
     </div>
   );
 }
 
-function ResultPreview({ runId, entry }: { runId: string; entry: ActivityEntry }) {
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+// ── 작업 큐 ──
+function BacklogTab({ runId, items, onChanged }: { runId: string; items: BacklogItem[] | null; onChanged: () => void }) {
+  const toast = useToast();
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [onlyPending, setOnlyPending] = useState(false);
+  const [retrying, setRetrying] = useState<BacklogItem | null>(null);
 
-  if (!entry.evidence_id) return null;
-  const isText = !entry.evidence_media_type || /^(text\/|application\/(json|xml))/.test(entry.evidence_media_type);
-
-  async function toggle() {
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    setOpen(true);
-    if (text !== null || error) return;
+  async function retry(reason: string) {
+    if (!retrying) return;
+    setBusyId(retrying.id);
     try {
-      const res = await fetch(downloadUrl(runId, entry.evidence_id!), { credentials: "include" });
-      if (!res.ok) throw new Error(`결과를 불러오지 못함 (HTTP ${res.status})`);
-      const body = isText ? await res.text() : `[이진 데이터, ${entry.evidence_size ?? "?"}바이트] 다운로드로 확인`;
-      setText(body.length > 4000 ? body.slice(0, 4000) + "\n... (잘림)" : body);
+      await api.post(`/api/runs/${runId}/backlog/${retrying.id}/retry`, { reason });
+      toast("ok", "재시도를 등록했습니다. 진단을 ‘재개’하면 다시 실행됩니다");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "결과를 불러오지 못함");
+      toast("danger", e instanceof ApiError ? e.message : "재시도 등록에 실패했습니다");
+    } finally {
+      setBusyId(null);
+      setRetrying(null);
+      onChanged();
     }
   }
 
+  async function decide(itemId: string, reject: boolean) {
+    setBusyId(itemId);
+    try {
+      await api.post(`/api/runs/${runId}/backlog/${itemId}/approve`, { reject });
+      toast("ok", reject ? "작업을 거부했습니다" : "작업을 승인했습니다");
+    } catch (e) {
+      // 다른 라운드가 먼저 소비했거나 상태가 막 바뀐 경우가 흔하다 — 목록은 지우지 않고 알리기만 한다.
+      toast("danger", e instanceof ApiError ? e.message : "승인 처리에 실패했습니다");
+    } finally {
+      setBusyId(null);
+      onChanged(); // 성공/실패 모두 최신 상태로 다시 받는다
+    }
+  }
+
+  if (!items) return <SkeletonRows />;
+  if (items.length === 0) return <Empty title="작업이 없습니다" hint="진단이 시작되면 AI가 계획한 작업이 쌓입니다." />;
+
+  const pending = items.filter(needsApproval).length;
+  const rows = onlyPending ? items.filter(needsApproval) : items;
+
   return (
-    <div className="mt-0.5">
-      <button onClick={toggle} className="text-blue-700 hover:underline">
-        {open ? "결과 접기" : "결과 보기"}
-      </button>
-      {open && (
-        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-neutral-50 p-2 text-[11px] text-neutral-700">
-          {error ?? text ?? "불러오는 중..."}
-        </pre>
+    <div>
+      <div className="mb-3 flex items-center gap-3 text-sm">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" className="accent-[var(--accent)]" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} />
+          승인 대기만 보기 <span className="tabular text-warn">({pending})</span>
+        </label>
+      </div>
+      {rows.length === 0 ? (
+        <Empty title="승인을 기다리는 작업이 없습니다" />
+      ) : (
+        <Card className="overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-raised text-left text-muted">
+              <tr>
+                <th scope="col" className={th}>작업 종류</th>
+                <th scope="col" className={th}>상태</th>
+                <th scope="col" className={th}>사유</th>
+                <th scope="col" className={`${th} text-right`}>시도</th>
+                <th scope="col" className={th}>갱신 시각</th>
+                <th scope="col" className={th}><span className="sr-only">승인</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((it) => (
+                <tr key={it.id} className={`border-t border-line ${needsApproval(it) ? "bg-warn/5" : ""}`}>
+                  <td className="px-4 py-2 font-mono text-xs">{it.kind}</td>
+                  <td className="px-4 py-2"><StatusBadge value={it.status} /></td>
+                  <td className="px-4 py-2 text-muted">{it.blocked_reason ?? it.reason}</td>
+                  <td className="px-4 py-2 text-right">{it.attempts}</td>
+                  <td className="px-4 py-2 text-muted">{formatTime(it.updated_at)}</td>
+                  <td className="px-4 py-2 text-right">
+                    {needsApproval(it) && (
+                      <div className="flex justify-end gap-1.5">
+                        <button disabled={busyId === it.id} onClick={() => decide(it.id, false)} className={btnPrimary}>
+                          <Check className="h-4 w-4" aria-hidden /> 승인
+                        </button>
+                        <button disabled={busyId === it.id} onClick={() => decide(it.id, true)} className={btnSecondary}>
+                          <X className="h-4 w-4" aria-hidden /> 거부
+                        </button>
+                      </div>
+                    )}
+                    {!needsApproval(it) && (it.status === "FAILED" || it.status === "BLOCKED") && (
+                      <button disabled={busyId === it.id} onClick={() => setRetrying(it)} className={btnSecondary}>
+                        <RotateCw className="h-4 w-4" aria-hidden /> 재시도
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+      {retrying && (
+        <ConfirmDialog title="이 작업을 다시 시도할까요?" confirmLabel="재시도 등록" withReason busy={busyId !== null} onConfirm={retry} onCancel={() => setRetrying(null)}>
+          <span className="font-mono">{retrying.kind}</span> 작업이 처음 상태로 돌아가 정책 판정부터 다시 받습니다. 사유가 감사 로그에 기록됩니다.
+        </ConfirmDialog>
       )}
     </div>
   );
 }
 
+// ── 증적 ──
+function EvidenceTab({ runId }: { runId: string }) {
+  const [items, setItems] = useState<Evidence[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    api.get<Evidence[]>(`/api/runs/${runId}/evidence`).then(setItems).catch((e) => setError(e.message));
+  }, [runId]);
+
+  if (error) return <Banner>{error}</Banner>;
+  if (!items) return <SkeletonRows />;
+  if (items.length === 0) return <Empty title="수집된 증적이 없습니다" />;
+
+  const needle = q.trim().toLowerCase();
+  const rows = items.filter((e) => !needle || e.tool.toLowerCase().includes(needle) || (e.requirement_id ?? "").toLowerCase().includes(needle));
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center gap-3">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="도구·요구사항 검색" aria-label="증적 검색" className={`${inputCls} !w-60`} />
+        <span className="text-xs text-faint tabular">{rows.length} / {items.length}건</span>
+      </div>
+      <Card className="overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-raised text-left text-muted">
+            <tr>
+              <th scope="col" className={th}>도구</th>
+              <th scope="col" className={th}>요구사항</th>
+              <th scope="col" className={`${th} text-right`}>크기</th>
+              <th scope="col" className={th}>무결성</th>
+              <th scope="col" className={th}>수집 시각</th>
+              <th scope="col" className={th}><span className="sr-only">다운로드</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((e) => (
+              <tr key={e.id} className="border-t border-line" title={e.integrity_detail ?? undefined}>
+                <td className="px-4 py-2 font-mono text-xs">
+                  {e.tool}
+                  {e.truncated && <span className="ml-1 text-warn">(일부 잘림)</span>}
+                </td>
+                <td className="px-4 py-2 text-muted">{e.requirement_id}</td>
+                <td className="px-4 py-2 text-right text-muted">{e.success ? formatBytes(e.size) : "-"}</td>
+                <td className="px-4 py-2">
+                  {e.success ? (
+                    e.integrity === "확인됨" ? <StatusBadge value="SUCCEEDED" /> : <span className="text-xs font-medium text-danger">손상됨</span>
+                  ) : (
+                    <span className="text-xs text-danger">{e.error ?? "수집 실패"}</span>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-muted">{formatTime(e.collected_at)}</td>
+                <td className="px-4 py-2 text-right">
+                  {e.success && e.integrity === "확인됨" && (
+                    <a href={downloadUrl(runId, e.id)} className="inline-flex items-center gap-1 text-xs text-accent hover:underline">
+                      <Download className="h-3.5 w-3.5" aria-hidden /> 다운로드
+                    </a>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+// ── 실행 기록 ──
 function ActivityTab({ runId }: { runId: string }) {
   const [items, setItems] = useState<ActivityEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api
-      .get<ActivityEntry[]>(`/api/runs/${runId}/activity`)
-      .then(setItems)
-      .catch((e) => setError(e.message));
-    const id = setInterval(() => {
-      api.get<ActivityEntry[]>(`/api/runs/${runId}/activity`).then(setItems).catch(() => {});
-    }, 4000);
-    return () => clearInterval(id);
-  }, [runId]);
-
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!items) return <p className="text-sm text-neutral-500">불러오는 중...</p>;
-  if (items.length === 0) return <p className="text-sm text-neutral-500">아직 실행된 도구 호출이 없음</p>;
-
-  return (
-    <div className="space-y-1.5 rounded-lg border border-neutral-200 bg-white p-3 font-mono text-xs">
-      {items.map((t) => (
-        <div key={t.id} className="border-b border-neutral-100 pb-1.5 last:border-0">
-          <span className="text-neutral-400">{new Date(t.started_at).toLocaleTimeString()}</span>{" "}
-          <span className="text-neutral-700">#{t.step_no}</span>{" "}
-          <span className="font-semibold">{t.tool}</span>{" "}
-          <StatusBadge value={t.status} />{" "}
-          <span className="text-neutral-400">{t.policy_decision}</span>{" "}
-          <span className="text-neutral-500">{t.asset_kind ? `${t.asset_kind}:${t.asset_value}` : ""}</span>
-          {t.args != null && (
-            <div className="mt-0.5 text-neutral-600">명령어: {JSON.stringify(t.args)}</div>
-          )}
-          {t.policy_reason && <div className="mt-0.5 text-neutral-400">정책: {t.policy_reason}</div>}
-          {t.error && <div className="mt-0.5 text-red-600">오류: {t.error}</div>}
-          <ResultPreview runId={runId} entry={t} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ServerLogTab({ runId }: { runId: string }) {
-  const [items, setItems] = useState<ServerLogEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const fetchLog = () =>
-      api.get<ServerLogEntry[]>(`/api/runs/${runId}/server-log`).then(setItems).catch((e) => setError(e.message));
-    fetchLog();
-    const id = setInterval(fetchLog, 2000); // 명령 실행 로그보다 더 자주(실시간처럼) 갱신
-    return () => clearInterval(id);
-  }, [runId]);
-
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!items) return <p className="text-sm text-neutral-500">불러오는 중...</p>;
-  if (items.length === 0)
-    return <p className="text-sm text-neutral-500">아직 서버 로그 없음 (실행을 시작하면 여기에 쌓임)</p>;
-
-  return (
-    <div className="max-h-[32rem] overflow-auto rounded-lg border border-neutral-200 bg-neutral-900 p-3 font-mono text-xs text-neutral-100">
-      {items.map((l, i) => (
-        <div key={i} className="whitespace-pre-wrap">
-          <span className="text-neutral-500">{new Date(l.ts).toLocaleTimeString()}</span> {l.message}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function RunDetailBody({ runId }: { runId: string }) {
-  const [detail, setDetail] = useState<RunDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"findings" | "backlog" | "evidence" | "activity" | "server-log">("findings");
+  const [q, setQ] = useState("");
+  const [onlyProblems, setOnlyProblems] = useState(false);
 
   const load = useCallback(() => {
-    api
-      .get<RunDetail>(`/api/runs/${runId}`)
-      .then(setDetail)
-      .catch((e) => setError(e.message));
+    api.get<ActivityEntry[]>(`/api/runs/${runId}/activity`).then((d) => { setItems(d); setError(null); }).catch((e) => setError(e.message));
+  }, [runId]);
+  useEffect(load, [load]);
+  usePolling(load, 4000);
+
+  if (error && !items) return <Banner>{error}</Banner>;
+  if (!items) return <SkeletonRows />;
+  if (items.length === 0) return <Empty title="아직 실행된 도구 호출이 없습니다" />;
+
+  const needle = q.trim().toLowerCase();
+  const rows = items
+    .filter((t) => !onlyProblems || t.status === "FAILED" || t.status === "BLOCKED" || t.error)
+    .filter((t) => !needle || t.tool.toLowerCase().includes(needle) || JSON.stringify(t.args ?? "").toLowerCase().includes(needle) || (t.asset_value ?? "").toLowerCase().includes(needle));
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="도구·명령·대상 검색" aria-label="실행 기록 검색" className={`${inputCls} !w-60`} />
+        <label className="flex items-center gap-2">
+          <input type="checkbox" className="accent-[var(--accent)]" checked={onlyProblems} onChange={(e) => setOnlyProblems(e.target.checked)} />
+          실패·차단만
+        </label>
+        <span className="ml-auto text-xs text-faint tabular">{rows.length} / {items.length}건</span>
+      </div>
+      <Card className="divide-y divide-line">
+        {rows.length === 0 && <p className="p-4 text-sm text-faint">조건에 맞는 기록이 없습니다.</p>}
+        {rows.map((t) => (
+          <div key={t.id} className="p-3 text-xs">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="tabular text-faint">{formatTime(t.started_at)}</span>
+              <span className="tabular text-muted">#{t.step_no}</span>
+              <span className="font-mono text-sm font-semibold text-ink">{t.tool}</span>
+              <StatusBadge value={t.status} />
+              <span className="text-faint">정책: {t.policy_decision}</span>
+              {t.asset_kind && <span className="font-mono text-muted">{t.asset_kind}:{t.asset_value}</span>}
+            </div>
+            {t.args != null && <div className="mt-1 break-all font-mono text-muted">명령 인자: {JSON.stringify(t.args)}</div>}
+            {t.policy_reason && <div className="mt-0.5 text-faint">정책 사유: {t.policy_reason}</div>}
+            {t.error && <div className="mt-0.5 text-danger">오류: {t.error}</div>}
+            {t.evidence_id && (
+              <div className="mt-1">
+                <EvidenceViewer runId={runId} evidenceId={t.evidence_id} mediaType={t.evidence_media_type} size={t.evidence_size} />
+              </div>
+            )}
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+// ── 서버 로그 ──
+function ServerLogTab({ runId }: { runId: string }) {
+  const toast = useToast();
+  const [items, setItems] = useState<ServerLogEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [follow, setFollow] = useState(true);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(() => {
+    api.get<ServerLogEntry[]>(`/api/runs/${runId}/server-log`).then((d) => { setItems(d); setError(null); }).catch((e) => setError(e.message));
+  }, [runId]);
+  useEffect(load, [load]);
+  usePolling(load, 2000, !paused);
+
+  useEffect(() => {
+    if (follow && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
+  }, [items, follow]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText((items ?? []).map((l) => `${l.ts} ${l.message}`).join("\n"));
+      toast("ok", "로그를 복사했습니다");
+    } catch {
+      toast("danger", "복사하지 못했습니다");
+    }
+  }
+
+  if (error && !items) return <Banner>{error}</Banner>;
+  if (!items) return <SkeletonRows />;
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+        <button onClick={() => setPaused((p) => !p)} className={btnSecondary} aria-pressed={paused}>
+          {paused ? <Play className="h-4 w-4" aria-hidden /> : <Pause className="h-4 w-4" aria-hidden />}
+          {paused ? "갱신 재개" : "갱신 일시정지"}
+        </button>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" className="accent-[var(--accent)]" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
+          최신 줄 따라가기
+        </label>
+        <button onClick={copy} disabled={items.length === 0} className={btnGhost}>
+          <Copy className="h-4 w-4" aria-hidden /> 복사
+        </button>
+        <span className="ml-auto text-xs text-faint tabular">{items.length}줄{paused ? " · 일시정지됨" : ""}</span>
+      </div>
+      {items.length === 0 ? (
+        <Empty title="아직 서버 로그가 없습니다" hint="진단을 시작하면 진행 메시지가 여기에 쌓입니다." />
+      ) : (
+        <div ref={boxRef} className="max-h-[32rem] overflow-auto rounded-lg border border-line bg-canvas p-3 font-mono text-xs leading-relaxed">
+          {items.map((l, i) => (
+            <div key={i} className="whitespace-pre-wrap">
+              <span className="text-faint">{formatTime(l.ts)}</span> {l.message}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 본문 ──
+function RunDetailBody({ runId }: { runId: string }) {
+  const [detail, setDetail] = useState<RunDetail | null>(null);
+  const [findings, setFindings] = useState<Finding[] | null>(null);
+  const [backlog, setBacklog] = useState<BacklogItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // 이 컴포넌트는 AuthGate 통과 후(클라이언트에서만) 렌더되므로 lazy 초기화에서 window 를 읽어도 hydration 불일치가 없다.
+  const [tab, setTabState] = useState<TabKey>(() => {
+    const h = window.location.hash.slice(1) as TabKey;
+    return TAB_KEYS.includes(h) ? h : "findings";
+  });
+  const [filter, setFilter] = useState<FindingFilter>(NO_FILTER);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // 탭을 URL 해시에 보관해 새로고침·링크 공유 후에도 같은 화면으로 돌아오게 한다.
+  const setTab = useCallback((t: TabKey) => {
+    setTabState(t);
+    window.history.replaceState(null, "", `#${t}`);
+  }, []);
+
+  const load = useCallback(() => {
+    api.get<RunDetail>(`/api/runs/${runId}`).then((d) => { setDetail(d); setError(null); }).catch((e) => setError(e.message));
+    api.get<Finding[]>(`/api/runs/${runId}/findings`).then(setFindings).catch(() => {});
+    api.get<BacklogItem[]>(`/api/runs/${runId}/backlog`).then(setBacklog).catch(() => {});
   }, [runId]);
 
   useEffect(load, [load]);
+  // 실행 중이면 4초, 아니면 15초. 탭이 숨겨져 있으면 멈춘다.
+  usePolling(load, detail?.loop_running ? 4000 : 15000);
 
-  useEffect(() => {
-    const id = setInterval(load, 4000); // 모니터링: 진행 중 상태를 주기적으로 새로 받아온다
-    return () => clearInterval(id);
-  }, [load]);
+  const selected = findings?.find((f) => f.id === selectedId) ?? null;
+  const closePanel = useCallback(() => setSelectedId(null), []);
 
-  if (error) return <p className="p-6 text-sm text-red-600">{error}</p>;
-  if (!detail) return <p className="p-6 text-sm text-neutral-500">불러오는 중...</p>;
+  if (error && !detail) return <main className="mx-auto w-full max-w-6xl p-6"><Banner>{error}</Banner></main>;
+  if (!detail) return <main className="mx-auto w-full max-w-6xl p-6"><SkeletonRows rows={4} /></main>;
+
+  const approvals = (backlog ?? []).filter(needsApproval).length;
+  const counts: Partial<Record<TabKey, number>> = {
+    findings: findings?.length,
+    backlog: backlog?.length,
+    evidence: detail.usage.evidence,
+  };
 
   return (
-    <div className="p-6">
-      <h1 className="mb-4 font-mono text-sm text-neutral-500">{runId}</h1>
-      <Overview detail={detail} onChanged={load} />
-      <div className="mb-3 flex gap-4 border-b border-neutral-200 text-sm">
-        {(["findings", "backlog", "evidence", "activity", "server-log"] as const).map((t) => (
+    <main className="mx-auto w-full max-w-6xl p-6">
+      {error && <Banner tone="warn">최신 상태를 가져오지 못했습니다. 화면은 마지막으로 받은 값입니다. ({error})</Banner>}
+      <DeletedBanner detail={detail} onChanged={load} />
+      <Summary
+        detail={detail}
+        findings={findings}
+        backlog={backlog}
+        onFilterFindings={setFilter}
+        onShowTab={setTab}
+        onChanged={load}
+      />
+
+      <div role="tablist" aria-label="진단 상세" className="mb-4 flex gap-1 border-b border-line">
+        {TAB_KEYS.map((t) => (
           <button
             key={t}
+            role="tab"
+            id={`tab-${t}`}
+            aria-selected={tab === t}
+            aria-controls="tabpanel"
             onClick={() => setTab(t)}
-            className={`-mb-px border-b-2 px-1 py-2 ${
-              tab === t ? "border-neutral-900 font-medium" : "border-transparent text-neutral-500"
+            className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors ${
+              tab === t ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"
             }`}
           >
-            {{
-              findings: "Findings",
-              backlog: "Backlog",
-              evidence: "Evidence",
-              activity: "Activity(명령·결과)",
-              "server-log": "서버 로그(실시간)",
-            }[t]}
+            {TAB_LABEL[t]}
+            {counts[t] != null && <span className="tabular text-xs text-faint">{counts[t]}</span>}
+            {t === "backlog" && approvals > 0 && (
+              <span className="rounded-full bg-warn px-1.5 text-[11px] font-semibold text-canvas" title="승인 대기">
+                {approvals}
+              </span>
+            )}
           </button>
         ))}
       </div>
-      {tab === "findings" && <FindingsTab runId={runId} />}
-      {tab === "backlog" && <BacklogTab runId={runId} />}
-      {tab === "evidence" && <EvidenceTab runId={runId} />}
-      {tab === "activity" && <ActivityTab runId={runId} />}
-      {tab === "server-log" && <ServerLogTab runId={runId} />}
-    </div>
+
+      <div role="tabpanel" id="tabpanel" aria-labelledby={`tab-${tab}`}>
+        {tab === "findings" && (
+          <FindingsTab findings={findings} filter={filter} setFilter={setFilter} selectedId={selectedId} onSelect={setSelectedId} />
+        )}
+        {tab === "backlog" && <BacklogTab runId={runId} items={backlog} onChanged={load} />}
+        {tab === "evidence" && <EvidenceTab runId={runId} />}
+        {tab === "activity" && <ActivityTab runId={runId} />}
+        {tab === "server-log" && <ServerLogTab runId={runId} />}
+      </div>
+
+      {selected && <FindingPanel key={selected.id} runId={runId} finding={selected} onClose={closePanel} onChanged={load} />}
+    </main>
   );
 }
 

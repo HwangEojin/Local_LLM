@@ -1,16 +1,112 @@
 @import "tailwindcss";
 
+/* 다크가 기본(장시간 모니터링). 라이트는 data-theme="light" 로 전환. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+  --canvas: oklch(0.17 0.012 250);
+  --surface: oklch(0.21 0.014 250);
+  --raised: oklch(0.255 0.016 250);
+  --line: oklch(0.33 0.016 250);
+  --ink: oklch(0.94 0.006 250);
+  --muted: oklch(0.74 0.014 250);
+  --faint: oklch(0.62 0.014 250);
+  --accent: oklch(0.8 0.115 200);
+  --accent-ink: oklch(0.2 0.03 220);
+  --danger: oklch(0.72 0.17 25);
+  --warn: oklch(0.82 0.14 80);
+  --ok: oklch(0.77 0.14 155);
+  --info: oklch(0.76 0.11 245);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: oklch(0.975 0.004 250);
+  --surface: oklch(1 0 0);
+  --raised: oklch(0.955 0.006 250);
+  --line: oklch(0.87 0.008 250);
+  --ink: oklch(0.22 0.014 250);
+  --muted: oklch(0.42 0.014 250);
+  --faint: oklch(0.52 0.014 250);
+  --accent: oklch(0.5 0.12 220);
+  --accent-ink: oklch(0.98 0.005 220);
+  --danger: oklch(0.52 0.19 25);
+  --warn: oklch(0.5 0.12 70);
+  --ok: oklch(0.45 0.12 155);
+  --info: oklch(0.48 0.13 250);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --color-info: var(--info);
+  --font-sans: "Pretendard", "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "D2Coding", Consolas, monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* 표의 숫자·시각이 줄마다 흔들리지 않게 */
+table,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: color-mix(in oklch, var(--accent) 35%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+input,
+select,
+textarea {
+  caret-color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.panel-in {
+  animation: slide-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }

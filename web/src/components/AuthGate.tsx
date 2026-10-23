@@ -29,6 +29,6 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     };
   }, [router]);
 
-  if (!ready) return <div className="p-6 text-sm text-neutral-500">확인 중...</div>;
+  if (!ready) return <div className="p-6 text-sm text-faint">로그인 상태를 확인하는 중…</div>;
   return <>{children}</>;
 }
