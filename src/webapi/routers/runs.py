@@ -71,14 +71,37 @@ def _run_loop_background(cfg, run_id: str) -> None:
             _RUNNING_LOOPS.pop(str(run_id), None)
 
 
+_SORT_COLUMNS = {"created_at": "r.created_at", "status": "r.status", "operator": "r.operator"}
+
+
 @router.get("")
-def list_runs(conn=Depends(get_conn), user: str = Depends(current_user)):
+def list_runs(conn=Depends(get_conn), user: str = Depends(current_user), q: str | None = None,
+              status: str | None = None, sort: str = "created_at", order: str = "desc",
+              limit: int = 20, offset: int = 0):
+    """검색(q: 실행 ID·운영자 부분 일치)·상태 필터(status: 콤마로 여러 개)·정렬·페이징.
+    프론트가 모르는 값을 보내도 안전하게 기본값으로 떨어지게 한다(정렬 컬럼·방향은 화이트리스트).
+    """
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    where, params = [], {}
+    if q and q.strip():
+        where.append("(r.id::text ILIKE %(q)s OR r.operator ILIKE %(q)s)")
+        params["q"] = f"%{q.strip()}%"
+    statuses = [s.strip() for s in (status or "").split(",") if s.strip()]
+    if statuses:
+        where.append("r.status = ANY(%(statuses)s)")
+        params["statuses"] = statuses
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sort_col = _SORT_COLUMNS.get(sort, _SORT_COLUMNS["created_at"])
+    order_sql = "ASC" if order.lower() == "asc" else "DESC"
+    total = conn.execute(f"SELECT count(*) AS n FROM runs r {where_sql}", params).fetchone()["n"]
     rows = conn.execute(
-        "SELECT r.id, r.status, r.operator, r.autonomy, r.use_llm, r.created_at, r.stop_reason, "
-        "r.checklist_version_id IS NOT NULL AS has_checklist, "
-        "(SELECT count(*) FROM findings f WHERE f.run_id = r.id) AS findings_count "
-        "FROM runs r ORDER BY r.created_at DESC LIMIT 50").fetchall()
-    return rows
+        f"SELECT r.id, r.status, r.operator, r.autonomy, r.use_llm, r.created_at, r.stop_reason, "
+        f"r.checklist_version_id IS NOT NULL AS has_checklist, "
+        f"(SELECT count(*) FROM findings f WHERE f.run_id = r.id) AS findings_count "
+        f"FROM runs r {where_sql} ORDER BY {sort_col} {order_sql}, r.id LIMIT %(limit)s OFFSET %(offset)s",
+        {**params, "limit": limit, "offset": offset}).fetchall()
+    return {"runs": rows, "total": total, "limit": limit, "offset": offset}
 
 
 def _load_run(conn, run_ref: str) -> dict:
