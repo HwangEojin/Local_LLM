@@ -36,6 +36,7 @@ export default function NewRunPage() {
   const [checklist, setChecklist] = useState<string>("");
   const [useLlm, setUseLlm] = useState(true);
   const [autonomy, setAutonomy] = useState("approval");
+  const [llmProvider, setLlmProvider] = useState("ollama");
 
   useEffect(() => {
     api.get<Environment>("/api/environment").then(setEnv).catch((e) => setError(e.message));
@@ -64,6 +65,7 @@ export default function NewRunPage() {
         checklist: checklist || null,
         use_llm: useLlm,
         autonomy,
+        llm_provider: llmProvider,
       });
       router.push(`/runs/${run.id}`);
     } catch (err) {
@@ -146,6 +148,28 @@ export default function NewRunPage() {
                   LLM 자율 탐색 사용(체크리스트 없이 실행하려면 필수)
                 </label>
               </div>
+
+              {useLlm && (
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-neutral-700">LLM 제공자</label>
+                  <div className="flex flex-col gap-1 text-sm">
+                    {env.llm_providers.map((p) => (
+                      <label key={p} className="flex items-center gap-1">
+                        <input
+                          type="radio"
+                          name="llm_provider"
+                          value={p}
+                          checked={llmProvider === p}
+                          onChange={() => setLlmProvider(p)}
+                        />
+                        {p === "ollama"
+                          ? "ollama(기본, 로컬)"
+                          : "claude_cli(임시 테스트 — 이 PC 에 로그인된 claude CLI 구독 호출, API 과금 아님)"}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="mb-1 block text-sm font-medium text-neutral-700">자율성</label>
