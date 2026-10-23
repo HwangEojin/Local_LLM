@@ -193,7 +193,28 @@ def default_kind(conn, run: dict) -> str | None:
     return kinds.pop() if len(kinds) == 1 else None
 
 
-def _findings_for_pentest_report(conn, run: dict, meta: dict) -> tuple[list[dict], dict[str, int]]:
+def _finding_images(conn, evidence_dir: Path, finding_id) -> list[Path]:
+    """이 finding 에 연결된 증적 중 이미지(스크린샷) 파일의 실제 경로. 직접 연결된 증적뿐 아니라 그
+    증적에서 파생된 이미지(예: Playwright MCP 응답 안의 스크린샷, worker.run_tool 이 derived_from 으로
+    따로 저장함)도 포함한다. 디스크에 실제로 있는 파일만 돌려준다(없는 걸 있다고 보고서에 넣지 않는다).
+    """
+    rows = conn.execute(
+        "SELECT e.rel_path FROM finding_evidence fe JOIN evidence e ON e.id = fe.evidence_id "
+        "WHERE fe.finding_id=%s AND e.success AND e.media_type IN ('image/png','image/jpeg') "
+        "UNION "
+        "SELECT d.rel_path FROM finding_evidence fe JOIN evidence d ON d.derived_from = fe.evidence_id "
+        "WHERE fe.finding_id=%s AND d.success AND d.media_type IN ('image/png','image/jpeg')",
+        (finding_id, finding_id)).fetchall()
+    out = []
+    for r in rows:
+        if r["rel_path"]:
+            p = evidence_dir / r["rel_path"]
+            if p.is_file():
+                out.append(p)
+    return out
+
+
+def _findings_for_pentest_report(conn, evidence_dir: Path, run: dict, meta: dict) -> tuple[list[dict], dict[str, int]]:
     """findings 테이블(체크리스트 없는 실행이 자율 탐색으로 쌓은 발견 사항) 을 audit.pentest_report._Builder
     가 기대하는 findings 리스트 모양으로 변환한다. check_id/target_id 는 FAIL 판정과 맞추는 용도가 아니라
     _Builder 가 쓰는 필드 이름일 뿐이므로 체크리스트 없이도 채울 수 있다.
@@ -214,11 +235,14 @@ def _findings_for_pentest_report(conn, run: dict, meta: dict) -> tuple[list[dict
         tinfo = targets.get(r["target_id"]) or {"name": r["target_id"], "url": "", "kind": "WEB"}
         notes = (f"검토 확정(reviewer): {r['reviewed_by']}" if r["status"] == "CONFIRMED" and r["reviewed_by"]
                  else f"검증: {r['verification']} ({r['status']}, 사람 최종 검토 전 — CLAUDE.md §9/§10)")
+        images = _finding_images(conn, evidence_dir, r["id"])
+        cases = [{"title": "증적 스크린샷", "steps": [
+            {"text": f"증적 {i + 1}/{len(images)}", "image": str(p)} for i, p in enumerate(images)]}] if images else []
         out.append({
             "check_id": str(r["id"])[:8], "target_id": r["target_id"], "target_name": tinfo["name"],
             "url": tinfo.get("url", ""), "kind": tinfo.get("kind", "WEB"), "name": r["title"],
             "result": mask_secrets(r["rationale"]), "path": tinfo.get("url", "") or r["target_id"],
-            "notes": notes, "cases": [], "recommendation": r["remediation"] or "", "rec_titles": [],
+            "notes": notes, "cases": cases, "recommendation": r["remediation"] or "", "rec_titles": [],
             "reason": r["rationale"],
         })
     return out, status_counts
@@ -237,7 +261,7 @@ def generate_autonomous(cfg, conn, run: dict, meta_path, findings_path=None) -> 
     run_id = str(run["id"])
     meta = pentest_report._load_json(meta_path, schemas.REPORT_META, "report meta")
     tpl, rec_paths = pentest_report.find_templates(cfg.settings.path("templates_dir"), "web")
-    findings, status_counts = _findings_for_pentest_report(conn, run, meta)
+    findings, status_counts = _findings_for_pentest_report(conn, cfg.evidence_dir, run, meta)
     b = pentest_report._Builder(tpl, pentest_report.load_recommendations(rec_paths), meta, findings)
     if findings_path:
         b.improvements = json.loads(Path(findings_path).read_text(encoding="utf-8")).get("improvements", [])
