@@ -291,22 +291,33 @@ function BacklogTab({ runId }: { runId: string }) {
 
   async function decide(itemId: string, reject: boolean) {
     setBusyId(itemId);
+    setError(null);
     try {
       await api.post(`/api/runs/${runId}/backlog/${itemId}/approve`, { reject });
-      load();
     } catch (e) {
+      // 승인 대기가 이미 처리됐거나(다른 라운드가 먼저 소비함) 상태가 막 바뀐 경우 흔히 나는 오류라
+      // 목록 전체를 지우지 않고 배너로만 보여준다 — 아래서 다시 불러오면 최신 상태로 알아서 반영된다.
       setError(e instanceof ApiError ? e.message : "승인 처리 실패");
     } finally {
       setBusyId(null);
+      load(); // 성공/실패 어느 쪽이든 최신 상태를 다시 받아온다(실패해도 다른 항목은 그대로 조작 가능해야 함)
     }
   }
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
   if (!items) return <p className="text-sm text-neutral-500">불러오는 중...</p>;
   if (items.length === 0) return <p className="text-sm text-neutral-500">작업 없음</p>;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+    <div>
+      {error && (
+        <p className="mb-2 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-600">
+          {error}{" "}
+          <button onClick={() => setError(null)} className="ml-2 underline">
+            닫기
+          </button>
+        </p>
+      )}
+      <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
       <table className="w-full text-sm">
         <thead className="bg-neutral-50 text-left text-neutral-500">
           <tr>
@@ -353,6 +364,7 @@ function BacklogTab({ runId }: { runId: string }) {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
