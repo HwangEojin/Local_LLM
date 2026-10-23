@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 from psycopg.types.json import Jsonb
 
@@ -105,10 +106,21 @@ class _ModelLog:
         self.conn.commit()
 
 
-def make_llm(ctx) -> OllamaClient:
-    """설정된 로컬 모델을 준비한다. 사용할 수 없으면 LLMError (조용히 규칙 전용으로 바꾸지 않는다)."""
-    llm = OllamaClient(ctx.cfg.settings.ollama, ctx.cfg.settings.external_api_enabled,
-                       storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])
+def make_llm(ctx):
+    """설정된 모델 클라이언트를 준비한다. 사용할 수 없으면 LLMError (조용히 규칙 전용으로 바꾸지 않는다).
+
+    기본은 로컬 Ollama. WORKBENCH_LLM_PROVIDER=claude_cli 를 설정했을 때만 임시로 `claude` CLI
+    (구독 로그인, API 과금 아님)를 대신 쓴다 — 프레임워크 자체가 더 큰 모델로도 똑같이 도는지
+    확인하기 위한 테스트용 경로다. 인터페이스(.model/check_ready()/structured_chat())만 같으면
+    되므로 나머지 explore.py 로직은 어떤 클라이언트인지 몰라도 된다.
+    """
+    if os.environ.get("WORKBENCH_LLM_PROVIDER") == "claude_cli":
+        from audit.claude_cli_model import ClaudeCliClient
+        llm = ClaudeCliClient(ctx.cfg.settings.raw.get("claude_cli", {}),
+                              storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])
+    else:
+        llm = OllamaClient(ctx.cfg.settings.ollama, ctx.cfg.settings.external_api_enabled,
+                           storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])
     llm.check_ready()
     return llm
 

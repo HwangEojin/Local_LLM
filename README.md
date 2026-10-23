@@ -25,7 +25,7 @@ py -3.13 -m venv .venv
 |---|---|
 | `.env` | `WORKBENCH_PG_DSN`, `PGPASSWORD` (`.env.example` 복사). 다른 앱과 DB 를 같이 쓰면 전용 스키마: DSN 끝에 `?options=-csearch_path%3Dworkbench` |
 | `config/scope.json` | 승인된 범위: `engagement_id`, `approved_by`, `valid_until`, `allowed_risks`, `targets`(`path`/`host`/`url`, 필요 시 `platform`). 만료되면 모든 실행이 거부된다 |
-| `config/settings.json` | Ollama 주소·모델·한도, 증적·보고서·체크리스트·템플릿 경로, 도구 호출 한도. 루프백이 아닌 모델 주소는 `external_api.enabled=false` 이면 거부. `ollama.timeout_s`(기본 120)는 모델 크기에 맞춰 늘린다 — 16GB 노트북에서 `qwen2.5:7b` 는 호출당 10~90초, `qwen2.5:14b` 는 타임아웃을 600초 정도로 늘려야 응답을 받을 수 있었다 |
+| `config/settings.json` | Ollama 주소·모델·한도, 증적·보고서·체크리스트·템플릿 경로, 도구 호출 한도. 루프백이 아닌 모델 주소는 `external_api.enabled=false` 이면 거부. `ollama.timeout_s`(기본 240)는 모델 크기·시스템 부하에 맞춰 늘린다 — 16GB 노트북에서 `qwen2.5:7b` 는 호출당 10~90초(다른 프로세스 부하 겹치면 더 걸림), `qwen2.5:14b` 는 타임아웃을 600초 정도로 늘려야 응답을 받을 수 있었다. **임시 테스트 전용**: `WORKBENCH_LLM_PROVIDER=claude_cli` 환경 변수를 설정하면 Ollama 대신 설치된 `claude` CLI(Claude Code, 구독 로그인 — API 과금 아님)를 호출한다. `claude` 는 `--tools ""` 로 도구 접근을 전부 막은 채 돌며(실제 도구 실행은 여전히 Python 정책 계층만 거침), 쓰려면 터미널에서 `claude login` 이 먼저 돼 있어야 한다. `config/settings.json` 에 `claude_cli`(모델·타임아웃 등, 선택) 블록으로 세부 조정 가능(`src/audit/claude_cli_model.py`) |
 | `config/mcp_servers.json` | MCP 서버와 허용 도구(`risk`, `scope_args`, `args_schema`). 이 PC 의 경로는 `mcp_servers.local.json` 에 같은 서버 이름으로 적는다 |
 | `config/workbench.json` (선택) | 제외 대상 `exclude`, 예산 `budget`, `lease_s`, `min_call_interval_ms`, `nmap_path`, `testssl_path` (`workbench.example.json` 참고) |
 

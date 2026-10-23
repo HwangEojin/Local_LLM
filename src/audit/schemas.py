@@ -112,6 +112,16 @@ SETTINGS = {
             "type": "object", "additionalProperties": False, "required": ["enabled"],
             "properties": {"enabled": {"type": "boolean"}},
         },
+        # 임시 테스트 전용(WORKBENCH_LLM_PROVIDER=claude_cli 일 때만 읽힘). 필수 아님 — 없으면 기본값 사용.
+        "claude_cli": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "model": _STR,
+                "timeout_s": _POS_INT,
+                "max_calls_per_run": _POS_INT,
+                "max_retries": {"type": "integer", "minimum": 0, "maximum": 5},
+            },
+        },
         "paths": {
             "type": "object", "additionalProperties": False,
             "required": ["evidence_dir", "reports_dir", "checklist_dir", "templates_dir"],
