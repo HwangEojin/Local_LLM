@@ -44,9 +44,10 @@ class ClaudeCliClient:
         if not exe:
             raise LLMError("'claude' CLI 를 PATH 에서 찾을 수 없음 — Claude Code 설치 필요")
         try:
-            out = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, timeout=15)
-            status = json.loads(out.stdout)
-        except (subprocess.SubprocessError, json.JSONDecodeError, OSError) as e:
+            out = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, timeout=15,
+                                 encoding="utf-8", errors="replace")
+            status = json.loads(out.stdout or "")
+        except (subprocess.SubprocessError, json.JSONDecodeError, TypeError, OSError) as e:
             raise LLMError(f"'claude auth status' 확인 실패: {e}") from None
         if not status.get("loggedIn"):
             raise LLMError("claude CLI 가 로그인되어 있지 않음 — 터미널에서 'claude login' 을 먼저 실행하세요")
@@ -86,15 +87,17 @@ class ClaudeCliClient:
         if system:
             args += ["--system-prompt", system]
         try:
-            out = subprocess.run(args, capture_output=True, text=True, timeout=self.timeout_s)
+            out = subprocess.run(args, capture_output=True, text=True, timeout=self.timeout_s,
+                                 encoding="utf-8", errors="replace")
         except subprocess.TimeoutExpired:
             raise LLMError(f"claude CLI 호출이 {self.timeout_s}초를 넘김") from None
         except OSError as e:
             raise LLMError(f"claude CLI 실행 실패: {e}") from None
         try:
-            resp = json.loads(out.stdout)
-        except json.JSONDecodeError:
-            raise LLMError(f"claude CLI 가 JSON 이 아닌 응답을 반환함: {out.stdout[:300] or out.stderr[:300]}") from None
+            resp = json.loads(out.stdout or "")
+        except (json.JSONDecodeError, TypeError):
+            raise LLMError(f"claude CLI 가 JSON 이 아닌 응답을 반환함: "
+                           f"{(out.stdout or '')[:300] or (out.stderr or '')[:300]}") from None
         if resp.get("is_error"):
             raise LLMError(f"claude CLI 오류: {resp.get('result')}")
         return resp.get("result", "")

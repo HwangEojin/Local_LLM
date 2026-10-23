@@ -82,7 +82,7 @@ function Overview({ detail, onChanged }: { detail: RunDetail; onChanged: () => v
   const { run, usage } = detail;
   return (
     <div className="mb-3 flex items-start justify-between gap-4 rounded-lg border border-neutral-200 bg-white p-4">
-    <div className="grid flex-1 grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+    <div className="grid flex-1 grid-cols-2 gap-4 text-sm sm:grid-cols-5">
       <div>
         <div className="text-neutral-500">상태</div>
         <div className="mt-1">
@@ -97,6 +97,10 @@ function Overview({ detail, onChanged }: { detail: RunDetail; onChanged: () => v
       <div>
         <div className="text-neutral-500">자율성</div>
         <div className="mt-1">{run.autonomy as string}</div>
+      </div>
+      <div>
+        <div className="text-neutral-500">LLM</div>
+        <div className="mt-1">{run.use_llm ? (run.llm_provider as string) : "사용 안 함"}</div>
       </div>
       <div>
         <div className="text-neutral-500">증적 / 발견 사항</div>

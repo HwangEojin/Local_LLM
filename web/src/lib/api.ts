@@ -43,6 +43,7 @@ export type Run = {
   operator: string;
   autonomy: string;
   use_llm: boolean;
+  llm_provider: string;
   created_at: string;
   stop_reason: string | null;
   has_checklist: boolean;
@@ -147,6 +148,7 @@ export type Environment = {
   checklists: ChecklistRef[];
   tools: { name: string; risk: string }[];
   autonomy_levels: string[];
+  llm_providers: string[];
   doctor: DoctorRow[];
 };
 

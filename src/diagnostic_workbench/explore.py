@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 
 from psycopg.types.json import Jsonb
 
@@ -109,12 +108,12 @@ class _ModelLog:
 def make_llm(ctx):
     """설정된 모델 클라이언트를 준비한다. 사용할 수 없으면 LLMError (조용히 규칙 전용으로 바꾸지 않는다).
 
-    기본은 로컬 Ollama. WORKBENCH_LLM_PROVIDER=claude_cli 를 설정했을 때만 임시로 `claude` CLI
-    (구독 로그인, API 과금 아님)를 대신 쓴다 — 프레임워크 자체가 더 큰 모델로도 똑같이 도는지
-    확인하기 위한 테스트용 경로다. 인터페이스(.model/check_ready()/structured_chat())만 같으면
-    되므로 나머지 explore.py 로직은 어떤 클라이언트인지 몰라도 된다.
+    실행 생성 시 고른 runs.llm_provider(scope/autonomy 와 같은 방식으로 고정, runs.py 참고)를 그대로
+    따른다. 기본은 로컬 Ollama. 'claude_cli' 는 이 PC 에 로그인된 `claude` CLI(Claude Code 구독,
+    API 과금 아님)를 대신 쓰는 임시 테스트 경로다. 인터페이스(.model/check_ready()/structured_chat())만
+    같으면 되므로 나머지 explore.py 로직은 어떤 클라이언트인지 몰라도 된다.
     """
-    if os.environ.get("WORKBENCH_LLM_PROVIDER") == "claude_cli":
+    if ctx.run.get("llm_provider") == "claude_cli":
         from audit.claude_cli_model import ClaudeCliClient
         llm = ClaudeCliClient(ctx.cfg.settings.raw.get("claude_cli", {}),
                               storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])

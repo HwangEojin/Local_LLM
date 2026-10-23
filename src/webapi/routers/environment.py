@@ -51,5 +51,6 @@ def get_environment(cfg=Depends(get_cfg), user: str = Depends(current_user)):
         "checklists": checklists,
         "tools": tools,
         "autonomy_levels": list(wb_runs.AUTONOMY_LEVELS),
+        "llm_providers": list(wb_runs.LLM_PROVIDERS),
         "doctor": _doctor_status(cfg),
     }
