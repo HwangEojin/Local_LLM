@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { LogIn } from "lucide-react";
 
+import { btnPrimary, inputCls } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 
 export default function LoginPage() {
@@ -20,40 +22,49 @@ export default function LoginPage() {
       await api.post("/api/auth/login", { username, password });
       router.replace("/runs");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "로그인 실패");
+      setError(err instanceof ApiError ? err.message : "로그인에 실패했습니다");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="flex flex-1 items-center justify-center">
-      <form onSubmit={onSubmit} className="w-full max-w-sm rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
-        <h1 className="mb-1 text-lg font-semibold">Workbench</h1>
-        <p className="mb-6 text-sm text-neutral-500">자율 AI 취약점 진단 워크벤치</p>
-        <label className="mb-1 block text-sm font-medium text-neutral-700">아이디</label>
+    <main className="flex flex-1 items-center justify-center p-6">
+      <form onSubmit={onSubmit} className="w-full max-w-sm rounded-lg border border-line bg-surface p-6">
+        <h1 className="text-lg font-semibold">진단 워크벤치</h1>
+        <p className="mb-6 mt-1 text-sm text-muted">자율 AI 취약점 진단 · 로컬 대시보드</p>
+        <label htmlFor="username" className="mb-1 block text-sm font-medium text-muted">
+          아이디
+        </label>
         <input
-          className="mb-4 w-full rounded border border-neutral-300 px-3 py-2 text-sm"
+          id="username"
+          autoComplete="username"
+          className={`${inputCls} mb-4`}
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           autoFocus
         />
-        <label className="mb-1 block text-sm font-medium text-neutral-700">비밀번호</label>
+        <label htmlFor="password" className="mb-1 block text-sm font-medium text-muted">
+          비밀번호
+        </label>
         <input
+          id="password"
           type="password"
-          className="mb-4 w-full rounded border border-neutral-300 px-3 py-2 text-sm"
+          autoComplete="current-password"
+          className={`${inputCls} mb-4`}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
-        {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
-        >
-          {loading ? "로그인 중..." : "로그인"}
+        {error && (
+          <p role="alert" className="mb-4 text-sm text-danger">
+            {error}
+          </p>
+        )}
+        <button type="submit" disabled={loading || !username || !password} className={`${btnPrimary} w-full`}>
+          <LogIn className="h-4 w-4" aria-hidden />
+          {loading ? "로그인 중…" : "로그인"}
         </button>
       </form>
-    </div>
+    </main>
   );
 }

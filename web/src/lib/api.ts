@@ -18,7 +18,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail ?? detail;
+      const d = body.detail ?? detail;
+      // FastAPI 검증 오류는 [{loc, msg}] 배열로 온다 — 사람이 읽는 문장으로 바꾼다
+      detail = Array.isArray(d) ? d.map((x: { msg?: string }) => x.msg ?? JSON.stringify(x)).join("; ") : String(d);
     } catch {
       // 본문이 JSON 이 아니면 상태 텍스트만 쓴다
     }
@@ -32,6 +34,7 @@ export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
+  put: <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
 };
 
 export const downloadUrl = (runId: string, evidenceId: string) =>
@@ -39,6 +42,9 @@ export const downloadUrl = (runId: string, evidenceId: string) =>
 
 export type Run = {
   id: string;
+  run_code: string; // 사람이 읽는 진단 ID. 예: BASE-20261023-01
+  deleted_at: string | null; // 소프트 삭제 표시(행·증적·감사 기록은 남아 있고 복원 가능)
+  delete_reason: string | null;
   status: string;
   operator: string;
   autonomy: string;
@@ -51,6 +57,8 @@ export type Run = {
 };
 
 export type RunList = { runs: Run[]; total: number; limit: number; offset: number };
+
+export type BulkDeleteResult = { deleted: string[]; skipped: { ref: string; reason: string }[] };
 
 export const RUN_STATUSES = ["CREATED", "RUNNING", "PAUSED", "COMPLETED", "CANCELLED", "FAILED"] as const;
 
@@ -70,6 +78,26 @@ export type Finding = {
   created_at: string;
 };
 
+export type FindingDetail = {
+  finding: Finding;
+  evidence: {
+    id: string;
+    tool: string;
+    success: boolean;
+    size: number | null;
+    media_type: string | null;
+    collected_at: string;
+  }[];
+  history: {
+    old_status: string | null;
+    new_status: string;
+    reason: string;
+    actor: string;
+    evidence_ids: string[];
+    changed_at: string;
+  }[];
+};
+
 export type BacklogItem = {
   id: string;
   kind: string;
@@ -84,6 +112,7 @@ export type BacklogItem = {
 
 export type RunDetail = {
   run: Run & { id: string; [k: string]: unknown };
+  targets: string[];
   coverage: { verdicts: Record<string, number>; backlog: Record<string, number> };
   usage: { tools: number; explore_tools: number; evidence: number; findings: number; llm_calls: number };
   loop_running: boolean;
@@ -137,6 +166,69 @@ export type Target = {
   value: string;
   platform?: string;
   description?: string;
+  code?: string; // 진단 ID 의 대상 약어(선택)
+};
+
+export type Scope = {
+  engagement_id: string;
+  approved_by: string;
+  valid_until: string;
+  allowed_risks: string[];
+  targets: Target[];
+};
+
+export type WorkbenchSettings = {
+  exclude: string[];
+  lease_s: number;
+  max_attempts: number;
+  approval_ttl_h: number;
+  min_call_interval_ms: number;
+  budget: {
+    max_tasks: number;
+    max_tool_calls: number;
+    timeout_s: number;
+    max_explorations: number;
+    max_tool_calls_exploration: number;
+  };
+  nmap_path: string | null;
+  testssl_path: string | null;
+};
+
+export type LlmSettings = {
+  ollama: {
+    base_url: string;
+    model: string;
+    timeout_s: number;
+    max_request_bytes: number;
+    max_response_bytes: number;
+    max_calls_per_run: number;
+    max_retries: number;
+  };
+  limits: { max_tool_calls_per_run: number; run_timeout_s: number; max_evidence_bytes: number };
+  external_api: { enabled: boolean };
+  paths: Record<string, string>;
+};
+
+export type KillSwitch = { active: boolean; by?: string; at?: string; reason?: string };
+
+export type McpServer = {
+  name: string;
+  enabled: boolean;
+  description: string;
+  transport: string;
+  timeout_s: number;
+  tools: string[];
+  source: "shared" | "local";
+};
+
+export type ChecklistEntry = { checklist_id: string; version: string; status: string; sha256: string | null };
+
+export type AuditEvent = {
+  id: number;
+  ts: string;
+  event: string;
+  details: Record<string, unknown>;
+  run_code: string | null;
 };
 
 export type ChecklistRef = { checklist_id: string; version: string; sha256: string | null };
