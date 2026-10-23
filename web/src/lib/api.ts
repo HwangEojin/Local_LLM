@@ -49,6 +49,10 @@ export type Run = {
   findings_count: number;
 };
 
+export type RunList = { runs: Run[]; total: number; limit: number; offset: number };
+
+export const RUN_STATUSES = ["CREATED", "RUNNING", "PAUSED", "COMPLETED", "CANCELLED", "FAILED"] as const;
+
 export type Finding = {
   id: string;
   run_id: string;
