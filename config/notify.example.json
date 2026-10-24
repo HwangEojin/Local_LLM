@@ -1,0 +1,10 @@
+{
+  "channels": [
+    {
+      "name": "slack-security",
+      "kind": "webhook",
+      "url": "https://hooks.slack.com/services/T000/B000/XXXXXXXXXXXXXXXXXXXXXXXX",
+      "enabled": true
+    }
+  ]
+}

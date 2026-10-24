@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from audit.models import AuditError
-from diagnostic_workbench import db as wb_db, worker
+from diagnostic_workbench import db as wb_db, notify, worker
 
-from ..deps import current_user, get_conn
+from ..deps import current_user, get_cfg, get_conn
 
 router = APIRouter(prefix="/api/runs/{run_ref}/findings", tags=["findings"])
 
@@ -56,7 +56,7 @@ class ReviewBody(BaseModel):
 
 @router.post("/{finding_ref}/review")
 def review_finding(run_ref: str, finding_ref: str, body: ReviewBody,
-                   conn=Depends(get_conn), user: str = Depends(current_user)):
+                   conn=Depends(get_conn), cfg=Depends(get_cfg), user: str = Depends(current_user)):
     run = _load_run(conn, run_ref)
     f = _load_finding(conn, run["id"], finding_ref)
     if body.status not in worker.FINDING_STATUSES:
@@ -70,6 +70,9 @@ def review_finding(run_ref: str, finding_ref: str, body: ReviewBody,
         raise HTTPException(400, str(e)) from None
     wb_db.audit(conn, run["id"], "finding_status_changed",
                {"finding_id": str(f["id"]), "old": old_status, "new": body.status, "reviewer": user})
+    if body.status == "CONFIRMED":
+        notify.notify_finding_confirmed(conn, cfg, run["id"], f["id"], title=f["title"], severity=f["severity"],
+                                        actor=f"reviewer:{user}")
     conn.commit()
     return {"id": str(f["id"]), "old_status": old_status, "new_status": body.status}
 
