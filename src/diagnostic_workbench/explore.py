@@ -14,6 +14,7 @@ import json
 
 from psycopg.types.json import Jsonb
 
+from audit import config as audit_config
 from audit.local_model import LLMError, OllamaClient
 from audit.policy import mask_secrets
 
@@ -108,17 +109,31 @@ class _ModelLog:
 def make_llm(ctx):
     """설정된 모델 클라이언트를 준비한다. 사용할 수 없으면 LLMError (조용히 규칙 전용으로 바꾸지 않는다).
 
-    실행 생성 시 고른 runs.llm_provider(scope/autonomy 와 같은 방식으로 고정, runs.py 참고)를 그대로
-    따른다. 기본은 로컬 Ollama. 'claude_cli' 는 이 PC 에 로그인된 `claude` CLI(Claude Code 구독,
-    API 과금 아님)를 대신 쓰는 임시 테스트 경로다. 인터페이스(.model/check_ready()/structured_chat())만
-    같으면 되므로 나머지 explore.py 로직은 어떤 클라이언트인지 몰라도 된다.
+    실행 생성 시 고른 runs.llm_provider/llm_profile_name(scope/autonomy 와 같은 방식으로 고정, runs.py
+    참고)을 그대로 따른다. llm_profile_name 이 있으면 config/llm_profiles.json 에서 그 이름의 프로파일을
+    찾아, settings.json 의 기존 ollama/claude_cli 블록 위에 그 프로파일 값만 덮어써 클라이언트를 만든다
+    (프로파일에는 바꿀 값만 적으면 됨). 프로파일이 없으면(기존 실행 전부, 그리고 프로파일을 안 고른 새
+    실행) 지금처럼 llm_provider 하나만 보고 settings.json 블록을 그대로 쓴다 — 동작 변경 없음.
+
+    기본은 로컬 Ollama. 'claude_cli' 는 이 PC 에 로그인된 `claude` CLI(Claude Code 구독, API 과금 아님)를
+    대신 쓰는 경로다. 인터페이스(.model/check_ready()/structured_chat())만 같으면 되므로 나머지 explore.py
+    로직은 어떤 클라이언트인지 몰라도 된다.
     """
-    if ctx.run.get("llm_provider") == "claude_cli":
+    profile_name = ctx.run.get("llm_profile_name")
+    profile = None
+    if profile_name:
+        profiles = audit_config.load_llm_profiles(ctx.cfg.home)
+        profile = profiles.get(profile_name)
+        if profile is None:
+            raise LLMError(f"llm_profile '{profile_name}' 을(를) config/llm_profiles.json 에서 찾을 수 없음")
+    kind = profile["kind"] if profile else ctx.run.get("llm_provider")
+    if kind == "claude_cli":
         from audit.claude_cli_model import ClaudeCliClient
-        llm = ClaudeCliClient(ctx.cfg.settings.raw.get("claude_cli", {}),
-                              storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])
+        cfg = {**ctx.cfg.settings.raw.get("claude_cli", {}), **(profile or {})}
+        llm = ClaudeCliClient(cfg, storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])
     else:
-        llm = OllamaClient(ctx.cfg.settings.ollama, ctx.cfg.settings.external_api_enabled,
+        cfg = {**ctx.cfg.settings.ollama, **(profile or {})}
+        llm = OllamaClient(cfg, ctx.cfg.settings.external_api_enabled,
                            storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])
     llm.check_ready()
     return llm

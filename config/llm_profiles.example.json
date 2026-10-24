@@ -1,0 +1,22 @@
+{
+  "profiles": [
+    {
+      "name": "ollama-qwen7b-fast",
+      "kind": "ollama",
+      "model": "qwen2.5:7b-instruct",
+      "timeout_s": 120
+    },
+    {
+      "name": "ollama-qwen14b-deep",
+      "kind": "ollama",
+      "model": "qwen2.5:14b-instruct",
+      "timeout_s": 600
+    },
+    {
+      "name": "claude-cli-sonnet",
+      "kind": "claude_cli",
+      "model": "claude-sonnet-4-5",
+      "timeout_s": 120
+    }
+  ]
+}

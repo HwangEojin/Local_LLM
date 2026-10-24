@@ -134,6 +134,7 @@ class CreateRunBody(BaseModel):
     max_explorations: int | None = None
     goal: str | None = None
     llm_provider: str = "ollama"
+    llm_profile: str | None = None
 
 
 @router.post("")
@@ -149,7 +150,7 @@ def create_run(body: CreateRunBody, cfg=Depends(get_cfg), conn=Depends(get_conn)
         run = wb_runs.create_run(conn, cfg, body.targets, body.operator, checklist_id=cid, version=ver,
                                  check_ids=body.check_ids, use_llm=body.use_llm, budget=budget,
                                  allowed_tools=body.tools, autonomy=body.autonomy, goal_text=body.goal,
-                                 llm_provider=body.llm_provider)
+                                 llm_provider=body.llm_provider, llm_profile=body.llm_profile)
     except AuditError as e:
         conn.rollback()
         raise HTTPException(400, str(e)) from None
