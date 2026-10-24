@@ -46,11 +46,14 @@ def get_environment(cfg=Depends(get_cfg), user: str = Depends(current_user)):
     checklists = [{"checklist_id": cid, "version": v["version"], "sha256": v.get("sha256")}
                   for cid, v in cl.entries() if v["status"] == "active"]
     tools = [{"name": name, "risk": spec.risk} for name, spec in sorted(wb_runs.registry(cfg).items())]
+    llm_profiles = [{"name": name, "kind": p["kind"], "model": p.get("model")}
+                    for name, p in sorted(audit_config.load_llm_profiles(cfg.home).items())]
     return {
         "targets": scope["targets"],
         "checklists": checklists,
         "tools": tools,
         "autonomy_levels": list(wb_runs.AUTONOMY_LEVELS),
         "llm_providers": list(wb_runs.LLM_PROVIDERS),
+        "llm_profiles": llm_profiles,
         "doctor": _doctor_status(cfg),
     }

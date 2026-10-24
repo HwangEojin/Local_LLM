@@ -282,6 +282,25 @@ NOTIFY_CHANNELS = {
     "properties": {"channels": {"type": "array", "items": NOTIFY_CHANNEL}},
 }
 
+# 다중 LLM 프로파일(ARTEX llm_profiles 대응). 각 필드는 audit.local_model.OllamaClient 또는
+# audit.claude_cli_model.ClaudeCliClient 가 받는 cfg dict 위에 settings.json 의 기존 ollama/claude_cli
+# 블록을 덮어쓰는 값이라, 프로파일에는 다른 이름·모델 등 바꿀 값만 적으면 된다(전부 다시 안 적어도 됨).
+LLM_PROFILE = {
+    "type": "object", "additionalProperties": False, "required": ["name", "kind"],
+    "properties": {
+        "name": _ID, "kind": {"enum": ["ollama", "claude_cli"]},
+        "base_url": {"type": "string", "minLength": 1}, "model": {"type": "string", "minLength": 1},
+        "timeout_s": {"type": "integer", "minimum": 1}, "max_retries": {"type": "integer", "minimum": 0},
+        "max_calls_per_run": {"type": "integer", "minimum": 1},
+        "max_request_bytes": {"type": "integer", "minimum": 1}, "max_response_bytes": {"type": "integer", "minimum": 1},
+    },
+}
+
+LLM_PROFILES = {
+    "type": "object", "additionalProperties": False, "required": ["profiles"],
+    "properties": {"profiles": {"type": "array", "items": LLM_PROFILE}},
+}
+
 CHECKLIST = {
     "type": "object", "additionalProperties": False,
     "required": ["checklist_id", "guide_name", "guide_version", "official", "notice", "items"],

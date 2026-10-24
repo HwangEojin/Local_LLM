@@ -61,6 +61,20 @@ def load_scope(home: Path) -> dict:
     return load_json(home / "config" / "scope.json", schemas.SCOPE)
 
 
+def load_llm_profiles(home: Path) -> dict[str, dict]:
+    """config/llm_profiles.json(선택) -> {name: profile}. 파일이 없으면 빈 딕셔너리(프로파일 없음)."""
+    path = home / "config" / "llm_profiles.json"
+    if not path.is_file():
+        return {}
+    data = load_json(path, schemas.LLM_PROFILES)
+    by_name: dict[str, dict] = {}
+    for p in data["profiles"]:
+        if p["name"] in by_name:
+            raise ConfigError(f"{path}: 프로파일 이름 중복: {p['name']}")
+        by_name[p["name"]] = p
+    return by_name
+
+
 def load_mcp_servers(home: Path) -> dict:
     """config/mcp_servers.json(공용 템플릿) + config/mcp_servers.local.json(이 PC 전용, Git 제외)을 합친다.
 

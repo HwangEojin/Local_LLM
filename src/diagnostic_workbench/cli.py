@@ -195,6 +195,35 @@ def cmd_tools(args):
     return 0
 
 
+def cmd_llm_profiles(args):
+    """config/llm_profiles.json 에 등록된 프로파일 목록과(--check 일 때) 실제 연결 가능 여부.
+
+    run create --llm-profile <이름> 으로 고른다. 파일이 없으면 프로파일 없음(llm_provider 하나만 씀)."""
+    cfg = config.load(args.home)
+    profiles = audit_config.load_llm_profiles(cfg.home)
+    if not profiles:
+        print("등록된 프로파일 없음 (config/llm_profiles.json 없음, 예시: llm_profiles.example.json)")
+        return 0
+    bad = 0
+    for name, p in sorted(profiles.items()):
+        line = f"{name:<24} kind={p['kind']:<10} model={p.get('model', '(settings.json 기본값)')}"
+        if not args.check:
+            print(line)
+            continue
+        try:
+            if p["kind"] == "claude_cli":
+                from audit.claude_cli_model import ClaudeCliClient
+                info = ClaudeCliClient({**cfg.settings.raw.get("claude_cli", {}), **p}).check_ready()
+            else:
+                from audit.local_model import OllamaClient
+                info = OllamaClient({**cfg.settings.ollama, **p}, cfg.settings.external_api_enabled).check_ready()
+            print(f"[OK  ] {line}  {info}")
+        except Exception as e:
+            bad += 1
+            print(f"[FAIL] {line}  {type(e).__name__}: {e}")
+    return int(bad > 0)
+
+
 def _status(conn, run):
     rid = run["id"]
     if run["checklist_version_id"] is None:
@@ -241,10 +270,12 @@ def cmd_run(args):
         run = runs.create_run(conn, cfg, args.targets.split(","), args.operator, checklist_id=cid, version=ver,
                               check_ids=args.check_ids.split(",") if args.check_ids else None, use_llm=args.llm,
                               budget=budget, allowed_tools=args.tools.split(",") if args.tools else None,
-                              autonomy=args.autonomy, goal_text=args.goal, llm_provider=args.llm_provider)
+                              autonomy=args.autonomy, goal_text=args.goal, llm_provider=args.llm_provider,
+                              llm_profile=args.llm_profile)
         print(f"실행 생성됨: {run['id']}  자율 모드={run['autonomy']}"
               + ("" if cid else "  (체크리스트 없음 — 자율 탐색 전용)")
-              + (f"  LLM={run['llm_provider']}" if run["llm_provider"] != "ollama" else ""))
+              + (f"  LLM={run['llm_profile_name'] or run['llm_provider']}" if run["llm_provider"] != "ollama"
+                 or run["llm_profile_name"] else ""))
         if run["autonomy"] == "full":
             print("  주의: 위험도 'write/dangerous' 도구가 범위 내에서 사람 승인 없이 자동 실행됩니다. "
                   "실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
@@ -619,6 +650,8 @@ def build_parser():
     c.add_argument("--pdf", help="import 시 쪽 번호를 연결할 참고 PDF 경로(pdftotext 필요)")
     c.add_argument("--replace-draft", action="store_true", help="import 시 같은 버전이 draft 이면 교체")
     sub.add_parser("tools", help="등록된 도구와 위험도 목록")
+    lp = sub.add_parser("llm-profiles", help="등록된 LLM 프로파일 목록(--check 로 실제 연결 확인)")
+    lp.add_argument("--check", action="store_true", help="각 프로파일로 실제 check_ready() 를 호출해 본다")
     r = sub.add_parser("run", help="실행 생성/미리 보기/시작(재개)/상태/취소/목록")
     r.add_argument("action", choices=["create", "plan", "start", "status", "cancel", "list"])
     r.add_argument("run", nargs="?")
@@ -634,7 +667,9 @@ def build_parser():
     r.add_argument("--llm", action="store_true", help="로컬 LLM 참고 의견과 탐색 제안 사용")
     r.add_argument("--llm-provider", choices=runs.LLM_PROVIDERS, default="ollama",
                    help="ollama(기본, 로컬) | claude_cli(임시 테스트 — 이 PC 에 로그인된 claude CLI 구독 호출, "
-                        "API 과금 아님). --llm 과 함께 쓸 때만 의미 있음")
+                        "API 과금 아님). --llm 과 함께 쓸 때만 의미 있음. --llm-profile 을 주면 무시됨")
+    r.add_argument("--llm-profile", help="config/llm_profiles.json 에 등록된 프로파일 이름(--llm-provider 대신 "
+                                         "이름으로 모델·주소·타임아웃을 한 번에 고름)")
     r.add_argument("--max-tasks", type=int)
     r.add_argument("--max-explorations", type=int)
     b = sub.add_parser("backlog", help="작업 큐(TodoList) 조회")
@@ -695,7 +730,8 @@ def build_parser():
     return p
 
 
-COMMANDS = {"doctor": cmd_doctor, "web": cmd_web, "migrate": cmd_migrate, "checklist": cmd_checklist, "tools": cmd_tools, "run": cmd_run, "backlog": cmd_backlog,
+COMMANDS = {"doctor": cmd_doctor, "web": cmd_web, "migrate": cmd_migrate, "checklist": cmd_checklist, "tools": cmd_tools,
+           "llm-profiles": cmd_llm_profiles, "run": cmd_run, "backlog": cmd_backlog,
             "approve": cmd_approve, "retry": cmd_retry, "review": cmd_review, "finding": cmd_finding,
             "evidence": cmd_evidence, "collect": cmd_collect, "trace": cmd_trace, "graph": cmd_graph,
             "report": cmd_report}

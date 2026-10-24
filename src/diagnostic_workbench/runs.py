@@ -132,12 +132,22 @@ def next_run_code(conn, abbr: str) -> str:
 def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id: str | None = None,
                version: str | None = None, check_ids: list[str] | None = None, use_llm: bool = False,
                budget: dict | None = None, allowed_tools: list[str] | None = None, autonomy: str = "approval",
-               goal_text: str | None = None, llm_provider: str = "ollama") -> dict:
+               goal_text: str | None = None, llm_provider: str = "ollama", llm_profile: str | None = None) -> dict:
     """실행 생성. checklist_id 가 없으면 체크리스트 항목 없이 자율 탐색만 하는 실행이 된다 — 체크리스트는
     필수 조건이 아니라 선택적으로 곁들이는 기능이다(CLAUDE.md §3.2/§13).
+
+    llm_profile 을 주면 config/llm_profiles.json 에서 그 이름을 찾아 llm_provider 를 그 프로파일의 kind 로
+    맞춘다(둘 다 주면 llm_profile 이 우선). 프로파일이 없으면 llm_provider 하나만으로 기존처럼 동작한다.
     """
     if autonomy not in AUTONOMY_LEVELS:
         raise ConfigError(f"autonomy 는 {AUTONOMY_LEVELS} 중 하나여야 함: {autonomy}")
+    if llm_profile:
+        profiles = audit_config.load_llm_profiles(cfg.home)
+        profile = profiles.get(llm_profile)
+        if profile is None:
+            raise ConfigError(f"llm_profile '{llm_profile}' 을(를) config/llm_profiles.json 에서 찾을 수 없음 "
+                              f"(등록된 프로파일: {sorted(profiles) or '없음'})")
+        llm_provider = profile["kind"]
     if llm_provider not in LLM_PROVIDERS:
         raise ConfigError(f"llm_provider 는 {LLM_PROVIDERS} 중 하나여야 함: {llm_provider}")
     if not checklist_id and not use_llm:
@@ -173,9 +183,10 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
     run_code = next_run_code(conn, target_abbr(first, code))
     run = conn.execute(
         "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm, allowed_tools, "
-        "autonomy, llm_provider, run_code) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "autonomy, llm_provider, run_code, llm_profile_name) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (scope["engagement_id"], operator, cv["id"] if cv else None, Jsonb(scope),
-         Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy, llm_provider, run_code)).fetchone()
+         Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy, llm_provider, run_code,
+         llm_profile)).fetchone()
     default_goal = f"체크리스트 {checklist_id}@{version} 진단" if checklist_id else f"자율 진단: {', '.join(target_ids)}"
     goal = conn.execute(
         "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'goal','operator',%s) RETURNING id",
@@ -200,7 +211,8 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
         "plan": {"plan_id": str(run["id"]), "checklist_id": checklist_id, "checklist_version": version,
                  "targets": [tid for tid, _ in targets], "use_llm": use_llm},
         "scope": scope, "tasks": tasks, "use_llm": use_llm, "operator": operator, "budget": run["budget"],
-        "allowed_tools": allowed_tools, "autonomy": autonomy, "llm_provider": llm_provider})
+        "allowed_tools": allowed_tools, "autonomy": autonomy, "llm_provider": llm_provider,
+        "llm_profile": llm_profile})
     db.notify_change(conn, run["id"], "run_created")
     conn.commit()
     return run
