@@ -10,7 +10,8 @@ from audit import config as audit_config
 from audit.models import AuditError
 from audit.policy import mask_secrets
 
-from . import __version__, backlog, config, coordinator, db, evidence, policy, planner, reporting, runs, traces, worker
+from . import (__version__, backlog, config, coordinator, db, evidence, notify, policy, planner, reporting, runs,
+              traces, worker)
 
 VERDICTS = ["PASS", "FAIL", "NOT_APPLICABLE", "NEEDS_REVIEW", "INCONCLUSIVE"]
 
@@ -415,6 +416,9 @@ def cmd_finding(args):
                               actor=f"reviewer:{args.reviewer}", evidence_ids=evidence_ids)
     db.audit(conn, run["id"], "finding_status_changed",
              {"finding_id": str(f["id"]), "old": old_status, "new": args.status, "reviewer": args.reviewer})
+    if args.status == "CONFIRMED":
+        notify.notify_finding_confirmed(conn, cfg, run["id"], f["id"], title=f["title"], severity=f["severity"],
+                                        actor=f"reviewer:{args.reviewer}")
     conn.commit()
     print(f"{f['id']}: {old_status} -> {args.status} (이력 기록됨)")
     return 0

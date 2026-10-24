@@ -17,7 +17,7 @@ from psycopg.types.json import Jsonb
 from audit.local_model import LLMError, OllamaClient
 from audit.policy import mask_secrets
 
-from . import db, policy, traces, worker
+from . import db, notify, policy, traces, worker
 
 PROMPT_VERSION = "explore-4"
 _STR = {"type": "string", "minLength": 1, "maxLength": 600}
@@ -325,3 +325,5 @@ def _report_llm_finding(ctx, fnd: dict, assets: dict, known: set[str]) -> None:
     if fid:
         db.audit(conn, run_id, "llm_finding_confirmed", {"finding_id": str(fid), "title": fnd["title"],
                                                           "model": ctx.llm.model})
+        notify.notify_finding_confirmed(conn, ctx.cfg, run_id, fid, title=fnd["title"], severity=fnd["severity"],
+                                        actor=f"llm:{ctx.llm.model}")

@@ -267,6 +267,21 @@ RULE_OVERLAYS = {
     "properties": {"overlays": {"type": "array", "items": RULE_OVERLAY}},
 }
 
+# 알림 채널(ARTEX notify/ 대응, 운영 편의 기능 — CLAUDE.md 범위 밖). 운영자가 직접 적는 값이며 LLM 이나
+# 대상 응답으로 바꿀 수 없다(config/mcp_servers.json 과 같은 신뢰 수준).
+NOTIFY_CHANNEL = {
+    "type": "object", "additionalProperties": False, "required": ["name", "kind", "url"],
+    "properties": {
+        "name": _ID, "kind": {"enum": ["webhook"]}, "url": {"type": "string", "minLength": 1},
+        "enabled": {"type": "boolean"},
+    },
+}
+
+NOTIFY_CHANNELS = {
+    "type": "object", "additionalProperties": False, "required": ["channels"],
+    "properties": {"channels": {"type": "array", "items": NOTIFY_CHANNEL}},
+}
+
 CHECKLIST = {
     "type": "object", "additionalProperties": False,
     "required": ["checklist_id", "guide_name", "guide_version", "official", "notice", "items"],
