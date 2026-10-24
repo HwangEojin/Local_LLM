@@ -28,6 +28,7 @@ py -3.13 -m venv .venv
 | `config/settings.json` | Ollama 주소·모델·한도, 증적·보고서·체크리스트·템플릿 경로, 도구 호출 한도. 루프백이 아닌 모델 주소는 `external_api.enabled=false` 이면 거부. `ollama.timeout_s`(기본 240)는 모델 크기·시스템 부하에 맞춰 늘린다 — 16GB 노트북에서 `qwen2.5:7b` 는 호출당 10~90초(다른 프로세스 부하 겹치면 더 걸림), `qwen2.5:14b` 는 타임아웃을 600초 정도로 늘려야 응답을 받을 수 있었다. **임시 테스트 전용**: `WORKBENCH_LLM_PROVIDER=claude_cli` 환경 변수를 설정하면 Ollama 대신 설치된 `claude` CLI(Claude Code, 구독 로그인 — API 과금 아님)를 호출한다. `claude` 는 `--tools ""` 로 도구 접근을 전부 막은 채 돌며(실제 도구 실행은 여전히 Python 정책 계층만 거침), 쓰려면 터미널에서 `claude login` 이 먼저 돼 있어야 한다. `config/settings.json` 에 `claude_cli`(모델·타임아웃 등, 선택) 블록으로 세부 조정 가능(`src/audit/claude_cli_model.py`) |
 | `config/mcp_servers.json` | MCP 서버와 허용 도구(`risk`, `scope_args`, `args_schema`). 이 PC 의 경로는 `mcp_servers.local.json` 에 같은 서버 이름으로 적는다 |
 | `config/workbench.json` (선택) | 제외 대상 `exclude`, 예산 `budget`, `lease_s`, `min_call_interval_ms`, `nmap_path`, `testssl_path` (`workbench.example.json` 참고) |
+| `config/notify.json` (선택) | finding 이 CONFIRMED 될 때 알릴 웹훅 채널 목록(`notify.example.json` 참고). 없으면 알림 없이 조용히 넘어간다 |
 
 **testssl.sh (WEB-SER-037 재협상 오버레이용, 선택):** `git clone --branch 3.2 --depth 1 https://github.com/drwetter/testssl.sh.git data/tools/testssl.sh`(저장소에는 안 올라감, `/data/` 가 `.gitignore` 대상). Git-for-Windows 의 MSYS 에는 `hexdump`/`pkill` 이 없어 `data/tools/hexdump-shim/`(이 저장소에 포함, testssl.sh 가 실제로 쓰는 호출 형태만 정확히 구현)을 testssl.sh 실행 시 PATH 맨 앞에 둔다 — `tools.py` 의 `tls.renegotiation` 도구가 자동으로 해 준다. `config/workbench.json` 에 `testssl_path`를 설정해야 도구가 등록된다.
 
@@ -147,6 +148,7 @@ cd web && npm install && npm run dev    # 프론트엔드(Next.js, 기본 :3000)
 | `policy.py` | `ALLOW / ALLOW_WITH_APPROVAL / DENY / NEEDS_SCOPE_CONFIRMATION` 판정(범위·제외·DNS·중지·승인·도착 주소) |
 | `planner.py`, `backlog.py`, `coordinator.py` | 변경 기반 계획, 상태 전이와 `SKIP LOCKED` 점유, 실행 반복·중지·취소. 체크리스트 없는 실행은 매 주기 탐색을 시도(부트스트랩) |
 | `worker.py`, `evidence.py`, `tools.py` | 도구 호출 → 증적 → 규칙 판정 → 발견 사항, 단계별 Activity, 자산 관찰, Nmap |
+| `notify.py` | finding CONFIRMED 전환 시 `config/notify.json` 의 웹훅 채널로 알림(선택 기능) |
 | `explore.py`, `traces.py` | LLM 탐색 제안과 검증, 탐색 그래프, Activity 검색, 체크리스트 사후 매핑(`tag_node`). 체크리스트 증거가 없는 실행은 목표(goal)·대상 자산만 근거로 최초 탐색을 제안(bootstrap) |
 | `reporting.py` | DB 기록을 보고서 모듈 형식으로 넘기는 어댑터, 커버리지. 체크리스트 없는 실행은 `generate_autonomous`가 `findings` 테이블을 `audit.pentest_report._Builder` 가 기대하는 모양으로 바꿔 **같은 Word 서식**에 채운다(새 서식을 만들지 않음) |
 | `src/audit/` | 공용 라이브러리: 스키마 검증, 범위 정책, 체크리스트 로더·가져오기, 규칙 판정, 오버레이, 탐색 발견 검증 신호(`signals.py`), MCP 클라이언트, Ollama 클라이언트, Word/Excel 보고서 |
@@ -213,8 +215,9 @@ CLAUDE.md 는 바뀌지 않는 규칙만 담는다. 단계별 계획은 상태�
 | 9 | Finding 검토 워크플로(사람의 확정/기각, CLAUDE.md §9/§10) | **구현(§7)** — `findings.status` 6 종 상태 전환 + `finding_review_history` 이력 + `finding review`/`finding retest` CLI. CONFIRMED 는 증거 필수 |
 | 10 | 자율성 확장 | **구현(§7, CLAUDE.md §1)** — 탐색 호출 수 무제한·LLM 최초 라운드 직접 실행·LLM 직접 finding 확정·자율성 이분법·Kill Switch 즉시 취소·디바운스+하트비트 wake-up (총 6건, CLAUDE.md 기본 정책) |
 | 11 | 웹 UI MVP(findings/runs, 2026-10-19) | **구현(§5a)** — FastAPI(`src/webapi`, 새 진단 로직 없음) + Next.js(`web/`). 로그인, 진단 환경 설정(대상·체크리스트·자율성 선택 후 실행 생성)·시작/취소, 승인 대기 작업 승인/거부, 증적 목록·다운로드·무결성 확인, Activity 모니터링, runs 목록/상세, finding review/retest. 실제 Chromium 으로 end-to-end 확인. assets/traffic/agents/mcp/tools/settings/chat 등 나머지 화면은 범위 밖 |
+| 12 | Finding 확정 알림(웹훅, ARTEX 대비 갭 분석 1순위) | **구현** — `notify.py`가 `config/notify.json` 의 웹훅 채널로 finding CONFIRMED 전환(사람 검토·LLM 직접 확정 양쪽)을 POST 한다. 실패해도 판정/실행을 막지 않고 `audit_events`(`notification_sent`/`notification_failed`)에만 남긴다. 실제 로컬 HTTP 서버 + 실제 PostgreSQL 로 end-to-end 확인(`tests/unit/test_notify.py` 8건). Email/Telegram/DingTalk 등 다른 채널 종류는 미구현(웹훅만, 필요해지면 확장) |
 
-3(자동 점검 A)은 오버레이 데이터 6/6건이 전부 등록돼 WEB 플랫폼의 config-check형 항목은 더 추가할 게 없다 — 남은 건 §6 HTS 등으로의 확장(§7A는 platform·checklist_id 를 하드코딩하지 않으므로 데이터만 추가하면 됨, 이번에는 보류). 4(자동 점검 B)는 §7B 가 이름 붙인 7종 신호·SQLi 차등 검증·실제 MCP 연동까지 전부 끝나 "구현"으로 올렸다. 5(예산 분리)도 완료(단, 10 번으로 탐색 쪽 강제는 없어짐). 0a(체크리스트 분리·자율 탐색 bootstrap), 8a(자율 탐색 전용 보고서), 9(Finding 검토 워크플로), 10(자율성 확장)도 완료. 7은 웹 관련 두 항목(리다이렉트 하위 요청 범위 검사, Burp 이력 기반 자산 추출)을 2026-10-19 에 마무리했고 모바일 Word 템플릿만 남았다. **웹 UI(§5a)도 2026-10-19 에 findings/runs(tasks) MVP 를 구현**(나머지 화면은 범위 밖). 남은 우선순위는 8b(체크리스트 사후 부착) → 6(HTS 확장, 보류 중) → 7(모바일 템플릿) → 웹 UI 확장(assets/traffic 등 나머지 화면, 필요해지면).
+3(자동 점검 A)은 오버레이 데이터 6/6건이 전부 등록돼 WEB 플랫폼의 config-check형 항목은 더 추가할 게 없다 — 남은 건 §6 HTS 등으로의 확장(§7A는 platform·checklist_id 를 하드코딩하지 않으므로 데이터만 추가하면 됨, 이번에는 보류). 4(자동 점검 B)는 §7B 가 이름 붙인 7종 신호·SQLi 차등 검증·실제 MCP 연동까지 전부 끝나 "구현"으로 올렸다. 5(예산 분리)도 완료(단, 10 번으로 탐색 쪽 강제는 없어짐). 0a(체크리스트 분리·자율 탐색 bootstrap), 8a(자율 탐색 전용 보고서), 9(Finding 검토 워크플로), 10(자율성 확장), 12(알림)도 완료. 7은 웹 관련 두 항목(리다이렉트 하위 요청 범위 검사, Burp 이력 기반 자산 추출)을 2026-10-19 에 마무리했고 모바일 Word 템플릿만 남았다. **웹 UI(§5a)도 2026-10-19 에 findings/runs(tasks) MVP 를 구현**(나머지 화면은 범위 밖). 남은 우선순위는 8b(체크리스트 사후 부착) → 6(HTS 확장, 보류 중) → 7(모바일 템플릿) → 웹 UI 확장(assets/traffic 등 나머지 화면, 필요해지면).
 
 ## 9. 복구와 문제 해결
 
