@@ -12,8 +12,8 @@ from audit import config as audit_config
 from audit.models import AuditError
 from audit.policy import mask_secrets
 
-from . import (__version__, backlog, config, coordinator, db, evidence, notify, policy, planner, reporting, runs,
-              traces, worker)
+from . import (__version__, backlog, config, coordinator, db, evidence, explore, notify, policy, planner, prompts,
+              reporting, runs, traces, worker)
 
 VERDICTS = ["PASS", "FAIL", "NOT_APPLICABLE", "NEEDS_REVIEW", "INCONCLUSIVE"]
 
@@ -409,6 +409,47 @@ def _finding(conn, run, ref):
     return rows[0]
 
 
+def cmd_prompt(args):
+    """DB 로 편집 가능한 에이전트 프롬프트(ARTEX agent_prompts 대응). 행이 없으면 코드 기본값을 그대로 쓴다.
+
+    이름 예: explore_system(탐색 제안 프롬프트), explore_probe_system(최초 라운드 프로브 프롬프트).
+    """
+    cfg, conn = _open(args)
+    if args.action == "list":
+        rows = prompts.list_all(conn)
+        names = {r["name"] for r in rows}
+        for n in ("explore_system", "explore_probe_system"):
+            if n not in names:
+                print(f"{n}  (코드 기본값 사용 중)")
+        for r in rows:
+            print(f"{r['name']}  (DB 오버라이드, {r['updated_by']}, {r['updated_at']:%Y-%m-%d %H:%M}Z)")
+        return 0
+    if args.action == "show":
+        if not args.name:
+            print("prompt show 에는 <name> 이 필요합니다", file=sys.stderr)
+            return 2
+        default = {"explore_system": explore.SYSTEM, "explore_probe_system": explore.PROBE_SYSTEM}.get(args.name, "")
+        print(prompts.get(conn, args.name, default))
+        return 0
+    if args.action == "reset":
+        if not args.name:
+            print("prompt reset 에는 <name> 이 필요합니다", file=sys.stderr)
+            return 2
+        prompts.reset(conn, args.name)
+        db.audit(conn, None, "prompt_reset", {"name": args.name})
+        conn.commit()
+        print(f"{args.name}: 코드 기본값으로 되돌림")
+        return 0
+    if not (args.name and args.text and args.operator):
+        print("prompt set 에는 <name> --text .. --operator .. 가 필요합니다", file=sys.stderr)
+        return 2
+    prompts.set(conn, args.name, args.text, operator=args.operator)
+    db.audit(conn, None, "prompt_updated", {"name": args.name, "operator": args.operator})
+    conn.commit()
+    print(f"{args.name}: 갱신됨")
+    return 0
+
+
 def cmd_question(args):
     """LLM 이 탐색 중 막혀서 되물은 질문(ARTEX 사이드 질문 대응, exploration_nodes.kind='question') 목록과 답변.
 
@@ -737,6 +778,11 @@ def build_parser():
     rv.add_argument("verdict", choices=VERDICTS)
     rv.add_argument("--reason", required=True)
     rv.add_argument("--reviewer", required=True)
+    pr = sub.add_parser("prompt", help="DB 로 편집 가능한 에이전트 프롬프트: list/show/set/reset")
+    pr.add_argument("action", choices=["list", "show", "set", "reset"])
+    pr.add_argument("name", nargs="?", help="show/set/reset: 프롬프트 이름(예: explore_system)")
+    pr.add_argument("--text", help="set 필수: 새 프롬프트 전문")
+    pr.add_argument("--operator", help="set 필수")
     qd = sub.add_parser("question", help="LLM 이 되물은 질문 목록(list) / 답변(answer)")
     qd.add_argument("action", choices=["list", "answer"])
     qd.add_argument("run")
@@ -784,7 +830,7 @@ def build_parser():
 COMMANDS = {"doctor": cmd_doctor, "web": cmd_web, "migrate": cmd_migrate, "checklist": cmd_checklist, "tools": cmd_tools,
            "llm-profiles": cmd_llm_profiles, "run": cmd_run, "backlog": cmd_backlog,
             "approve": cmd_approve, "retry": cmd_retry, "review": cmd_review, "finding": cmd_finding,
-            "question": cmd_question,
+            "question": cmd_question, "prompt": cmd_prompt,
             "evidence": cmd_evidence, "collect": cmd_collect, "trace": cmd_trace, "graph": cmd_graph,
             "report": cmd_report}
 

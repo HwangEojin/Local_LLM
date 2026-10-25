@@ -18,7 +18,7 @@ from audit import config as audit_config
 from audit.local_model import LLMError, OllamaClient
 from audit.policy import mask_secrets
 
-from . import db, notify, policy, traces, worker
+from . import db, notify, policy, prompts, traces, worker
 
 PROMPT_VERSION = "explore-4"
 _STR = {"type": "string", "minLength": 1, "maxLength": 600}
@@ -230,8 +230,9 @@ def _bootstrap_probes(ctx, base_text: str, assets: dict) -> tuple[set[str], str]
         text = base_text + "\nPROBE_LOG (이번 라운드에 이미 실행한 프로브): " + \
             mask_secrets(json.dumps(log_entries, ensure_ascii=False, default=str))
         try:
+            system = prompts.get(conn, "explore_probe_system", PROBE_SYSTEM)
             out = ctx.llm.structured_chat(
-                [{"role": "system", "content": PROBE_SYSTEM}, {"role": "user", "content": text}],
+                [{"role": "system", "content": system}, {"role": "user", "content": text}],
                 _PROBE_SCHEMA, "bootstrap_probe")
         except LLMError as e:
             db.audit(conn, run_id, "llm_error", {"purpose": "bootstrap_probe", "error": str(e)})
@@ -285,7 +286,8 @@ def propose(ctx) -> int:
                     "안전한 read 전용 정찰(예: 디렉터리/서비스 나열, 배너 확인)을 제안하세요. based_on_evidence_ids 는 "
                     "빈 배열([])로 제출해도 됩니다.\n" + text)
     try:
-        out = ctx.llm.structured_chat([{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}],
+        system = prompts.get(conn, "explore_system", SYSTEM)
+        out = ctx.llm.structured_chat([{"role": "system", "content": system}, {"role": "user", "content": text}],
                                       PROPOSALS, "explore")
     except LLMError as e:  # 실패를 남기고 결정론적 작업은 계속한다
         db.audit(conn, run_id, "llm_error", {"purpose": "explore", "error": str(e)})
