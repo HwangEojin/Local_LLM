@@ -154,7 +154,10 @@ SCOPE = {
                                "value": _STR, "description": {"type": "string"},
                                "platform": _STR,
                                # 진단 ID 의 대상 약어(선택). 없으면 target_id 에서 자동으로 만든다.
-                               "code": {"type": "string", "pattern": r"^[A-Z0-9]{2,6}$"}},
+                               "code": {"type": "string", "pattern": r"^[A-Z0-9]{2,6}$"},
+                               # 멀티테넌시 태그(선택, ARTEX companies 대응 축소판). 자산 격리는 아니고
+                               # 보고·필터링용 태그일 뿐이다(assets.company, 0014).
+                               "company": _STR},
             },
         },
     },

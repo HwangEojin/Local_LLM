@@ -69,7 +69,8 @@ class Policy:
                 value = str(p)
             elif t["type"] == "url" and urlsplit(value).scheme not in ("http", "https"):
                 raise ConfigError(f"url 대상은 http(s) 여야 함: {value}")
-            self.targets[t["target_id"]] = Target(t["target_id"], t["type"], value, t.get("platform"))
+            self.targets[t["target_id"]] = Target(t["target_id"], t["type"], value, t.get("platform"),
+                                                  t.get("company"))
 
     def target(self, target_id: str) -> Target:
         if target_id not in self.targets:
