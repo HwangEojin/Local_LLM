@@ -47,7 +47,7 @@ class SignalPromotionDB(unittest.TestCase):
             (cv["id"], Jsonb({}), Jsonb({}))).fetchone()["id"]
         cls.asset = cls.conn.execute(
             "INSERT INTO assets (kind, value, source) VALUES ('host', 'signal-promotion-test.invalid', 'operator') "
-            "ON CONFLICT (kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id").fetchone()["id"]
+            "ON CONFLICT (company, kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id").fetchone()["id"]
 
     @classmethod
     def tearDownClass(cls):

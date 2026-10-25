@@ -265,12 +265,14 @@ def _observe_assets(ctx, it, tool, args, out, evidence_id):
         return
     conn, run_id = ctx.conn, ctx.run["id"]
 
+    company = it["target"].company or ""
+
     def asset(kind, value):
         return conn.execute(
-            "INSERT INTO assets (kind, value, source, verification, first_seen_run_id) "
-            "VALUES (%s, %s, %s, 'OBSERVED', %s) "
-            "ON CONFLICT (kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id",
-            (kind, value, f"tool:{tool}", run_id)).fetchone()["id"]
+            "INSERT INTO assets (kind, value, company, source, verification, first_seen_run_id) "
+            "VALUES (%s, %s, %s, %s, 'OBSERVED', %s) "
+            "ON CONFLICT (company, kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id",
+            (kind, value, company, f"tool:{tool}", run_id)).fetchone()["id"]
 
     def edge(src, rel, dst):
         if src != dst:

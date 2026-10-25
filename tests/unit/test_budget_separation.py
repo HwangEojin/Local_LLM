@@ -30,7 +30,7 @@ class ToolCallsUsedByKind(unittest.TestCase):
             (cv["id"], Jsonb({}), Jsonb({}))).fetchone()["id"]
         cls.asset = cls.conn.execute(
             "INSERT INTO assets (kind, value, source) VALUES ('host', 'budget-separation-test.invalid', "
-            "'operator') ON CONFLICT (kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id"
+            "'operator') ON CONFLICT (company, kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id"
         ).fetchone()["id"]
         # backlog_items 는 kind 에 맞는 참조(run_checklist_item_id / exploration_node_id)가 있어야 한다.
         ci = cls.conn.execute("SELECT id FROM checklist_items LIMIT 1").fetchone()
