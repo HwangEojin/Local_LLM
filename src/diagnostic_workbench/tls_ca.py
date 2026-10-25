@@ -12,7 +12,12 @@ requirements.lock 에 고정돼 있는 패키지(mcp 의 전이 의존성)를 �
 from __future__ import annotations
 
 import datetime
+import ssl
 from pathlib import Path
+
+
+class TlsCertError(Exception):
+    """host 용 TLS 서버 컨텍스트를 준비하지 못함(인증서 생성·파일 읽기·체인 로드 중 하나가 실패)."""
 
 
 def _ca_dir(cfg) -> Path:
@@ -88,3 +93,15 @@ def leaf_cert_for(cfg, host: str) -> tuple[Path, Path]:
     key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
                                            serialization.NoEncryption()))
     return cert_path, key_path
+
+
+def server_context_for(cfg, host: str) -> ssl.SSLContext:
+    """host 용 리프 인증서로 TLS 서버 컨텍스트를 만든다. 원인이 cryptography 생성 실패든 파일 읽기든
+    체인 로드든, 호출자(proxy.py)는 TlsCertError 하나만 보면 된다 — "이 호스트는 못 가로챈다"로 충분하다."""
+    try:
+        cert_path, key_path = leaf_cert_for(cfg, host)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(str(cert_path), str(key_path))
+        return ctx
+    except Exception as e:
+        raise TlsCertError(str(e)) from e
