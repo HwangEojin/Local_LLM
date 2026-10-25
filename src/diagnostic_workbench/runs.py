@@ -196,9 +196,8 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
         asset = conn.execute(
             "INSERT INTO assets (kind, value, platform, company, source, verification, first_seen_run_id) "
             "VALUES (%s,%s,%s,%s,'scope','SCOPE_DECLARED',%s) "
-            "ON CONFLICT (kind, value) DO UPDATE SET platform = COALESCE(EXCLUDED.platform, assets.platform), "
-            "company = COALESCE(assets.company, EXCLUDED.company) "  # 먼저 태그된 회사를 유지(전체 격리는 아님)
-            "RETURNING id", (t.type, t.value, t.platform, t.company, run["id"])).fetchone()
+            "ON CONFLICT (company, kind, value) DO UPDATE SET platform = COALESCE(EXCLUDED.platform, assets.platform) "
+            "RETURNING id", (t.type, t.value, t.platform, t.company or "", run["id"])).fetchone()
         conn.execute("INSERT INTO run_assets (run_id, asset_id, target_id) VALUES (%s,%s,%s)",
                      (run["id"], asset["id"], tid))
         conn.execute("INSERT INTO exploration_anchors (node_id, asset_id) VALUES (%s,%s)", (goal["id"], asset["id"]))

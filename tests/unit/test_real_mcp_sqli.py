@@ -77,7 +77,7 @@ class RealMcpSqliPromotion(unittest.TestCase):
             (cv["id"], Jsonb({}), Jsonb({}))).fetchone()["id"]
         cls.asset = cls.conn.execute(
             "INSERT INTO assets (kind, value, source) VALUES ('host', 'real-mcp-sqli-test.invalid', "
-            "'operator') ON CONFLICT (kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id"
+            "'operator') ON CONFLICT (company, kind, value) DO UPDATE SET value = EXCLUDED.value RETURNING id"
         ).fetchone()["id"]
         cls._tmp = tempfile.TemporaryDirectory()
         cls.evidence_dir = Path(cls._tmp.name)
