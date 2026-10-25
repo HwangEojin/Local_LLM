@@ -127,10 +127,14 @@ def create_retest(conn, run_id, finding_id, *, operator, reason) -> list:
                         (run_id,)).fetchone()["id"]
     item_ids = []
     for c in calls:
+        # 탐색 신호(signals.py)로 확정된 finding 이면 재검증 완료 시 같은 신호로 자동 판정할 수 있게
+        # 취약점 클래스를 지금(원래 인자 기준) 분류해 둔다. 모르면 None — 그 경우 자동 판정은 생략되고
+        # 사람이 직접 검토한다(체크리스트 규칙·LLM 확정 finding 은 재현할 결정론적 신호가 없음).
         node = conn.execute(
             "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'intent','retest',%s) "
             "RETURNING id", (run_id, Jsonb({"tool": c["tool"], "args": c["args"],
-                                            "retest_of_finding": str(finding_id)}))).fetchone()["id"]
+                                            "retest_of_finding": str(finding_id),
+                                            "retest_vuln_class": signals.classify_payload(c["args"])}))).fetchone()["id"]
         conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'spawns')", (goal, node))
         conn.execute("INSERT INTO exploration_anchors (node_id, asset_id) VALUES (%s,%s)", (node, c["asset_id"]))
         item = conn.execute(
@@ -444,6 +448,45 @@ def _promote_exploration_finding(ctx, it, fact_id, evidence_id, args, data: byte
     _create_finding(ctx, it, fact_id, [evidence_id], vclass, outcome)
 
 
+def _resolve_retest(ctx, it, eid, args, out) -> None:
+    """재검증 작업(worker.create_retest 가 만든 intent)이면 원래 신호와 다시 대조해 REPRODUCED/FIXED/
+    INCONCLUSIVE 를 finding_review_history 에 기록한다(CLAUDE.md §9 "확정할 수 있는 범위는 명확히
+    정의"). 판정 가능한 범위는 딱 하나다 — 탐색 신호(audit.signals)로 확정됐던 finding 뿐이다. 체크리스트
+    규칙이나 LLM 이 확정한 finding 은 재현할 결정론적 신호가 없어 그냥 넘어간다(사람이 직접 검토).
+
+    findings.status 는 바꾸지 않는다 — "같은 신호가 다시 안 뜬다"는 "고쳐졌다"의 증거로 충분하지 않을 수
+    있어(§5.4), 최종 판단은 여전히 사람이 finding review 로 한다. 이 함수는 그 판단에 필요한 재현 증거만
+    이력에 남긴다.
+    """
+    intent = ctx.conn.execute("SELECT payload FROM exploration_nodes WHERE id=%s",
+                             (it["exploration_node_id"],)).fetchone()
+    payload = intent["payload"] if intent else {}
+    finding_id = payload.get("retest_of_finding")
+    if not finding_id:
+        return
+    f = ctx.conn.execute("SELECT status FROM findings WHERE id=%s", (finding_id,)).fetchone()
+    if f is None:
+        return
+    vclass = payload.get("retest_vuln_class")
+    evidence_ids = []
+    if vclass is None or vclass not in signals.SIGNALS:
+        verdict = "INCONCLUSIVE"
+        detail = "결정론적으로 재확인할 신호가 없는 finding(체크리스트 규칙 또는 LLM 확정) — 사람이 직접 검토해야 함"
+    elif out is None:
+        verdict = "INCONCLUSIVE"
+        detail = "도구 실행 실패 또는 정책 거부로 재현 여부를 확인할 수 없음(수정됐다는 증거 아님)"
+    else:
+        outcome = signals.SIGNALS[vclass](args, out.data)
+        verdict, detail = ("REPRODUCED" if outcome.matched else "FIXED"), outcome.reason
+        evidence_ids = [eid]
+    ctx.conn.execute(
+        "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
+        "VALUES (%s,%s,%s,%s,'system:retest',%s)",
+        (finding_id, f["status"], f["status"], f"재검증 결과: {verdict} — {detail}", evidence_ids))
+    if evidence_ids:
+        ctx.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s) ON CONFLICT DO NOTHING", (finding_id, eid))
+
+
 def _run_exploration(ctx, it, wr) -> tuple[str, str | None]:
     (req_id, tool, args), = calls(it)
     eid, out = run_tool(ctx, it, wr, 1, req_id, tool, args)
@@ -460,6 +503,7 @@ def _run_exploration(ctx, it, wr) -> tuple[str, str | None]:
                      ("DONE" if out is not None else "FAILED", it["exploration_node_id"]))
     if out is not None:
         _promote_exploration_finding(ctx, it, fact, eid, args, out.data)
+    _resolve_retest(ctx, it, eid, args, out)
     db.notify_change(ctx.conn, ctx.run["id"], "fact", fact)
     return ("SUCCEEDED", None) if out is not None else ("FAILED", "도구 호출 실패 또는 정책 거부")
 

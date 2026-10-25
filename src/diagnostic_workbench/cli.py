@@ -419,10 +419,16 @@ def cmd_finding(args):
     if args.action == "list":
         rows = conn.execute(
             "SELECT * FROM findings WHERE run_id=%s ORDER BY created_at", (run["id"],)).fetchall()
+        retests = {r["finding_id"]: r["reason"] for r in conn.execute(
+            "SELECT DISTINCT ON (finding_id) finding_id, reason FROM finding_review_history "
+            "WHERE finding_id = ANY(%s::uuid[]) AND actor='system:retest' ORDER BY finding_id, changed_at DESC",
+            ([f["id"] for f in rows],)).fetchall()}
         for f in rows:
             reviewed = f"검토: {f['status']}({f['reviewed_by']})" if f["reviewed_by"] else "검토 전"
             print(f"{str(f['id'])[:8]}  [{f['severity']:<6}] {f['title'][:50]:<50} "
                   f"verification={f['verification']:<17} status={f['status']:<10} {reviewed}")
+            if f["id"] in retests:
+                print(f"    최근 {retests[f['id']]}")
         print(f"{len(rows)}건")
         return 0
     if args.action == "retest":
