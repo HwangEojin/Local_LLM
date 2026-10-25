@@ -1,4 +1,4 @@
-"""여러 proposal 사이의 선행관계 자동 생성(ARTEX 공유 todolist 대응)을 확인한다.
+"""여러 proposal 사이의 선행관계 자동 생성을 확인한다.
 
 LLM 이 같은 응답에서 proposal B 가 proposal A(더 이른 인덱스) 에 의존한다고(depends_on) 표시하면
 explore.propose 가 backlog_deps 를 만든다. 게이팅 자체(READY/BLOCKED 전환)는 기존 planner._admit 이

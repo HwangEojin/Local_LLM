@@ -1,4 +1,4 @@
-"""Finding 확정 알림(notify.py, ARTEX notify/ 대응)을 확인한다.
+"""Finding 확정 알림(notify.py)을 확인한다.
 
 - load_channels: 파일이 없으면 빈 목록, enabled=false 는 걸러짐.
 - _post: 실제 로컬 HTTP 서버로 성공/실패 상태 코드를 구분하는지(mock 아닌 실 소켓).

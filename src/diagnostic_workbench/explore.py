@@ -56,13 +56,13 @@ PROPOSALS = {
         "properties": {"rationale": _STR, "target_id": _STR, "tool": _STR, "args": {"type": "object"},
                        "risk": {"enum": ["read", "write"]}, "expected_evidence": _STR, "stop_condition": _STR,
                        "based_on_evidence_ids": {"type": "array", "maxItems": 10, "items": {"type": "string"}},
-                       # 같은 응답의 이전 proposal 에 의존하면 그 0-based 인덱스. ARTEX 의 "다중 라운드 공유
-                       # todolist"에 대응 — 여러 단계가 순서를 가져야 할 때(자격 증명 획득 → 그 자격 증명 사용
-                       # 등) planner._admit 이 이미 보는 backlog_deps 로 선행 작업이 끝나야 다음이 풀리게 한다.
+                       # 같은 응답의 이전 proposal 에 의존하면 그 0-based 인덱스. 여러 단계가 순서를 가져야
+                       # 할 때(자격 증명 획득 → 그 자격 증명 사용 등) planner._admit 이 이미 보는 backlog_deps
+                       # 로 선행 작업이 끝나야 다음이 풀리게 한다.
                        "depends_on": {"type": "integer", "minimum": 0}},
     }}, "findings": {"type": "array", "maxItems": 3, "items": _FINDING_ITEM},
-    # ARTEX 사이드 질문 대응: 도구로 풀 수 없고 사람만 답할 수 있는 막힘(자격 증명, 업무 맥락, 권한 밖
-    # 결정)이 있을 때만 쓴다. target_id 는 선택(특정 자산에 관한 질문이면 적는다).
+    # 도구로 풀 수 없고 사람만 답할 수 있는 막힘(자격 증명, 업무 맥락, 권한 밖 결정)이 있을 때만 쓴다.
+    # target_id 는 선택(특정 자산에 관한 질문이면 적는다).
     "question": {"type": "object", "additionalProperties": False, "required": ["text"],
                 "properties": {"text": _STR, "target_id": _STR}}},
 }
@@ -355,7 +355,7 @@ def propose(ctx) -> int:
         accepted_item_ids[idx] = item_id
         dep_idx = p.get("depends_on")
         if dep_idx is not None and dep_idx in accepted_item_ids and dep_idx != idx:
-            # ARTEX 공유 todolist 대응: 같은 응답의 더 이른 proposal 이 끝나야 이 작업이 풀리게 한다.
+            # 같은 응답의 더 이른 proposal 이 끝나야 이 작업이 풀리게 한다.
             # planner._admit 이 다음 계획 주기에 backlog_deps 를 보고 PENDING -> BLOCKED/READY 를 스스로
             # 가린다(기존 로직 그대로, 여기서 status 를 직접 바꾸지 않는다).
             conn.execute("INSERT INTO backlog_deps VALUES (%s,%s) ON CONFLICT DO NOTHING",
@@ -373,7 +373,7 @@ def propose(ctx) -> int:
 
 
 def _ask_question(ctx, goal, q: dict, assets: dict) -> None:
-    """ARTEX 사이드 질문 대응: LLM 이 도구로 못 푸는 막힘을 사람에게 되묻는다(CLAUDE.md §4 Review Workflow /
+    """LLM 이 도구로 못 푸는 막힘을 사람에게 되묻는다(CLAUDE.md §4 Review Workflow /
     사람 개입과 같은 취지). 한 번에 미답변 질문 하나만 허용한다(스팸 방지) — 이미 OPEN 인 질문이 있으면
     조용히 버린다(감사 이벤트만 남김). exploration_nodes.kind='question' 은 마이그레이션 0001 부터 CHECK
     제약에 있었지만 이번에 처음 쓴다.

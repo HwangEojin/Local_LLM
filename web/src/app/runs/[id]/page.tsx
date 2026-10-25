@@ -676,7 +676,7 @@ function AssetsTab({ runId }: { runId: string }) {
   );
 }
 
-// ── 탐색 그래프(ARTEX 커버리지 그래프 대응) ──
+// ── 탐색 그래프 ──
 function GraphTab({ runId }: { runId: string }) {
   const [data, setData] = useState<{ assets: AssetRow[]; edges: AssetEdgeRow[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -744,7 +744,7 @@ function GraphTab({ runId }: { runId: string }) {
   );
 }
 
-// ── 트래픽(자체 레코딩 프록시, ARTEX 트래픽 화면 대응) ──
+// ── 트래픽(자체 레코딩 프록시) ──
 function TrafficTab({ runId }: { runId: string }) {
   const [items, setItems] = useState<TrafficEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);

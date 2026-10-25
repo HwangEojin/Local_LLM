@@ -1,6 +1,6 @@
 """거부된 탐색 제안도 기억하는지 확인한다(CLAUDE.md §6 "동일한 실패를 무한 반복하지 않는다").
 
-ARTEX 소스(guard.go)와 다시 비교하다 발견한 간극: 이전에는 거부된 제안(policy DENY, 등록되지 않은
+이전에는 거부된 제안(policy DENY, 등록되지 않은
 도구 등)이 audit_events 에만 남고 다음 라운드 프롬프트(ALREADY_TRIED)에는 전혀 보이지 않아, LLM 이
 똑같이 거부될 제안을 라운드마다 다시 낼 수 있었다(실행되진 않으니 안전하지만 라운드 낭비). 이제는
 exploration_nodes(kind='intent', state='REJECTED')로 가볍게 남기고 _context() 가 이를 ALREADY_TRIED

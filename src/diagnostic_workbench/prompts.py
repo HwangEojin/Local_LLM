@@ -1,4 +1,4 @@
-"""DB 로 편집 가능한 에이전트 프롬프트(ARTEX agent_prompts 대응).
+"""DB 로 편집 가능한 에이전트 프롬프트.
 
 기본값은 여전히 explore.py 코드에 있다 — agent_prompts 에 같은 이름의 행이 있으면 그 값으로 바꿀 뿐,
 LLM 의 판단·정책 계층은 그대로다(CLAUDE.md §7 "LLM 자체가... 임의의 도구 등록" 등의 권한은 바꾸지
