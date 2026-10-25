@@ -1,4 +1,4 @@
-"""비동기 자산 보강(ARTEX enrich/ 대응)을 확인한다.
+"""비동기 자산 보강을 확인한다.
 
 - 실행이 아는 host 자산(baseline-demo, scope.json)에 대해 net.dns_resolve 보강 작업이 자동으로 큐에
   오른다. LLM 을 부르지 않는다(ctx.llm 없이도 동작).

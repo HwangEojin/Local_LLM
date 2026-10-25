@@ -1,4 +1,4 @@
-"""다중 LLM 프로파일 풀(ARTEX llm_profiles 대응)을 확인한다.
+"""다중 LLM 프로파일 풀을 확인한다.
 
 - audit.config.load_llm_profiles: 파일 없으면 빈 딕셔너리, 이름 중복은 거부.
 - runs.create_run: 모르는 llm_profile 은 거부, 아는 프로파일이면 그 kind 로 llm_provider 를 맞추고

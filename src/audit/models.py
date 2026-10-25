@@ -47,7 +47,7 @@ class Target:
     type: str  # path | host | url
     value: str
     platform: str | None = None  # 체크리스트 항목의 platforms 와 대조하는 대상 플랫폼(예: LINUX)
-    company: str | None = None  # 멀티테넌시 태그(선택, ARTEX companies 대응 축소판) — 자산 격리는 아님
+    company: str | None = None  # 멀티테넌시 식별자(선택) — 자산 식별 키(company, kind, value)의 일부, assets.company(0015)
 
 
 @dataclass

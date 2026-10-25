@@ -1,4 +1,4 @@
-"""자산 멀티테넌시(ARTEX companies/company_scope 대응, 전체판, assets.company)를 확인한다.
+"""자산 멀티테넌시(assets.company 기반 실제 격리)를 확인한다.
 
 0014 는 company 를 보고용 태그로만 썼다(assets 는 (kind, value) 전역 유니크라 회사가 달라도 같은
 호스트명은 한 자산을 공유). 0015 부터는 (company, kind, value) 가 유니크 키라, 같은 값이라도 회사가

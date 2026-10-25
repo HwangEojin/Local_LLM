@@ -85,7 +85,7 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
             if hit:
                 return Decision(DENY, f"'{host}' 이(가) 제외 주소 '{hit}' 로 해석됨", clean)
     hit = _intercepted(cfg.intercept_rules, tool, clean)
-    if hit:  # ARTEX intercept_rules 대응: 위험도·자율 모드와 무관하게 사람이 직접 보고 승인하게 한다
+    if hit:  # 인터셉트 규칙에 걸리면 위험도·자율 모드와 무관하게 사람이 직접 보고 승인하게 한다
         return Decision(ALLOW_WITH_APPROVAL, f"가로채기 규칙 '{hit}' 에 걸림 — 사람 승인 필요", clean)
     if spec.risk == "read":
         return Decision(ALLOW, "읽기 전용 도구, 범위 내", clean)

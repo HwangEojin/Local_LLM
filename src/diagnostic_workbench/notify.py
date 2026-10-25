@@ -1,4 +1,4 @@
-"""Finding 확정(CONFIRMED) 알림: 등록된 웹훅으로 POST 한다(ARTEX notify/ 대응, 운영 편의 기능).
+"""Finding 확정(CONFIRMED) 알림: 등록된 웹훅으로 POST 한다(운영 편의 기능).
 
 알림은 안전 통제가 아니라 부수 효과다 — 전송이 실패해도 판정이나 실행을 막지 않고 audit_events 에만
 기록한다. 채널은 운영자가 config/notify.json 에 직접 적는 값이고(LLM 이나 대상 응답이 못 바꿈) 그 값

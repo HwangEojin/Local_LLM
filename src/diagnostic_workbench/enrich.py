@@ -1,4 +1,4 @@
-"""비동기 자산 보강(ARTEX enrich/ 대응): 워커의 작업과 독립적으로, 이 실행이 아는 host/url 자산에
+"""비동기 자산 보강: 워커의 작업과 독립적으로, 이 실행이 아는 host/url 자산에
 읽기 전용 보강(DNS 조회/HTTP HEAD)을 한 번씩 자동으로 건다.
 
 LLM 의 판단이 아니라 planner 가 매 계획 주기에 스스로 건다(enqueue 는 explore.propose 와 달리 LLM을

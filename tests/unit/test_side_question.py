@@ -1,4 +1,4 @@
-"""사이드 질문(ARTEX 대응, exploration_nodes.kind='question')을 확인한다.
+"""사이드 질문(exploration_nodes.kind='question')을 확인한다.
 
 - explore.propose 가 LLM 의 선택적 question 필드를 받으면 kind='question' 노드를 만든다(상태는 기본
   OPEN). 이미 OPEN 인 질문이 있으면 새 질문은 조용히 버려진다(한 번에 하나, 스팸 방지).

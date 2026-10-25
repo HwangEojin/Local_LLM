@@ -155,8 +155,8 @@ SCOPE = {
                                "platform": _STR,
                                # 진단 ID 의 대상 약어(선택). 없으면 target_id 에서 자동으로 만든다.
                                "code": {"type": "string", "pattern": r"^[A-Z0-9]{2,6}$"},
-                               # 멀티테넌시 태그(선택, ARTEX companies 대응 축소판). 자산 격리는 아니고
-                               # 보고·필터링용 태그일 뿐이다(assets.company, 0014).
+                               # 멀티테넌시 식별자(선택). assets 의 (company, kind, value) 유니크 키 일부라
+                               # 같은 호스트명도 회사가 다르면 서로 다른 자산으로 분리된다(assets.company, 0015).
                                "company": _STR},
             },
         },
@@ -270,7 +270,7 @@ RULE_OVERLAYS = {
     "properties": {"overlays": {"type": "array", "items": RULE_OVERLAY}},
 }
 
-# 알림 채널(ARTEX notify/ 대응, 운영 편의 기능 — CLAUDE.md 범위 밖). 운영자가 직접 적는 값이며 LLM 이나
+# 알림 채널(운영 편의 기능 — CLAUDE.md 범위 밖). 운영자가 직접 적는 값이며 LLM 이나
 # 대상 응답으로 바꿀 수 없다(config/mcp_servers.json 과 같은 신뢰 수준).
 NOTIFY_CHANNEL = {
     "type": "object", "additionalProperties": False, "required": ["name", "kind", "url"],
@@ -285,7 +285,7 @@ NOTIFY_CHANNELS = {
     "properties": {"channels": {"type": "array", "items": NOTIFY_CHANNEL}},
 }
 
-# 다중 LLM 프로파일(ARTEX llm_profiles 대응). 각 필드는 audit.local_model.OllamaClient 또는
+# 다중 LLM 프로파일. 각 필드는 audit.local_model.OllamaClient 또는
 # audit.claude_cli_model.ClaudeCliClient 가 받는 cfg dict 위에 settings.json 의 기존 ollama/claude_cli
 # 블록을 덮어쓰는 값이라, 프로파일에는 다른 이름·모델 등 바꿀 값만 적으면 된다(전부 다시 안 적어도 됨).
 LLM_PROFILE = {
@@ -304,7 +304,7 @@ LLM_PROFILES = {
     "properties": {"profiles": {"type": "array", "items": LLM_PROFILE}},
 }
 
-# 트래픽/도구 호출 인터셉트 규칙(ARTEX intercept_rules 대응). 매치하면 위험도·자율 모드와 무관하게
+# 트래픽/도구 호출 인터셉트 규칙. 매치하면 위험도·자율 모드와 무관하게
 # ALLOW_WITH_APPROVAL 로 강제한다(운영자가 직접 보고 승인하게). arg_pattern 은 선택 — 없으면 도구 이름만 본다.
 INTERCEPT_RULE = {
     "type": "object", "additionalProperties": False, "required": ["name", "tool_pattern"],

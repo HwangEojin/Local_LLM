@@ -1,4 +1,4 @@
-"""전용 재검증 판정(worker._resolve_retest, ARTEX finding_retests 대응)을 확인한다.
+"""전용 재검증 판정(worker._resolve_retest)을 확인한다.
 
 - 탐색 신호(signals.py)로 확정된 finding 의 재검증은 같은 신호로 REPRODUCED/FIXED 를 자동 판정한다.
 - 체크리스트 규칙·LLM 확정 finding(결정론적으로 재확인할 신호가 없음)이나 도구 실행 실패는 INCONCLUSIVE.

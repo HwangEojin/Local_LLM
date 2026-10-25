@@ -410,7 +410,7 @@ def _finding(conn, run, ref):
 
 
 def cmd_proxy(args):
-    """자체 트래픽 레코딩 프록시(ARTEX 자체 MITM 프록시 대응, HTTP/HTTPS 모두 복호화해서 기록).
+    """자체 트래픽 레코딩 프록시(HTTP/HTTPS 모두 복호화해서 기록).
 
     브라우저/도구의 프록시 설정을 127.0.0.1:<port> 로 돌리면, 이 실행의 범위 안 호스트로 가는
     요청/응답이 evidence 로 남는다. HTTPS 를 복호화하려면 아래에 출력되는 루트 CA 인증서를
@@ -428,7 +428,7 @@ def cmd_proxy(args):
 
 
 def cmd_prompt(args):
-    """DB 로 편집 가능한 에이전트 프롬프트(ARTEX agent_prompts 대응). 행이 없으면 코드 기본값을 그대로 쓴다.
+    """DB 로 편집 가능한 에이전트 프롬프트. 행이 없으면 코드 기본값을 그대로 쓴다.
 
     이름 예: explore_system(탐색 제안 프롬프트), explore_probe_system(최초 라운드 프로브 프롬프트).
     """
@@ -469,7 +469,7 @@ def cmd_prompt(args):
 
 
 def cmd_question(args):
-    """LLM 이 탐색 중 막혀서 되물은 질문(ARTEX 사이드 질문 대응, exploration_nodes.kind='question') 목록과 답변.
+    """LLM 이 탐색 중 막혀서 되물은 질문(exploration_nodes.kind='question') 목록과 답변.
 
     한 번에 미답변(OPEN) 질문은 하나뿐이다(explore._ask_question 이 스팸을 막음). 답변을 기록하면 다음
     계획 주기에서 LLM 이 그 답을 보고 탐색을 이어간다(새 작업을 직접 만들지 않음 — 그 결정은 여전히 LLM
