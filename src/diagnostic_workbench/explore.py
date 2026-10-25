@@ -56,7 +56,11 @@ PROPOSALS = {
         "properties": {"rationale": _STR, "target_id": _STR, "tool": _STR, "args": {"type": "object"},
                        "risk": {"enum": ["read", "write"]}, "expected_evidence": _STR, "stop_condition": _STR,
                        "based_on_evidence_ids": {"type": "array", "maxItems": 10, "items": {"type": "string"}}},
-    }}, "findings": {"type": "array", "maxItems": 3, "items": _FINDING_ITEM}},
+    }}, "findings": {"type": "array", "maxItems": 3, "items": _FINDING_ITEM},
+    # ARTEX 사이드 질문 대응: 도구로 풀 수 없고 사람만 답할 수 있는 막힘(자격 증명, 업무 맥락, 권한 밖
+    # 결정)이 있을 때만 쓴다. target_id 는 선택(특정 자산에 관한 질문이면 적는다).
+    "question": {"type": "object", "additionalProperties": False, "required": ["text"],
+                "properties": {"text": _STR, "target_id": _STR}}},
 }
 SYSTEM = (
     "You propose follow-up evidence collection steps for an authorized security audit, continuing a multi-round "
@@ -85,8 +89,13 @@ SYSTEM = (
     "the same reply. This is reported as CONFIRMED immediately, with no prior human check, so only use it when "
     "the cited evidence itself (not your inference about what it implies) directly shows the vulnerability. When "
     "unsure, leave it out and describe the suspicion in a proposal's rationale instead. "
-    "Write rationale, expected_evidence, stop_condition, finding title/rationale/remediation in Korean. Reply "
-    "with JSON only."
+    "If, and only if, you are blocked by something no tool call can resolve — missing credentials, ambiguous "
+    "business logic, a decision outside your authority — you may ask ONE question via the optional 'question' "
+    "field instead of guessing. Do not ask about anything you could instead test with a proposal. Check QUESTIONS "
+    "in the input first: if one is already OPEN, do not ask another (one at a time); if one is ANSWERED, use that "
+    "answer and do not ask it again. "
+    "Write rationale, expected_evidence, stop_condition, finding title/rationale/remediation, question text in "
+    "Korean. Reply with JSON only."
 )
 
 
@@ -177,11 +186,15 @@ def _context(ctx) -> tuple[str, set[str]]:
         latest_fact_target = row["target_id"] if row else None
     goal = conn.execute("SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='goal' "
                         "ORDER BY created_at LIMIT 1", (run_id,)).fetchone()
+    questions = conn.execute("SELECT id, state, payload FROM exploration_nodes WHERE run_id=%s AND kind='question' "
+                             "ORDER BY created_at DESC LIMIT 5", (run_id,)).fetchall()
     dump = lambda o: mask_secrets(json.dumps(o, ensure_ascii=False, default=str))  # noqa: E731
     text = "\n".join([
         "GOAL: " + dump((goal["payload"] if goal else {}).get("text", "")),
         "TARGETS: " + dump({ctx.target_ids[a]: f"{t.type}:{t.value}" for a, t in ctx.targets.items()}),
         "TOOLS: " + dump(tools)[:6000],
+        "QUESTIONS (OPEN = 아직 답변 없음 — 새로 묻지 말 것, ANSWERED = 사람이 답변함 — 참고해서 진행): " +
+        dump([{"id": str(q["id"]), "state": q["state"], **q["payload"]} for q in questions]),
         # 가장 최근 사실을 맨 앞에 따로 둔다 — 이게 이번 라운드를 깨운 이유이므로 우선 인용 대상이다
         "LATEST_FACT: " + (dump(fact_entries[0]) if fact_entries else "(none yet)"),
         "FACTS (most recent first, includes LATEST_FACT): " + dump(fact_entries),
@@ -318,7 +331,33 @@ def propose(ctx) -> int:
                                                      "prompt_version": PROMPT_VERSION})
     for fnd in out.get("findings", []):
         _report_llm_finding(ctx, fnd, assets, known)
+    q = out.get("question")
+    if q:
+        _ask_question(ctx, goal, q, assets)
     return accepted
+
+
+def _ask_question(ctx, goal, q: dict, assets: dict) -> None:
+    """ARTEX 사이드 질문 대응: LLM 이 도구로 못 푸는 막힘을 사람에게 되묻는다(CLAUDE.md §4 Review Workflow /
+    사람 개입과 같은 취지). 한 번에 미답변 질문 하나만 허용한다(스팸 방지) — 이미 OPEN 인 질문이 있으면
+    조용히 버린다(감사 이벤트만 남김). exploration_nodes.kind='question' 은 마이그레이션 0001 부터 CHECK
+    제약에 있었지만 이번에 처음 쓴다.
+    """
+    conn, run_id = ctx.conn, ctx.run["id"]
+    open_n = conn.execute("SELECT count(*) AS n FROM exploration_nodes WHERE run_id=%s AND kind='question' "
+                          "AND state='OPEN'", (run_id,)).fetchone()["n"]
+    if open_n > 0:
+        db.audit(conn, run_id, "question_rejected",
+                 {"text": q["text"], "reason": "이미 답변 대기 중인 질문이 있음(한 번에 1개)"})
+        return
+    node = conn.execute(
+        "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'question','llm',%s) "
+        "RETURNING id", (run_id, Jsonb({"text": mask_secrets(q["text"]), "model": ctx.llm.model}))).fetchone()["id"]
+    conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'spawns')", (goal, node))
+    asset_id = assets.get(q.get("target_id"))
+    if asset_id:
+        conn.execute("INSERT INTO exploration_anchors (node_id, asset_id) VALUES (%s,%s)", (node, asset_id))
+    db.audit(conn, run_id, "question_asked", {"question_id": str(node), "text": q["text"]})
 
 
 def _report_llm_finding(ctx, fnd: dict, assets: dict, known: set[str]) -> None:

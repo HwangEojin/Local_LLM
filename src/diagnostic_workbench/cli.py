@@ -6,6 +6,8 @@ import json
 import sys
 from pathlib import Path
 
+from psycopg.types.json import Jsonb
+
 from audit import config as audit_config
 from audit.models import AuditError
 from audit.policy import mask_secrets
@@ -407,6 +409,43 @@ def _finding(conn, run, ref):
     return rows[0]
 
 
+def cmd_question(args):
+    """LLM 이 탐색 중 막혀서 되물은 질문(ARTEX 사이드 질문 대응, exploration_nodes.kind='question') 목록과 답변.
+
+    한 번에 미답변(OPEN) 질문은 하나뿐이다(explore._ask_question 이 스팸을 막음). 답변을 기록하면 다음
+    계획 주기에서 LLM 이 그 답을 보고 탐색을 이어간다(새 작업을 직접 만들지 않음 — 그 결정은 여전히 LLM
+    제안 + 정책 계층을 거친다).
+    """
+    cfg, conn = _open(args)
+    run = db.resolve_run(conn, args.run)
+    if args.action == "list":
+        rows = conn.execute(
+            "SELECT * FROM exploration_nodes WHERE run_id=%s AND kind='question' ORDER BY created_at",
+            (run["id"],)).fetchall()
+        for q in rows:
+            print(f"{str(q['id'])[:8]}  [{q['state']}]  {q['payload'].get('text', '')}")
+            if q["payload"].get("answer"):
+                print(f"    답변({q['payload'].get('answered_by')}): {q['payload']['answer']}")
+        print(f"{len(rows)}건")
+        return 0
+    if not (args.question_id and args.answer and args.operator):
+        print("question answer 에는 <question_id> --answer .. --operator .. 가 필요합니다", file=sys.stderr)
+        return 2
+    q = conn.execute("SELECT id, payload FROM exploration_nodes WHERE run_id=%s AND kind='question' "
+                     "AND id::text LIKE %s", (run["id"], f"{args.question_id}%")).fetchall()
+    if len(q) != 1:
+        print(f"질문 '{args.question_id}' 을(를) 하나로 특정할 수 없음 ({len(q)}건)", file=sys.stderr)
+        return 2
+    q = q[0]
+    payload = {**q["payload"], "answer": mask_secrets(args.answer), "answered_by": args.operator}
+    conn.execute("UPDATE exploration_nodes SET state='ANSWERED', payload=%s WHERE id=%s", (Jsonb(payload), q["id"]))
+    db.audit(conn, run["id"], "question_answered", {"question_id": str(q["id"]), "operator": args.operator})
+    db.notify_change(conn, run["id"], "fact")  # 다음 계획 주기가 답변을 보고 다시 생각하게 깨운다
+    conn.commit()
+    print(f"{q['id']}: 답변 기록됨")
+    return 0
+
+
 def cmd_finding(args):
     """체크리스트 유무와 무관하게 findings 테이블의 발견 사항을 사람이 검토한다(CLAUDE.md §9/§10).
 
@@ -698,6 +737,12 @@ def build_parser():
     rv.add_argument("verdict", choices=VERDICTS)
     rv.add_argument("--reason", required=True)
     rv.add_argument("--reviewer", required=True)
+    qd = sub.add_parser("question", help="LLM 이 되물은 질문 목록(list) / 답변(answer)")
+    qd.add_argument("action", choices=["list", "answer"])
+    qd.add_argument("run")
+    qd.add_argument("question_id", nargs="?", help="answer: 대상 질문 id(앞부분만으로도 특정 가능)")
+    qd.add_argument("--answer", help="answer 필수")
+    qd.add_argument("--operator", help="answer 필수")
     fd = sub.add_parser("finding", help="findings 목록(list) / 확정·기각 검토(review) / 추가 검증 요청(retest)")
     fd.add_argument("action", choices=["list", "review", "retest"])
     fd.add_argument("run")
@@ -739,6 +784,7 @@ def build_parser():
 COMMANDS = {"doctor": cmd_doctor, "web": cmd_web, "migrate": cmd_migrate, "checklist": cmd_checklist, "tools": cmd_tools,
            "llm-profiles": cmd_llm_profiles, "run": cmd_run, "backlog": cmd_backlog,
             "approve": cmd_approve, "retry": cmd_retry, "review": cmd_review, "finding": cmd_finding,
+            "question": cmd_question,
             "evidence": cmd_evidence, "collect": cmd_collect, "trace": cmd_trace, "graph": cmd_graph,
             "report": cmd_report}
 
