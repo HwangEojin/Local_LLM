@@ -31,8 +31,10 @@ import {
   Evidence,
   Finding,
   FINDING_STATUSES,
+  Question,
   RunDetail,
   ServerLogEntry,
+  TrafficEntry,
 } from "@/lib/api";
 import {
   AUTONOMY_LABEL,
@@ -44,12 +46,15 @@ import {
 } from "@/lib/labels";
 import { usePolling } from "@/lib/usePolling";
 
-type TabKey = "findings" | "backlog" | "assets" | "evidence" | "activity" | "server-log";
-const TAB_KEYS: TabKey[] = ["findings", "backlog", "assets", "evidence", "activity", "server-log"];
+type TabKey = "findings" | "backlog" | "assets" | "graph" | "traffic" | "chat" | "evidence" | "activity" | "server-log";
+const TAB_KEYS: TabKey[] = ["findings", "backlog", "assets", "graph", "traffic", "chat", "evidence", "activity", "server-log"];
 const TAB_LABEL: Record<TabKey, string> = {
   findings: "발견 사항",
   backlog: "작업 큐",
   assets: "자산",
+  graph: "탐색 그래프",
+  traffic: "트래픽",
+  chat: "질문",
   evidence: "증적",
   activity: "실행 기록",
   "server-log": "서버 로그",
@@ -671,6 +676,201 @@ function AssetsTab({ runId }: { runId: string }) {
   );
 }
 
+// ── 탐색 그래프(ARTEX 커버리지 그래프 대응) ──
+function GraphTab({ runId }: { runId: string }) {
+  const [data, setData] = useState<{ assets: AssetRow[]; edges: AssetEdgeRow[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api.get<{ assets: AssetRow[]; edges: AssetEdgeRow[] }>(`/api/runs/${runId}/assets`)
+      .then((d) => { setData(d); setError(null); }).catch((e) => setError(e.message));
+  }, [runId]);
+  useEffect(load, [load]);
+  usePolling(load, 10000);
+
+  if (error && !data) return <Banner>{error}</Banner>;
+  if (!data) return <SkeletonRows />;
+
+  const labels = Array.from(new Set([
+    ...data.assets.map((a) => `${a.kind}:${a.value}`),
+    ...data.edges.flatMap((e) => [e.src, e.dst]),
+  ]));
+  if (labels.length === 0) return <Empty title="그릴 자산 관계가 없습니다" />;
+
+  const kindOf = (label: string) =>
+    data.assets.find((a) => `${a.kind}:${a.value}` === label)?.kind ?? label.split(":")[0] ?? "asset";
+  const size = Math.max(420, Math.min(900, 140 + labels.length * 36));
+  const cx = size / 2, cy = size / 2, radius = size / 2 - 70;
+  const pos = new Map(
+    labels.map((label, i) => {
+      const angle = (i / labels.length) * 2 * Math.PI;
+      return [label, { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }] as const;
+    }),
+  );
+  const KIND_COLOR: Record<string, string> = {
+    host: "var(--accent)", url: "#7c3aed", service: "#0ea5e9", path: "#f59e0b",
+  };
+
+  return (
+    <Card className="overflow-auto p-4">
+      <svg width={size} height={size} className="mx-auto" role="img" aria-label="자산·탐색 관계 그래프">
+        {data.edges.map((e, i) => {
+          const s = pos.get(e.src), d = pos.get(e.dst);
+          if (!s || !d) return null;
+          return (
+            <g key={i}>
+              <line x1={s.x} y1={s.y} x2={d.x} y2={d.y} stroke="var(--line)" strokeWidth={1.5} />
+              <text x={(s.x + d.x) / 2} y={(s.y + d.y) / 2} fontSize={10} fill="var(--muted)" textAnchor="middle">
+                {e.rel}
+              </text>
+            </g>
+          );
+        })}
+        {labels.map((label) => {
+          const p = pos.get(label);
+          if (!p) return null;
+          const kind = kindOf(label);
+          return (
+            <g key={label}>
+              <circle cx={p.x} cy={p.y} r={7} fill={KIND_COLOR[kind] ?? "var(--muted)"} />
+              <text x={p.x} y={p.y - 11} fontSize={11} fill="var(--ink)" textAnchor="middle" className="font-mono">
+                {label.length > 28 ? `${label.slice(0, 26)}…` : label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </Card>
+  );
+}
+
+// ── 트래픽(자체 레코딩 프록시, ARTEX 트래픽 화면 대응) ──
+function TrafficTab({ runId }: { runId: string }) {
+  const [items, setItems] = useState<TrafficEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api.get<TrafficEntry[]>(`/api/runs/${runId}/traffic`).then((d) => { setItems(d); setError(null); })
+      .catch((e) => setError(e.message));
+  }, [runId]);
+  useEffect(load, [load]);
+  usePolling(load, 6000);
+
+  if (error && !items) return <Banner>{error}</Banner>;
+  if (!items) return <SkeletonRows />;
+  if (items.length === 0) {
+    return <Empty title="기록된 트래픽이 없습니다" hint="workbench proxy 로 이 실행의 프록시를 띄우고 브라우저/도구를 그쪽으로 돌리면 여기에 쌓입니다." />;
+  }
+
+  return (
+    <Card className="divide-y divide-line">
+      <table className="w-full text-sm">
+        <thead className="text-left text-xs text-faint">
+          <tr>
+            <th className={th}>시각</th>
+            <th className={th}>프로토콜</th>
+            <th className={th}>메서드</th>
+            <th className={th}>URL</th>
+            <th className={th}>크기</th>
+            <th className={th} />
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((t) => (
+            <tr key={t.id} className="border-t border-line">
+              <td className="whitespace-nowrap px-4 py-2 tabular text-xs text-faint">{formatTime(t.collected_at)}</td>
+              <td className="px-4 py-2 text-xs">{t.tool === "proxy.https" ? "HTTPS(복호화됨)" : "HTTP"}</td>
+              <td className="px-4 py-2 font-mono text-xs">{t.args.method}</td>
+              <td className="max-w-md truncate px-4 py-2 font-mono text-xs" title={t.args.url}>{t.args.url}</td>
+              <td className="px-4 py-2 tabular text-xs text-faint">{t.size != null ? formatBytes(t.size) : "-"}</td>
+              <td className="px-4 py-2 text-right">
+                {t.success && (
+                  <a href={downloadUrl(runId, t.id)} className="text-accent hover:underline" target="_blank" rel="noreferrer">
+                    원본
+                  </a>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+// ── 질문(LLM 의 사이드 질문, human-in-the-loop) ──
+function ChatTab({ runId }: { runId: string }) {
+  const toast = useToast();
+  const [items, setItems] = useState<Question[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api.get<Question[]>(`/api/runs/${runId}/questions`).then((d) => { setItems(d); setError(null); })
+      .catch((e) => setError(e.message));
+  }, [runId]);
+  useEffect(load, [load]);
+  usePolling(load, 6000);
+
+  async function answer(q: Question) {
+    const text = (drafts[q.id] ?? "").trim();
+    if (!text) return;
+    setBusyId(q.id);
+    try {
+      await api.post(`/api/runs/${runId}/questions/${q.id}/answer`, { answer: text });
+      toast("ok", "답변을 기록했습니다. 다음 계획 주기에서 LLM 이 이어서 탐색합니다.");
+      load();
+    } catch (e) {
+      toast("danger", e instanceof ApiError ? e.message : "답변 기록에 실패했습니다");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (error && !items) return <Banner>{error}</Banner>;
+  if (!items) return <SkeletonRows />;
+  if (items.length === 0) {
+    return <Empty title="LLM 이 되물은 질문이 없습니다" hint="탐색 중 막히면 여기에 질문이 나타납니다 — 한 번에 미답변 질문은 하나뿐입니다." />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {items.map((q) => (
+        <Card key={q.id} className="space-y-2 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm text-ink">{q.payload.text}</p>
+            <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs ${
+              q.state === "OPEN" ? "border-warn text-warn" : "border-line text-faint"
+            }`}>
+              {q.state === "OPEN" ? "답변 대기" : "답변됨"}
+            </span>
+          </div>
+          {q.payload.answer ? (
+            <p className="rounded-md bg-raised p-2 text-sm text-muted">
+              <span className="font-medium text-ink">{q.payload.answered_by}:</span> {q.payload.answer}
+            </p>
+          ) : (
+            <div className="flex gap-2">
+              <input
+                className={inputCls + " flex-1"}
+                placeholder="답변을 입력하세요"
+                value={drafts[q.id] ?? ""}
+                onChange={(e) => setDrafts((d) => ({ ...d, [q.id]: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === "Enter") answer(q); }}
+              />
+              <button onClick={() => answer(q)} disabled={busyId === q.id} className={btnPrimary}>
+                답변 기록
+              </button>
+            </div>
+          )}
+          <span className="text-xs text-faint">{formatTime(q.created_at)}</span>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 // ── 실행 기록 ──
 function ActivityTab({ runId }: { runId: string }) {
   const [items, setItems] = useState<ActivityEntry[] | null>(null);
@@ -878,6 +1078,9 @@ function RunDetailBody({ runId }: { runId: string }) {
         )}
         {tab === "backlog" && <BacklogTab runId={runId} items={backlog} onChanged={load} />}
         {tab === "assets" && <AssetsTab runId={runId} />}
+        {tab === "graph" && <GraphTab runId={runId} />}
+        {tab === "traffic" && <TrafficTab runId={runId} />}
+        {tab === "chat" && <ChatTab runId={runId} />}
         {tab === "evidence" && <EvidenceTab runId={runId} />}
         {tab === "activity" && <ActivityTab runId={runId} />}
         {tab === "server-log" && <ServerLogTab runId={runId} />}
