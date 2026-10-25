@@ -1,16 +1,18 @@
-"""자체 트래픽 레코딩 프록시(ARTEX 자체 MITM 프록시 대응, 축소판).
+"""자체 트래픽 레코딩 프록시(ARTEX 자체 MITM 프록시 대응).
 
-실제 MITM(TLS 가로채기, CA 인증서 설치·배포)은 하지 않는다 — 평문 HTTP 요청/응답만 기록하고,
-HTTPS(CONNECT)는 내용을 들여다보지 않고 범위 안의 호스트인지만 확인한 뒤 그대로 터널링한다.
-운영자가 브라우저/도구의 프록시 설정을 이 서버로 돌려야 쓸 수 있다. Burp 같은 전용 MCP 도구가
-떠 있으면 그걸 쓰는 게 낫다 — 이건 그게 없을 때의 최소 대체 경로다(CLAUDE.md §8 "리다이렉트 및
-최종 네트워크 목적지를 다시 검증한다": 범위 밖 호스트는 HTTP 든 CONNECT 든 거부한다).
+HTTPS(CONNECT)도 실제로 복호화해서 기록한다: `tls_ca.leaf_cert_for()` 로 호스트별 리프 인증서를
+발급받아 클라이언트와 TLS 핸드셰이크를 직접 맺고(= 중간자), 평문으로 복호화된 요청/응답을
+evidence 로 남긴 뒤 실제 목적지로는 새 TLS 연결을 열어 전달한다. 운영자가 `tls_ca.ca_cert_path()`
+의 루트 CA 인증서를 OS/브라우저 신뢰 저장소에 설치해야 클라이언트가 핸드셰이크를 받아들인다 —
+설치하지 않으면 그 호스트 하나만 핸드셰이크 실패로 끊기고(평문 HTTP 쪽은 계속 동작), 운영자의
+다른 트래픽에는 영향이 없다. 범위 밖 호스트는 HTTP 든 CONNECT 든 거부한다(CLAUDE.md §8 "리다이렉트
+및 최종 네트워크 목적지를 다시 검증한다").
 """
 from __future__ import annotations
 
-import select
-import socket
+import http.client
 import socketserver
+import ssl
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
@@ -18,7 +20,7 @@ from urllib.parse import urlsplit
 
 from audit.models import ToolOutput
 
-from . import evidence
+from . import evidence, tls_ca
 
 
 def _in_scope(ctx, host: str) -> bool:
@@ -32,6 +34,22 @@ def _asset_id_for_host(ctx, host: str):
     return None
 
 
+def _record(method, url, headers, body, status, resp_headers, resp_body) -> bytes:
+    return (f"{method} {url}\r\n" + "\r\n".join(f"{k}: {v}" for k, v in headers.items())).encode() + \
+        b"\r\n\r\n" + (body or b"") + b"\r\n---response---\r\n" + f"{status}\r\n".encode() + \
+        "\r\n".join(f"{k}: {v}" for k, v in resp_headers.items()).encode() + b"\r\n\r\n" + resp_body
+
+
+def _fetch(method, url, headers, body):
+    req = urllib.request.Request(url, data=body, method=method,
+                                 headers={k: v for k, v in headers.items() if k.lower() != "host"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.read(1_000_000), resp.status, dict(resp.headers)
+    except urllib.error.HTTPError as e:
+        return e.read(1_000_000), e.code, dict(e.headers or {})
+
+
 def _make_handler(ctx):
     class Handler(BaseHTTPRequestHandler):
         def do_CONNECT(self):
@@ -40,37 +58,62 @@ def _make_handler(ctx):
                 self.send_error(403, "host not in scope")
                 return
             try:
-                upstream = socket.create_connection((host, int(port or 443)), timeout=10)
-            except OSError as e:
-                self.send_error(502, str(e))
+                cert_path, key_path = tls_ca.leaf_cert_for(ctx.cfg, host)
+                tls_server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                tls_server_ctx.load_cert_chain(str(cert_path), str(key_path))
+            except Exception as e:
+                self.send_error(502, f"CA/cert error: {e}")
                 return
             self.send_response(200, "Connection Established")
             self.end_headers()
-            self._tunnel(upstream)
-
-        def _tunnel(self, upstream):
-            sockets = [self.connection, upstream]
-            while True:
+            try:
+                tls_sock = tls_server_ctx.wrap_socket(self.connection, server_side=True)
+            except (ssl.SSLError, OSError):
+                # 클라이언트가 이 워크벤치의 루트 CA 를 신뢰 저장소에 설치하지 않았을 때(가장 흔한
+                # 원인). 이 호스트만 끊고, 다른 연결/평문 HTTP 는 그대로 동작한다.
+                return
+            try:
+                self._mitm_https(tls_sock, host, int(port or 443))
+            finally:
                 try:
-                    ready, _, _ = select.select(sockets, [], [], 5)
+                    tls_sock.close()
                 except OSError:
-                    break
-                if not ready:
-                    continue
-                done = False
-                for s in ready:
-                    try:
-                        data = s.recv(65536)
-                    except OSError:
-                        done = True
-                        break
-                    if not data:
-                        done = True
-                        break
-                    (upstream if s is self.connection else self.connection).sendall(data)
-                if done:
-                    break
-            upstream.close()
+                    pass
+
+        def _mitm_https(self, tls_sock, host, port):
+            rfile = tls_sock.makefile("rb")
+            request_line = rfile.readline().decode("iso-8859-1").rstrip("\r\n")
+            if not request_line:
+                return
+            try:
+                method, path, _version = request_line.split()
+            except ValueError:
+                return
+            headers = http.client.parse_headers(rfile)
+            length = int(headers.get("Content-Length", 0))
+            body = rfile.read(length) if length else None
+            netloc = host if port == 443 else f"{host}:{port}"
+            url = f"https://{netloc}{path}"
+            try:
+                resp_body, status, resp_headers = _fetch(method, url, headers, body)
+            except (urllib.error.URLError, OSError) as e:
+                resp_body, status, resp_headers = str(e).encode(), 502, {}
+            asset_id = _asset_id_for_host(ctx, host)
+            if asset_id is not None:
+                record = _record(method, url, headers, body, status, resp_headers, resp_body)
+                evidence.store(ctx.conn, ctx.cfg.evidence_dir, run_id=ctx.run["id"], asset_id=asset_id,
+                               requirement_id="proxy", tool="proxy.https", args={"method": method, "url": url},
+                               output=ToolOutput(record, "proxy/1"), media_type="application/octet-stream", ext="bin")
+                ctx.conn.commit()
+            wfile = tls_sock.makefile("wb")
+            reason = http.client.responses.get(status, "")
+            wfile.write(f"HTTP/1.1 {status} {reason}\r\n".encode())
+            for k, v in resp_headers.items():
+                if k.lower() not in ("transfer-encoding", "content-length", "connection"):
+                    wfile.write(f"{k}: {v}\r\n".encode())
+            wfile.write(f"Content-Length: {len(resp_body)}\r\nConnection: close\r\n\r\n".encode())
+            wfile.write(resp_body)
+            wfile.flush()
 
         def _proxy_http(self, method):
             host = urlsplit(self.path).hostname or self.headers.get("Host", "").split(":")[0]
@@ -79,22 +122,14 @@ def _make_handler(ctx):
                 return
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length else None
-            req = urllib.request.Request(self.path, data=body, method=method,
-                                         headers={k: v for k, v in self.headers.items() if k.lower() != "host"})
             try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    resp_body, status, resp_headers = resp.read(1_000_000), resp.status, dict(resp.headers)
-            except urllib.error.HTTPError as e:
-                resp_body, status, resp_headers = e.read(1_000_000), e.code, dict(e.headers or {})
+                resp_body, status, resp_headers = _fetch(method, self.path, self.headers, body)
             except (urllib.error.URLError, OSError) as e:
                 self.send_error(502, str(e))
                 return
             asset_id = _asset_id_for_host(ctx, host)
             if asset_id is not None:
-                record = (f"{method} {self.path}\r\n" +
-                         "\r\n".join(f"{k}: {v}" for k, v in self.headers.items())).encode() + b"\r\n\r\n" + \
-                         (body or b"") + b"\r\n---response---\r\n" + f"{status}\r\n".encode() + \
-                         "\r\n".join(f"{k}: {v}" for k, v in resp_headers.items()).encode() + b"\r\n\r\n" + resp_body
+                record = _record(method, self.path, self.headers, body, status, resp_headers, resp_body)
                 evidence.store(ctx.conn, ctx.cfg.evidence_dir, run_id=ctx.run["id"], asset_id=asset_id,
                                requirement_id="proxy", tool="proxy.http", args={"method": method, "url": self.path},
                                output=ToolOutput(record, "proxy/1"), media_type="application/octet-stream", ext="bin")
@@ -120,8 +155,8 @@ def _make_handler(ctx):
 
 
 def serve(ctx, port: int, *, server_cls=socketserver.ThreadingTCPServer) -> None:
-    """포그라운드로 블로킹 실행한다(Ctrl+C 로 종료). HTTP 요청/응답은 evidence 로 남고, HTTPS(CONNECT)는
-    범위 확인만 하고 내용은 안 본 채 터널링한다."""
+    """포그라운드로 블로킹 실행한다(Ctrl+C 로 종료). HTTP/HTTPS 요청·응답 모두 evidence 로 남는다.
+    HTTPS 는 `tls_ca.ca_cert_path(ctx.cfg)` 의 루트 CA 를 클라이언트가 신뢰해야 복호화된다."""
     server = server_cls(("127.0.0.1", port), _make_handler(ctx))
     try:
         server.serve_forever()
