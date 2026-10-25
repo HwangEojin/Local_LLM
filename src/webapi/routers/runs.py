@@ -378,6 +378,21 @@ def download_evidence(run_ref: str, evidence_ref: str,
     return FileResponse(path, media_type=e["media_type"] or "application/octet-stream", filename=filename)
 
 
+@router.get("/{run_ref}/assets")
+def get_assets(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """자산 그래프(이 실행의 대상 + 관찰된 관계). 웹 UI 자산 화면용 — 새 진단 로직 없음(cli.cmd_graph 와
+    같은 조회를 JSON으로 바꿈)."""
+    run = _load_run(conn, run_ref)
+    assets = conn.execute(
+        "SELECT ra.target_id, a.* FROM run_assets ra JOIN assets a ON a.id = ra.asset_id WHERE ra.run_id=%s",
+        (run["id"],)).fetchall()
+    edges = conn.execute(
+        "SELECT s.value AS src, e.rel, d.value AS dst, e.source FROM asset_edges e "
+        "JOIN assets s ON s.id = e.src_id JOIN assets d ON d.id = e.dst_id WHERE e.run_id=%s ORDER BY d.value LIMIT 200",
+        (run["id"],)).fetchall()
+    return {"assets": assets, "edges": edges}
+
+
 @router.get("/{run_ref}/activity")
 def get_activity(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
     run = _load_run(conn, run_ref)

@@ -44,11 +44,12 @@ import {
 } from "@/lib/labels";
 import { usePolling } from "@/lib/usePolling";
 
-type TabKey = "findings" | "backlog" | "evidence" | "activity" | "server-log";
-const TAB_KEYS: TabKey[] = ["findings", "backlog", "evidence", "activity", "server-log"];
+type TabKey = "findings" | "backlog" | "assets" | "evidence" | "activity" | "server-log";
+const TAB_KEYS: TabKey[] = ["findings", "backlog", "assets", "evidence", "activity", "server-log"];
 const TAB_LABEL: Record<TabKey, string> = {
   findings: "발견 사항",
   backlog: "작업 큐",
+  assets: "자산",
   evidence: "증적",
   activity: "실행 기록",
   "server-log": "서버 로그",
@@ -625,6 +626,51 @@ function EvidenceTab({ runId }: { runId: string }) {
   );
 }
 
+// ── 자산 ──
+type AssetRow = { id: string; target_id: string; kind: string; value: string; company: string | null; verification: string; source: string };
+type AssetEdgeRow = { src: string; rel: string; dst: string; source: string };
+
+function AssetsTab({ runId }: { runId: string }) {
+  const [data, setData] = useState<{ assets: AssetRow[]; edges: AssetEdgeRow[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api.get<{ assets: AssetRow[]; edges: AssetEdgeRow[] }>(`/api/runs/${runId}/assets`)
+      .then((d) => { setData(d); setError(null); }).catch((e) => setError(e.message));
+  }, [runId]);
+  useEffect(load, [load]);
+  usePolling(load, 6000);
+
+  if (error && !data) return <Banner>{error}</Banner>;
+  if (!data) return <SkeletonRows />;
+  if (data.assets.length === 0) return <Empty title="등록된 자산이 없습니다" />;
+
+  return (
+    <div className="space-y-4">
+      <Card className="divide-y divide-line">
+        {data.assets.map((a) => (
+          <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 p-3 text-xs">
+            <span className="tabular text-faint">{a.target_id}</span>
+            <span className="font-mono text-sm font-semibold text-ink">{a.kind}:{a.value}</span>
+            {a.company && <span className="rounded bg-[var(--accent)]/10 px-1.5 py-0.5 text-[var(--accent)]">{a.company}</span>}
+            <span className="text-faint">{a.verification}</span>
+            <span className="text-faint">출처: {a.source}</span>
+          </div>
+        ))}
+      </Card>
+      {data.edges.length > 0 && (
+        <Card className="divide-y divide-line">
+          {data.edges.map((e, i) => (
+            <div key={i} className="p-2 font-mono text-xs text-muted">
+              {e.src} <span className="text-faint">-{e.rel}-&gt;</span> {e.dst}
+            </div>
+          ))}
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // ── 실행 기록 ──
 function ActivityTab({ runId }: { runId: string }) {
   const [items, setItems] = useState<ActivityEntry[] | null>(null);
@@ -831,6 +877,7 @@ function RunDetailBody({ runId }: { runId: string }) {
           <FindingsTab findings={findings} filter={filter} setFilter={setFilter} selectedId={selectedId} onSelect={setSelectedId} />
         )}
         {tab === "backlog" && <BacklogTab runId={runId} items={backlog} onChanged={load} />}
+        {tab === "assets" && <AssetsTab runId={runId} />}
         {tab === "evidence" && <EvidenceTab runId={runId} />}
         {tab === "activity" && <ActivityTab runId={runId} />}
         {tab === "server-log" && <ServerLogTab runId={runId} />}
