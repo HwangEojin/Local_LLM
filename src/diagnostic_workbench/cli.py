@@ -13,7 +13,7 @@ from audit.models import AuditError
 from audit.policy import mask_secrets
 
 from . import (__version__, backlog, config, coordinator, db, evidence, explore, notify, policy, planner, prompts,
-              proxy, reporting, runs, traces, worker)
+              proxy, reporting, runs, tls_ca, traces, worker)
 
 VERDICTS = ["PASS", "FAIL", "NOT_APPLICABLE", "NEEDS_REVIEW", "INCONCLUSIVE"]
 
@@ -410,14 +410,18 @@ def _finding(conn, run, ref):
 
 
 def cmd_proxy(args):
-    """자체 트래픽 레코딩 프록시(ARTEX 자체 MITM 프록시 대응, 축소판 — HTTP 만 기록, HTTPS 는 터널링만).
+    """자체 트래픽 레코딩 프록시(ARTEX 자체 MITM 프록시 대응, HTTP/HTTPS 모두 복호화해서 기록).
 
-    브라우저/도구의 프록시 설정을 127.0.0.1:<port> 로 돌리면, 이 실행의 범위 안 호스트로 가는 HTTP
-    요청/응답이 evidence 로 남는다. 범위 밖 호스트는 거부한다. Ctrl+C 로 종료.
+    브라우저/도구의 프록시 설정을 127.0.0.1:<port> 로 돌리면, 이 실행의 범위 안 호스트로 가는
+    요청/응답이 evidence 로 남는다. HTTPS 를 복호화하려면 아래에 출력되는 루트 CA 인증서를
+    운영자의 OS/브라우저 신뢰 저장소에 설치해야 한다(설치 안 하면 그 호스트만 핸드셰이크 실패).
+    범위 밖 호스트는 거부한다. Ctrl+C 로 종료.
     """
     cfg, conn = _open(args)
     run = db.resolve_run(conn, args.run)
     ctx = runs.build_context(cfg, conn, run)
+    ca_path = tls_ca.ca_cert_path(cfg)
+    print(f"HTTPS 복호화용 루트 CA 인증서(신뢰 저장소에 설치 필요): {ca_path}")
     print(f"레코딩 프록시: 127.0.0.1:{args.port} (Ctrl+C 로 종료)")
     proxy.serve(ctx, args.port)
     return 0
@@ -793,7 +797,7 @@ def build_parser():
     rv.add_argument("verdict", choices=VERDICTS)
     rv.add_argument("--reason", required=True)
     rv.add_argument("--reviewer", required=True)
-    px = sub.add_parser("proxy", help="자체 트래픽 레코딩 프록시(HTTP 만 기록, HTTPS 는 터널링만)")
+    px = sub.add_parser("proxy", help="자체 트래픽 레코딩 프록시(HTTP/HTTPS 모두 복호화 기록, MITM)")
     px.add_argument("run")
     px.add_argument("--port", type=int, default=8899)
     pr = sub.add_parser("prompt", help="DB 로 편집 가능한 에이전트 프롬프트: list/show/set/reset")
