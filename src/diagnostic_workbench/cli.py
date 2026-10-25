@@ -652,7 +652,8 @@ def cmd_graph(args):
     print("자산 그래프(이 실행의 대상):")
     for a in conn.execute("SELECT ra.target_id, a.* FROM run_assets ra JOIN assets a ON a.id = ra.asset_id "
                           "WHERE ra.run_id=%s", (run["id"],)):
-        print(f"  {str(a['id'])[:8]}  {a['target_id']:<16} {a['kind']}:{a['value']}  [{a['verification']}, 출처={a['source']}]")
+        print(f"  {str(a['id'])[:8]}  {a['target_id']:<16} {a['kind']}:{a['value']}  "
+              f"[{a['verification']}, 출처={a['source']}" + (f", company={a['company']}" if a["company"] else "") + "]")
     for e in conn.execute("SELECT s.value AS src, e.rel, d.value AS dst, e.source FROM asset_edges e "
                           "JOIN assets s ON s.id = e.src_id JOIN assets d ON d.id = e.dst_id WHERE e.run_id=%s "
                           "ORDER BY d.value LIMIT 50", (run["id"],)):
