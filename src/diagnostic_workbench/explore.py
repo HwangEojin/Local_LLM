@@ -55,7 +55,11 @@ PROPOSALS = {
                      "based_on_evidence_ids"],
         "properties": {"rationale": _STR, "target_id": _STR, "tool": _STR, "args": {"type": "object"},
                        "risk": {"enum": ["read", "write"]}, "expected_evidence": _STR, "stop_condition": _STR,
-                       "based_on_evidence_ids": {"type": "array", "maxItems": 10, "items": {"type": "string"}}},
+                       "based_on_evidence_ids": {"type": "array", "maxItems": 10, "items": {"type": "string"}},
+                       # 같은 응답의 이전 proposal 에 의존하면 그 0-based 인덱스. ARTEX 의 "다중 라운드 공유
+                       # todolist"에 대응 — 여러 단계가 순서를 가져야 할 때(자격 증명 획득 → 그 자격 증명 사용
+                       # 등) planner._admit 이 이미 보는 backlog_deps 로 선행 작업이 끝나야 다음이 풀리게 한다.
+                       "depends_on": {"type": "integer", "minimum": 0}},
     }}, "findings": {"type": "array", "maxItems": 3, "items": _FINDING_ITEM},
     # ARTEX 사이드 질문 대응: 도구로 풀 수 없고 사람만 답할 수 있는 막힘(자격 증명, 업무 맥락, 권한 밖
     # 결정)이 있을 때만 쓴다. target_id 는 선택(특정 자산에 관한 질문이면 적는다).
@@ -89,6 +93,10 @@ SYSTEM = (
     "the same reply. This is reported as CONFIRMED immediately, with no prior human check, so only use it when "
     "the cited evidence itself (not your inference about what it implies) directly shows the vulnerability. When "
     "unsure, leave it out and describe the suspicion in a proposal's rationale instead. "
+    "If one proposal in this same reply must run only after another one in this reply succeeds (e.g. obtain "
+    "credentials, then use them), set the later proposal's optional depends_on to the earlier one's 0-based index "
+    "in this proposals list. Do not reference an index at or after its own position. Leave it out for independent "
+    "proposals (most of the time). "
     "If, and only if, you are blocked by something no tool call can resolve — missing credentials, ambiguous "
     "business logic, a decision outside your authority — you may ask ONE question via the optional 'question' "
     "field instead of guessing. Do not ask about anything you could instead test with a proposal. Check QUESTIONS "
@@ -284,8 +292,8 @@ def propose(ctx) -> int:
         return 0
     goal = conn.execute("SELECT id FROM exploration_nodes WHERE run_id=%s AND kind='goal' ORDER BY created_at LIMIT 1",
                         (run_id,)).fetchone()["id"]
-    accepted, rejected = 0, []
-    for p in out["proposals"]:
+    accepted, rejected, accepted_item_ids = 0, [], {}
+    for idx, p in enumerate(out["proposals"]):
         asset_id, spec, cited = assets.get(p["target_id"]), ctx.registry.get(p["tool"]), set(p["based_on_evidence_ids"])
         if asset_id is None:
             why = "범위에 없는 target_id"
@@ -337,11 +345,19 @@ def propose(ctx) -> int:
             "INSERT INTO exploration_edges SELECT %s, an.node_id, 'derived_from' FROM exploration_anchors an "
             "JOIN exploration_nodes n ON n.id = an.node_id AND n.kind='fact' AND n.run_id=%s "
             "WHERE an.evidence_id = ANY(%s::uuid[]) ON CONFLICT DO NOTHING", (node, run_id, sorted(cited)))
-        conn.execute(
+        item_id = conn.execute(
             "INSERT INTO backlog_items (run_id, kind, exploration_node_id, asset_id, priority, idempotency_key, "
-            "reason, payload, max_attempts) VALUES (%s,'exploration',%s,%s,80,%s,%s,%s,1)",
+            "reason, payload, max_attempts) VALUES (%s,'exploration',%s,%s,80,%s,%s,%s,1) RETURNING id",
             (run_id, node, asset_id, key, mask_secrets(p["rationale"])[:300],
-             Jsonb({"tool": p["tool"], "args": p["args"]})))
+             Jsonb({"tool": p["tool"], "args": p["args"]}))).fetchone()["id"]
+        accepted_item_ids[idx] = item_id
+        dep_idx = p.get("depends_on")
+        if dep_idx is not None and dep_idx in accepted_item_ids and dep_idx != idx:
+            # ARTEX 공유 todolist 대응: 같은 응답의 더 이른 proposal 이 끝나야 이 작업이 풀리게 한다.
+            # planner._admit 이 다음 계획 주기에 backlog_deps 를 보고 PENDING -> BLOCKED/READY 를 스스로
+            # 가린다(기존 로직 그대로, 여기서 status 를 직접 바꾸지 않는다).
+            conn.execute("INSERT INTO backlog_deps VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                        (item_id, accepted_item_ids[dep_idx]))
         accepted += 1
     db.audit(conn, run_id, "exploration_proposed", {"proposed": len(out["proposals"]), "accepted": accepted,
                                                      "rejected": rejected, "model": ctx.llm.model,

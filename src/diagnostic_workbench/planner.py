@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from . import backlog, db, explore, policy, worker
+from . import backlog, db, enrich, explore, policy, worker
 
 _PRIORITY = "CASE ci.automation_level WHEN 'AUTOMATABLE' THEN 10 WHEN 'PARTIALLY_AUTOMATABLE' THEN 20 ELSE 50 END"
 
@@ -77,7 +77,8 @@ def plan(ctx) -> dict:
         "UPDATE change_events SET processed_at=now() WHERE run_id=%s AND processed_at IS NULL RETURNING kind",
         (run_id,))]
     stats = {"events": len(events), "reclaimed": backlog.reclaim_expired(conn, run_id),
-             "created": _propose_checklist_tasks(ctx), "explorations": 0}
+             "created": _propose_checklist_tasks(ctx),
+             "enriched": enrich.enqueue(ctx) if ctx.cfg.enrich_enabled else 0, "explorations": 0}
     stats.update(_admit(ctx))
     conn.commit()
     # 탐색 제안은 체크리스트 작업이 더 남지 않았을 때 시도한다. 체크리스트가 있는 실행은 기존처럼 새
