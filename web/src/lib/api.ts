@@ -1,4 +1,12 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8420";
+// 백엔드 호스트를 페이지 자신의 호스트명에 맞춘다(고정값이 아님). 프론트(localhost:3000)와
+// 백엔드(127.0.0.1:8420)의 호스트명이 다르면 브라우저가 둘을 다른 사이트로 봐서 로그인 세션
+// 쿠키(SameSite=Lax)를 다음 요청에 안 실어 보낸다 — 로그인 POST 는 성공하는데 세션은 안 먹히는
+// 현상의 원인. 항상 "지금 열려 있는 호스트명 그대로" 백엔드를 불러서 같은 사이트로 맞춘다.
+function apiBase(): string {
+  if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
+  if (typeof window !== "undefined") return `http://${window.location.hostname}:8420`;
+  return "http://127.0.0.1:8420"; // SSR 등 window 가 없을 때의 대비값(실제로는 안 쓰임 — 전부 "use client")
+}
 
 export class ApiError extends Error {
   status: number;
@@ -9,7 +17,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${apiBase()}${path}`, {
     ...init,
     credentials: "include",
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
@@ -38,7 +46,7 @@ export const api = {
 };
 
 export const downloadUrl = (runId: string, evidenceId: string) =>
-  `${API_BASE}/api/runs/${runId}/evidence/${evidenceId}/download`;
+  `${apiBase()}/api/runs/${runId}/evidence/${evidenceId}/download`;
 
 export type Run = {
   id: string;
