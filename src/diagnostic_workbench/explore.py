@@ -395,6 +395,21 @@ def _ask_question(ctx, goal, q: dict, assets: dict) -> None:
     db.audit(conn, run_id, "question_asked", {"question_id": str(node), "text": q["text"]})
 
 
+def answer_question(conn, run_id, question: dict, answer: str, operator: str) -> None:
+    """질문(exploration_nodes.kind='question')에 답변을 기록한다. CLI(`question answer`)와 웹 API
+    (`POST /runs/{id}/questions/{id}/answer`)가 공유한다. `question` 은 최소 {"id", "payload"} 를 가진
+    행이면 된다 — 호출자가 참조(CLI 는 짧은 id 접두 매칭, 웹은 전체 id 매칭)로 먼저 찾아서 넘긴다.
+    새 작업을 직접 만들지 않는다 — db.notify_change 로 다음 계획 주기를 깨우면 LLM 이 답변을 보고 알아서
+    이어간다(기존 제안→정책 검증 경로 재사용).
+    """
+    payload = {**question["payload"], "answer": mask_secrets(answer), "answered_by": operator}
+    conn.execute("UPDATE exploration_nodes SET state='ANSWERED', payload=%s WHERE id=%s",
+                (Jsonb(payload), question["id"]))
+    db.audit(conn, run_id, "question_answered", {"question_id": str(question["id"]), "operator": operator})
+    db.notify_change(conn, run_id, "fact")
+    conn.commit()
+
+
 def _report_llm_finding(ctx, fnd: dict, assets: dict, known: set[str]) -> None:
     """CLAUDE.md §1/§7/§9: LLM이 인용한 실존 증거만으로 finding 을 직접 CONFIRMED 기록한다.
 

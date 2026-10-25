@@ -58,10 +58,8 @@ def _make_handler(ctx):
                 self.send_error(403, "host not in scope")
                 return
             try:
-                cert_path, key_path = tls_ca.leaf_cert_for(ctx.cfg, host)
-                tls_server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                tls_server_ctx.load_cert_chain(str(cert_path), str(key_path))
-            except Exception as e:
+                tls_server_ctx = tls_ca.server_context_for(ctx.cfg, host)
+            except tls_ca.TlsCertError as e:
                 self.send_error(502, f"CA/cert error: {e}")
                 return
             self.send_response(200, "Connection Established")

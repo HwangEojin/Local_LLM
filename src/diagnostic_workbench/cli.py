@@ -6,8 +6,6 @@ import json
 import sys
 from pathlib import Path
 
-from psycopg.types.json import Jsonb
-
 from audit import config as audit_config
 from audit.models import AuditError
 from audit.policy import mask_secrets
@@ -495,13 +493,8 @@ def cmd_question(args):
     if len(q) != 1:
         print(f"질문 '{args.question_id}' 을(를) 하나로 특정할 수 없음 ({len(q)}건)", file=sys.stderr)
         return 2
-    q = q[0]
-    payload = {**q["payload"], "answer": mask_secrets(args.answer), "answered_by": args.operator}
-    conn.execute("UPDATE exploration_nodes SET state='ANSWERED', payload=%s WHERE id=%s", (Jsonb(payload), q["id"]))
-    db.audit(conn, run["id"], "question_answered", {"question_id": str(q["id"]), "operator": args.operator})
-    db.notify_change(conn, run["id"], "fact")  # 다음 계획 주기가 답변을 보고 다시 생각하게 깨운다
-    conn.commit()
-    print(f"{q['id']}: 답변 기록됨")
+    explore.answer_question(conn, run["id"], q[0], args.answer, args.operator)
+    print(f"{q[0]['id']}: 답변 기록됨")
     return 0
 
 

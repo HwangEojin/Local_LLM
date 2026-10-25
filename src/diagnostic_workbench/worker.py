@@ -265,7 +265,7 @@ def _observe_assets(ctx, it, tool, args, out, evidence_id):
         return
     conn, run_id = ctx.conn, ctx.run["id"]
 
-    company = it["target"].company or ""
+    company = it["target"].company
 
     def asset(kind, value):
         return conn.execute(

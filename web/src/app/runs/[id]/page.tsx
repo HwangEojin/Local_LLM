@@ -697,8 +697,8 @@ function GraphTab({ runId }: { runId: string }) {
   ]));
   if (labels.length === 0) return <Empty title="그릴 자산 관계가 없습니다" />;
 
-  const kindOf = (label: string) =>
-    data.assets.find((a) => `${a.kind}:${a.value}` === label)?.kind ?? label.split(":")[0] ?? "asset";
+  const kindByLabel = new Map(data.assets.map((a) => [`${a.kind}:${a.value}`, a.kind]));
+  const kindOf = (label: string) => kindByLabel.get(label) ?? label.split(":")[0] ?? "asset";
   const size = Math.max(420, Math.min(900, 140 + labels.length * 36));
   const cx = size / 2, cy = size / 2, radius = size / 2 - 70;
   const pos = new Map(

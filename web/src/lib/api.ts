@@ -179,7 +179,6 @@ export type Question = {
 
 export type DashboardData = {
   by_status: { status: string; n: number }[];
-  by_finding_status: { status: string; n: number }[];
   by_severity: { severity: string; n: number }[];
   totals: { runs: number; evidence: number; findings: number; assets: number };
   recent_runs: { id: string; run_code: string; status: string; operator: string; created_at: string; findings_count: number }[];

@@ -6,12 +6,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
 from audit.models import AuditError
-from audit.policy import mask_secrets
-from diagnostic_workbench import backlog, coordinator, db as wb_db, evidence as wb_evidence, policy as wb_policy
+from diagnostic_workbench import backlog, coordinator, db as wb_db, evidence as wb_evidence
+from diagnostic_workbench import explore as wb_explore, policy as wb_policy
 from diagnostic_workbench import reporting, runs as wb_runs, traces, worker
 
 from ..deps import current_user, get_cfg, get_conn
@@ -439,11 +438,7 @@ def answer_question(run_ref: str, question_id: str, body: AnswerQuestionBody,
                      "AND id::text=%s", (run["id"], question_id)).fetchone()
     if q is None:
         raise HTTPException(404, f"질문 '{question_id}' 을(를) 찾을 수 없음")
-    payload = {**q["payload"], "answer": mask_secrets(body.answer), "answered_by": f"web:{user}"}
-    conn.execute("UPDATE exploration_nodes SET state='ANSWERED', payload=%s WHERE id=%s", (Jsonb(payload), q["id"]))
-    wb_db.audit(conn, run["id"], "question_answered", {"question_id": str(q["id"]), "operator": f"web:{user}"})
-    wb_db.notify_change(conn, run["id"], "fact")
-    conn.commit()
+    wb_explore.answer_question(conn, run["id"], q, body.answer, f"web:{user}")
     return {"answered": str(q["id"])}
 
 
