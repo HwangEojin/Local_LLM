@@ -301,6 +301,19 @@ LLM_PROFILES = {
     "properties": {"profiles": {"type": "array", "items": LLM_PROFILE}},
 }
 
+# 트래픽/도구 호출 인터셉트 규칙(ARTEX intercept_rules 대응). 매치하면 위험도·자율 모드와 무관하게
+# ALLOW_WITH_APPROVAL 로 강제한다(운영자가 직접 보고 승인하게). arg_pattern 은 선택 — 없으면 도구 이름만 본다.
+INTERCEPT_RULE = {
+    "type": "object", "additionalProperties": False, "required": ["name", "tool_pattern"],
+    "properties": {"name": _ID, "tool_pattern": {"type": "string", "minLength": 1},
+                   "arg_pattern": {"type": "string", "minLength": 1}},
+}
+
+INTERCEPT_RULES = {
+    "type": "object", "additionalProperties": False, "required": ["rules"],
+    "properties": {"rules": {"type": "array", "items": INTERCEPT_RULE}},
+}
+
 CHECKLIST = {
     "type": "object", "additionalProperties": False,
     "required": ["checklist_id", "guide_name", "guide_version", "official", "notice", "items"],

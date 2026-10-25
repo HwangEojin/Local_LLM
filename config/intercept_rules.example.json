@@ -1,0 +1,14 @@
+{
+  "rules": [
+    {
+      "name": "sensitive-file-access",
+      "tool_pattern": "^fs\\.(read_file|list_dir)$",
+      "arg_pattern": "(?i)(passwd|shadow|\\.env|secret|\\.ssh)"
+    },
+    {
+      "name": "destructive-sql-keywords",
+      "tool_pattern": "^mcp:burp/send_http1_request$",
+      "arg_pattern": "(?i)(drop\\s+table|delete\\s+from|truncate\\s+table)"
+    }
+  ]
+}

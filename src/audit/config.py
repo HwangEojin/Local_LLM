@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,6 +74,26 @@ def load_llm_profiles(home: Path) -> dict[str, dict]:
             raise ConfigError(f"{path}: 프로파일 이름 중복: {p['name']}")
         by_name[p["name"]] = p
     return by_name
+
+
+def load_intercept_rules(home: Path) -> list[dict]:
+    """config/intercept_rules.json(선택) -> [{"name", "tool_re", "arg_re"}]. 없으면 빈 목록(가로채기 없음).
+
+    패턴은 여기서 미리 컴파일해 호출마다 다시 컴파일하지 않는다(policy.decide 가 자주 불림).
+    """
+    path = home / "config" / "intercept_rules.json"
+    if not path.is_file():
+        return []
+    data = load_json(path, schemas.INTERCEPT_RULES)
+    rules = []
+    for r in data["rules"]:
+        try:
+            tool_re = re.compile(r["tool_pattern"])
+            arg_re = re.compile(r["arg_pattern"]) if r.get("arg_pattern") else None
+        except re.error as e:
+            raise ConfigError(f"{path}: 규칙 '{r['name']}' 의 정규식이 잘못됨: {e}") from None
+        rules.append({"name": r["name"], "tool_re": tool_re, "arg_re": arg_re})
+    return rules
 
 
 def load_mcp_servers(home: Path) -> dict:

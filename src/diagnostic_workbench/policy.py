@@ -40,6 +40,22 @@ def _excluded(value: str, exclude: list[str]) -> str | None:
     return None
 
 
+def _intercepted(rules: list[dict], tool: str, args: dict) -> str | None:
+    """매치한 규칙 이름, 없으면 None. rules 는 config.load_intercept_rules 가 미리 컴파일해 둔 값."""
+    if not rules:
+        return None
+    dumped = None
+    for r in rules:
+        if not r["tool_re"].search(tool):
+            continue
+        if r["arg_re"] is None:
+            return r["name"]
+        dumped = dumped if dumped is not None else json.dumps(args, ensure_ascii=False, default=str)
+        if r["arg_re"].search(dumped):
+            return r["name"]
+    return None
+
+
 def decide(ctx, tool: str, args, asset_id) -> Decision:
     cfg, target = ctx.cfg, ctx.targets.get(asset_id)
     raw = args if isinstance(args, dict) else {}
@@ -68,6 +84,9 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
             hit = next((ex for a in sorted(addrs) if (ex := _excluded(a, cfg.exclude))), None)
             if hit:
                 return Decision(DENY, f"'{host}' 이(가) 제외 주소 '{hit}' 로 해석됨", clean)
+    hit = _intercepted(cfg.intercept_rules, tool, clean)
+    if hit:  # ARTEX intercept_rules 대응: 위험도·자율 모드와 무관하게 사람이 직접 보고 승인하게 한다
+        return Decision(ALLOW_WITH_APPROVAL, f"가로채기 규칙 '{hit}' 에 걸림 — 사람 승인 필요", clean)
     if spec.risk == "read":
         return Decision(ALLOW, "읽기 전용 도구, 범위 내", clean)
     autonomy = ctx.run.get("autonomy", "approval")  # approval(기본) | full — 실행 생성 시 고정(2026-10-19: 이분법으로 단순화)
