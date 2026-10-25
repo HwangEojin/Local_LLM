@@ -160,6 +160,31 @@ export type ActivityEntry = {
 
 export type ServerLogEntry = { ts: string; message: string };
 
+export type TrafficEntry = {
+  id: string;
+  tool: "proxy.http" | "proxy.https";
+  args: { method?: string; url?: string };
+  collected_at: string;
+  success: boolean;
+  size: number | null;
+  media_type: string | null;
+};
+
+export type Question = {
+  id: string;
+  state: "OPEN" | "ANSWERED";
+  payload: { text?: string; answer?: string; answered_by?: string; [k: string]: unknown };
+  created_at: string;
+};
+
+export type DashboardData = {
+  by_status: { status: string; n: number }[];
+  by_finding_status: { status: string; n: number }[];
+  by_severity: { severity: string; n: number }[];
+  totals: { runs: number; evidence: number; findings: number; assets: number };
+  recent_runs: { id: string; run_code: string; status: string; operator: string; created_at: string; findings_count: number }[];
+};
+
 export type Target = {
   target_id: string;
   type: string;

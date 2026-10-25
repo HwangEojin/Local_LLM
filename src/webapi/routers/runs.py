@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
 from audit.models import AuditError
+from audit.policy import mask_secrets
 from diagnostic_workbench import backlog, coordinator, db as wb_db, evidence as wb_evidence, policy as wb_policy
 from diagnostic_workbench import reporting, runs as wb_runs, traces, worker
 
@@ -397,6 +399,52 @@ def get_assets(run_ref: str, conn=Depends(get_conn), user: str = Depends(current
 def get_activity(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
     run = _load_run(conn, run_ref)
     return traces.get_run_trace(conn, run["id"], limit=200)
+
+
+@router.get("/{run_ref}/traffic")
+def get_traffic(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """자체 레코딩 프록시(proxy.http/proxy.https)가 남긴 요청/응답만 모은 목록(ARTEX 트래픽 화면 대응).
+    새 진단 로직 없음 — evidence 를 tool 기준으로 거를 뿐, 원본 내용은 기존 /evidence/.../download 로 받는다."""
+    run = _load_run(conn, run_ref)
+    rows = conn.execute(
+        "SELECT id, tool, args, collected_at, success, size, media_type FROM evidence "
+        "WHERE run_id=%s AND tool IN ('proxy.http','proxy.https') ORDER BY collected_at DESC LIMIT 500",
+        (run["id"],)).fetchall()
+    return rows
+
+
+@router.get("/{run_ref}/questions")
+def list_questions(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """LLM 이 탐색 중 되물은 질문 목록(ARTEX 사이드 질문/채팅 대응, cli.cmd_question list 와 같은 조회)."""
+    run = _load_run(conn, run_ref)
+    rows = conn.execute(
+        "SELECT id, state, payload, created_at FROM exploration_nodes WHERE run_id=%s AND kind='question' "
+        "ORDER BY created_at", (run["id"],)).fetchall()
+    return rows
+
+
+class AnswerQuestionBody(BaseModel):
+    answer: str
+
+
+@router.post("/{run_ref}/questions/{question_id}/answer")
+def answer_question(run_ref: str, question_id: str, body: AnswerQuestionBody,
+                    conn=Depends(get_conn), user: str = Depends(current_user)):
+    """cli.cmd_question answer 와 같은 동작: 답변을 기록하면 다음 계획 주기에서 LLM 이 그 답을 보고
+    탐색을 이어간다(여기서 새 작업을 만들지 않음 — 그 결정은 여전히 LLM 제안 + 정책 계층을 거친다)."""
+    if not body.answer.strip():
+        raise HTTPException(422, "답변을 입력하세요")
+    run = _load_run(conn, run_ref)
+    q = conn.execute("SELECT id, payload FROM exploration_nodes WHERE run_id=%s AND kind='question' "
+                     "AND id::text=%s", (run["id"], question_id)).fetchone()
+    if q is None:
+        raise HTTPException(404, f"질문 '{question_id}' 을(를) 찾을 수 없음")
+    payload = {**q["payload"], "answer": mask_secrets(body.answer), "answered_by": f"web:{user}"}
+    conn.execute("UPDATE exploration_nodes SET state='ANSWERED', payload=%s WHERE id=%s", (Jsonb(payload), q["id"]))
+    wb_db.audit(conn, run["id"], "question_answered", {"question_id": str(q["id"]), "operator": f"web:{user}"})
+    wb_db.notify_change(conn, run["id"], "fact")
+    conn.commit()
+    return {"answered": str(q["id"])}
 
 
 @router.get("/{run_ref}/server-log")
