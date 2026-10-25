@@ -10,9 +10,10 @@ from pydantic import BaseModel
 
 from audit.models import AuditError
 from diagnostic_workbench import backlog, coordinator, db as wb_db, evidence as wb_evidence
-from diagnostic_workbench import explore as wb_explore, policy as wb_policy
+from diagnostic_workbench import explore as wb_explore
 from diagnostic_workbench import reporting, runs as wb_runs, traces, worker
 
+from .. import deps
 from ..deps import current_user, get_cfg, get_conn
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -116,11 +117,7 @@ def list_runs(conn=Depends(get_conn), user: str = Depends(current_user), q: str 
     return {"runs": rows, "total": total, "limit": limit, "offset": offset}
 
 
-def _load_run(conn, run_ref: str) -> dict:
-    try:
-        return wb_db.resolve_run(conn, run_ref)
-    except AuditError as e:
-        raise HTTPException(404, str(e)) from None
+_load_run = deps.load_run
 
 
 class CreateRunBody(BaseModel):
@@ -275,11 +272,10 @@ def get_backlog(run_ref: str, conn=Depends(get_conn), user: str = Depends(curren
 
 
 def _backlog_item(conn, run, ref: str) -> dict:
-    rows = conn.execute("SELECT * FROM backlog_items WHERE run_id=%s AND id::text LIKE %s",
-                        (run["id"], ref.replace("%", "") + "%")).fetchall()
-    if len(rows) != 1:
-        raise HTTPException(404, f"작업 '{ref}' 을(를) 하나로 특정할 수 없음 ({len(rows)}건)")
-    return rows[0]
+    try:
+        return wb_db.resolve_by_prefix(conn, "backlog_items", run["id"], ref, "작업")
+    except AuditError as e:
+        raise HTTPException(404, str(e)) from None
 
 
 class RetryBody(BaseModel):
@@ -294,15 +290,10 @@ def retry_backlog_item(run_ref: str, item_ref: str, body: RetryBody, conn=Depend
         raise HTTPException(422, "재시도 사유를 입력하세요")
     run = _load_run(conn, run_ref)
     item = _backlog_item(conn, run, item_ref)
-    if item["status"] not in ("FAILED", "BLOCKED"):
-        raise HTTPException(400, f"FAILED/BLOCKED 작업만 다시 시도할 수 있음 (현재 {item['status']})")
-    conn.execute("UPDATE backlog_items SET status='PENDING', policy_class=NULL, blocked_reason=NULL, attempts=0, "
-                 "updated_at=now() WHERE id=%s", (item["id"],))
-    wb_db.audit(conn, run["id"], "retry_requested", {"backlog_item": str(item["id"]), "operator": f"web:{user}",
-                                                      "reason": body.reason.strip()})
-    wb_db.notify_change(conn, run["id"], "retry", item["id"])
-    if run["status"] == "COMPLETED":
-        conn.execute("UPDATE runs SET status='PAUSED', stop_reason='재시도 요청', ended_at=NULL WHERE id=%s", (run["id"],))
+    try:
+        worker.retry_item(conn, run, item, f"web:{user}", body.reason.strip())
+    except AuditError as e:
+        raise HTTPException(400, str(e)) from None
     conn.commit()
     return {"retried": str(item["id"])}
 
@@ -318,23 +309,10 @@ def approve_backlog_item(run_ref: str, item_ref: str, body: ApproveBody,
     item = _backlog_item(conn, run, item_ref)
     try:
         ctx = wb_runs.build_context(cfg, conn, run)
-        it, n = worker.load_item(ctx, item), 0
-        for _, tool, call_args in worker.calls(it):
-            d = wb_policy.decide(ctx, tool, call_args, item["asset_id"])
-            if d.decision != wb_policy.ALLOW_WITH_APPROVAL:
-                continue
-            conn.execute("INSERT INTO approvals (run_id, asset_id, tool, args_sha256, approver, decision, "
-                         "expires_at) VALUES (%s,%s,%s,%s,%s,%s, now() + make_interval(hours => %s))",
-                         (run["id"], item["asset_id"], tool, wb_policy.args_hash(d.args), user,
-                          "REJECTED" if body.reject else "APPROVED", cfg.approval_ttl_h))
-            wb_db.audit(conn, run["id"], "approval_recorded", {"backlog_item": str(item["id"]), "tool": tool,
-                                                                "args": d.args, "approver": user,
-                                                                "rejected": body.reject})
-            n += 1
+        n = worker.decide_approvals(ctx, item, user, body.reject)
     except AuditError as e:
         conn.rollback()
         raise HTTPException(400, str(e)) from None
-    wb_db.notify_change(conn, run["id"], "approval", item["id"])
     conn.commit()
     if not n:
         raise HTTPException(400, "이 작업에는 승인 대기 중인 도구 호출이 없음")
