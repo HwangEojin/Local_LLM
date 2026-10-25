@@ -162,8 +162,11 @@ def _context(ctx) -> tuple[str, set[str]]:
         "SELECT n.payload, an.evidence_id::text AS evidence_id FROM exploration_nodes n "
         "JOIN exploration_anchors an ON an.node_id = n.id AND an.evidence_id IS NOT NULL "
         "WHERE n.run_id=%s AND n.kind='fact' ORDER BY n.created_at DESC LIMIT 5", (run_id,)).fetchall()
-    tried = conn.execute("SELECT payload FROM backlog_items WHERE run_id=%s AND kind='exploration'",
-                         (run_id,)).fetchall()
+    tried = conn.execute(
+        "SELECT payload FROM backlog_items WHERE run_id=%s AND kind='exploration' "
+        "UNION ALL "  # 거부된 제안도 보여준다 — 그래야 같은 걸 다음 라운드에 또 제안하지 않는다(CLAUDE.md §6)
+        "SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='intent' AND state='REJECTED'",
+        (run_id, run_id)).fetchall()
     offered_risks = {"read"} | ({"write"} if "write" in ctx.policy.allowed_risks else set())  # dangerous 는 항상 뺀다
     present_types = {t.type for t in ctx.targets.values()}  # 이 실행의 대상 유형(path/host/url)
     tools = {name: {"risk": spec.risk, "args_schema": spec.args_schema, "scope_checked_args": spec.scope_args}
@@ -308,6 +311,20 @@ def propose(ctx) -> int:
             why = "이미 같은 작업이 있음"
         if why:
             rejected.append({"tool": p["tool"], "target_id": p["target_id"], "reason": why})
+            if why != "이미 같은 작업이 있음":  # 그 경우는 원래 작업이 이미 ALREADY_TRIED 에 있어 중복 기록 불필요
+                # CLAUDE.md §6 "동일한 실패를 무한 반복하지 않는다": 거부된 제안도 기록해 두지 않으면
+                # LLM 이 다음 라운드에 똑같이 거부될 제안을 또 낼 수 있다(실행되지 않으니 안전하지만
+                # 라운드를 낭비함). backlog_items 는 만들지 않고(실행 대상이 아님) 탐색 그래프에만
+                # 가벼운 기록을 남겨 _context() 의 ALREADY_TRIED 가 다음 라운드에 보여주게 한다.
+                rnode = conn.execute(
+                    "INSERT INTO exploration_nodes (run_id, kind, origin, state, payload) "
+                    "VALUES (%s,'intent','llm','REJECTED',%s) RETURNING id",
+                    (run_id, db.masked({"tool": p["tool"], "target_id": p["target_id"], "args": p["args"],
+                                        "rejected_reason": why}))).fetchone()["id"]
+                conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'spawns')", (goal, rnode))
+                if asset_id is not None:
+                    conn.execute("INSERT INTO exploration_anchors (node_id, asset_id) VALUES (%s,%s)",
+                                (rnode, asset_id))
             continue
         node = conn.execute(
             "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'intent','llm',%s) RETURNING id",
