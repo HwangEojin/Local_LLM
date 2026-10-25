@@ -5,12 +5,14 @@ from functools import partial
 
 from ..models import ConfigError, ToolSpec
 from ..policy import is_loopback_url
+from . import net_tools
 from .fs_tools import make_tools
 
 
 def build_registry(settings, mcp_servers: dict, stop_file=None) -> dict[str, ToolSpec]:
     max_bytes = settings.limits["max_evidence_bytes"]
     reg = make_tools(max_bytes)
+    reg.update(net_tools.make_tools(max_bytes))
     for server, srv in mcp_servers.items():
         if not srv["enabled"]:
             continue
