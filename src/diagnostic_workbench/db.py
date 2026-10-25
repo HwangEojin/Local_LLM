@@ -101,3 +101,13 @@ def resolve_run(conn, ref: str) -> dict:
         raise AuditError(f"실행 '{ref}' 을(를) 찾을 수 없음" if not rows
                          else f"실행 접두어 '{ref}' 가 여러 건과 일치함")
     return rows[0]
+
+
+def resolve_by_prefix(conn, table: str, run_id, ref: str, label: str) -> dict:
+    """실행 하나 안에서 id 접두어로 행 하나를 찾는다(backlog_items/findings 등, resolve_run 과 같은 관용구).
+    table 은 호출자가 고정된 문자열로만 넘긴다(요청값이 아님) — f-string 삽입이어도 주입 위험 없음."""
+    rows = conn.execute(f"SELECT * FROM {table} WHERE run_id=%s AND id::text LIKE %s",
+                        (run_id, ref.replace("%", "") + "%")).fetchall()
+    if len(rows) != 1:
+        raise AuditError(f"{label} '{ref}' 을(를) 하나로 특정할 수 없음 ({len(rows)}건)")
+    return rows[0]

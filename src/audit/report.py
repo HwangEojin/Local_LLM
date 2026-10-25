@@ -9,7 +9,7 @@ from collections import Counter
 from pathlib import Path
 
 from .evidence import EvidenceStore
-from .models import VERDICT_LABELS_KO, AuditError, Verdict
+from .models import VERDICT_LABELS_KO, AuditError, Verdict, free_path
 from .policy import mask_secrets
 
 VERDICT_ORDER = [v.value for v in Verdict]
@@ -249,6 +249,9 @@ def verify(m: dict, docx_path: Path, xlsx_path: Path, evidence_store: EvidenceSt
     from openpyxl import load_workbook
     problems = []
     expected = {(r["check_id"], r["target_id"]): r["verdict"] for r in m["results"]}
+    # collect() 가 이미 이 실행의 증거를 전부 한 번에 읽어 뒀다(m["evidence"]) — 아래 xlsx 증거ID 검증에서
+    # 행마다/증거마다 DB 를 다시 조회하지 않고 이 사전에서 찾는다.
+    evidence_by_id = {e["evidence_id"]: e for e in m["evidence"]}
 
     # Word
     tables = _docx_tables(docx_path)
@@ -282,7 +285,7 @@ def verify(m: dict, docx_path: Path, xlsx_path: Path, evidence_store: EvidenceSt
             xl_items[(row[idx["점검항목ID"]], row[idx["대상ID"]])] = row[idx["판정"]]
             if "증거ID" in idx and row[idx["증거ID"]]:
                 for eid in str(row[idx["증거ID"]]).split(", "):
-                    rec = evidence_store.storage.evidence(evidence_id=eid)
+                    rec = evidence_by_id.get(eid)
                     problem = "알 수 없는 증거" if rec is None else evidence_store.verify(rec)
                     if problem:
                         problems.append(f"xlsx: 증거 {eid}: {problem}")
@@ -302,28 +305,19 @@ def verify(m: dict, docx_path: Path, xlsx_path: Path, evidence_store: EvidenceSt
     return problems
 
 
-def _free(path: Path) -> Path:
-    """기존 보고서를 덮어쓰지 않는다."""
-    n, p = 1, path
-    while p.exists():
-        n += 1
-        p = path.with_name(f"{path.stem}-{n}{path.suffix}")
-    return p
-
-
 def generate(storage, run_id, checklists, settings, evidence_store) -> dict:
     m = collect(storage, run_id, checklists)
     out = settings.path("reports_dir") / run_id
     out.mkdir(parents=True, exist_ok=True)
     tdir = settings.path("templates_dir")
     wt, xt = tdir / "word" / "report_template.docx", tdir / "excel" / "report_template.xlsx"
-    docx_path, xlsx_path = _free(out / f"report_{run_id}.docx"), _free(out / f"report_{run_id}.xlsx")
+    docx_path, xlsx_path = free_path(out / f"report_{run_id}.docx"), free_path(out / f"report_{run_id}.xlsx")
     write_docx(m, docx_path, wt if wt.exists() else None)
     write_xlsx(m, xlsx_path, xt if xt.exists() else None)
     problems = verify(m, docx_path, xlsx_path, evidence_store)
     result = {"run_id": run_id, "docx": str(docx_path), "xlsx": str(xlsx_path),
               "counts": m["counts"], "problems": problems}
-    _free(out / "verification.json").write_text(json.dumps(result, ensure_ascii=False, indent=2),
-                                                encoding="utf-8")
+    free_path(out / "verification.json").write_text(json.dumps(result, ensure_ascii=False, indent=2),
+                                                    encoding="utf-8")
     storage.audit(run_id, "report_generated", result)
     return result

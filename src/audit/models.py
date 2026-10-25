@@ -72,3 +72,13 @@ class ToolOutput:
 
 class ToolError(AuditError):
     """등록된 도구가 실행되었으나 실패함(정책 판단이 아님)."""
+
+
+def free_path(path):
+    """path 가 이미 있으면 `-2`, `-3`... 을 붙여 기존 보고서를 덮어쓰지 않을 경로를 돌려준다.
+    report.py/pentest_report.py 가 공유한다."""
+    n, p = 1, path
+    while p.exists():
+        n += 1
+        p = path.with_name(f"{path.stem}-{n}{path.suffix}")
+    return p

@@ -141,41 +141,39 @@ def make_tools(cfg) -> dict[str, ToolSpec]:
     if not exe:
         return tools  # nmap 이 없으면 nmap 기반 도구만 등록하지 않는다
 
+    def _run_nmap(cmd: list[str]) -> bytes:
+        """nmap 실행 + 타임아웃/실행불가/비정상종료 처리를 scan()/ssl_scan() 이 공유한다."""
+        try:
+            p = _run_cancelable(cmd, timeout, cfg.stop_file)
+        except subprocess.TimeoutExpired:
+            raise ToolError(f"nmap 시간 초과 ({timeout}초)") from None
+        except OSError as e:
+            raise ToolError(f"nmap 을 실행할 수 없음: {e}") from None
+        if p.returncode != 0:
+            raise ToolError(f"nmap 종료 코드 {p.returncode}: {p.stderr[-300:].decode(errors='replace').strip()}")
+        return p.stdout
+
     def scan(args):
         ports = args.get("ports")
         if ports and _port_count(ports) > MAX_PORTS:
             raise ToolError(f"한 번에 스캔할 수 있는 포트는 {MAX_PORTS}개까지임")
         cmd = [exe, "-sT", "-sV", "--version-light", "-Pn", "-T3", "--host-timeout", f"{timeout - 30}s", "-oX", "-",
                *(["-p", ports] if ports else ["--top-ports", "100"]), args["host"]]
+        stdout = _run_nmap(cmd)
         try:
-            p = _run_cancelable(cmd, timeout, cfg.stop_file)
-        except subprocess.TimeoutExpired:
-            raise ToolError(f"nmap 시간 초과 ({timeout}초)") from None
-        except OSError as e:
-            raise ToolError(f"nmap 을 실행할 수 없음: {e}") from None
-        if p.returncode != 0:
-            raise ToolError(f"nmap 종료 코드 {p.returncode}: {p.stderr[-300:].decode(errors='replace').strip()}")
-        try:
-            version = ET.fromstring(p.stdout).get("version", "")
+            version = ET.fromstring(stdout).get("version", "")
         except ET.ParseError as e:
             raise ToolError(f"nmap 출력이 XML 이 아님: {e}") from None
         limit = cfg.settings.limits["max_evidence_bytes"]
-        return ToolOutput(p.stdout[:limit], f"nmap/{version}", truncated=len(p.stdout) > limit)
+        return ToolOutput(stdout[:limit], f"nmap/{version}", truncated=len(stdout) > limit)
 
     def ssl_scan(args):
         port = args.get("port", 443)
         cmd = [exe, "-Pn", "-p", str(port), "--script", _SSL_SCRIPTS, "-T3",
                "--host-timeout", f"{timeout - 30}s", "-oN", "-", args["host"]]
-        try:
-            p = _run_cancelable(cmd, timeout, cfg.stop_file)
-        except subprocess.TimeoutExpired:
-            raise ToolError(f"nmap 시간 초과 ({timeout}초)") from None
-        except OSError as e:
-            raise ToolError(f"nmap 을 실행할 수 없음: {e}") from None
-        if p.returncode != 0:
-            raise ToolError(f"nmap 종료 코드 {p.returncode}: {p.stderr[-300:].decode(errors='replace').strip()}")
+        stdout = _run_nmap(cmd)
         limit = cfg.settings.limits["max_evidence_bytes"]
-        return ToolOutput(p.stdout[:limit], "nmap/nse", truncated=len(p.stdout) > limit)
+        return ToolOutput(stdout[:limit], "nmap/nse", truncated=len(stdout) > limit)
 
     tools["nmap.scan"] = ToolSpec("nmap.scan", "write", _NMAP_ARGS, {"host": "host"}, scan, "nmap")
     tools["nmap.ssl_scan"] = ToolSpec("nmap.ssl_scan", "write", _TLS_ARGS, {"host": "host"}, ssl_scan, "nmap")

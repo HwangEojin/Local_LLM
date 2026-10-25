@@ -51,3 +51,11 @@ def current_user(session: str | None = Cookie(default=None, alias=auth.COOKIE_NA
 
 def audit_error_to_http(exc: AuditError) -> HTTPException:
     return HTTPException(400, str(exc))
+
+
+def load_run(conn, run_ref: str) -> dict:
+    """진단 실행을 ref(run_code 또는 id 접두어)로 찾는다. 없으면 404 — runs.py/findings.py 가 공유한다."""
+    try:
+        return wb_db.resolve_run(conn, run_ref)
+    except AuditError as e:
+        raise HTTPException(404, str(e)) from None

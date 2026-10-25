@@ -45,6 +45,7 @@ import {
   VERIFICATION_LABEL,
 } from "@/lib/labels";
 import { usePolling } from "@/lib/usePolling";
+import { useRunResource } from "@/lib/useRunResource";
 
 type TabKey = "findings" | "backlog" | "assets" | "graph" | "traffic" | "chat" | "evidence" | "activity" | "server-log";
 const TAB_KEYS: TabKey[] = ["findings", "backlog", "assets", "graph", "traffic", "chat", "evidence", "activity", "server-log"];
@@ -565,15 +566,10 @@ function BacklogTab({ runId, items, onChanged }: { runId: string; items: Backlog
 
 // ── 증적 ──
 function EvidenceTab({ runId }: { runId: string }) {
-  const [items, setItems] = useState<Evidence[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: items, error } = useRunResource<Evidence[]>(`/api/runs/${runId}/evidence`, 0);
   const [q, setQ] = useState("");
 
-  useEffect(() => {
-    api.get<Evidence[]>(`/api/runs/${runId}/evidence`).then(setItems).catch((e) => setError(e.message));
-  }, [runId]);
-
-  if (error) return <Banner>{error}</Banner>;
+  if (error && !items) return <Banner>{error}</Banner>;
   if (!items) return <SkeletonRows />;
   if (items.length === 0) return <Empty title="수집된 증적이 없습니다" />;
 
@@ -635,16 +631,11 @@ function EvidenceTab({ runId }: { runId: string }) {
 type AssetRow = { id: string; target_id: string; kind: string; value: string; company: string | null; verification: string; source: string };
 type AssetEdgeRow = { src: string; rel: string; dst: string; source: string };
 
-function AssetsTab({ runId }: { runId: string }) {
-  const [data, setData] = useState<{ assets: AssetRow[]; edges: AssetEdgeRow[] } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+type AssetsData = { assets: AssetRow[]; edges: AssetEdgeRow[] };
+const useAssets = (runId: string) => useRunResource<AssetsData>(`/api/runs/${runId}/assets`, 6000);
 
-  const load = useCallback(() => {
-    api.get<{ assets: AssetRow[]; edges: AssetEdgeRow[] }>(`/api/runs/${runId}/assets`)
-      .then((d) => { setData(d); setError(null); }).catch((e) => setError(e.message));
-  }, [runId]);
-  useEffect(load, [load]);
-  usePolling(load, 6000);
+function AssetsTab({ runId }: { runId: string }) {
+  const { data, error } = useAssets(runId);
 
   if (error && !data) return <Banner>{error}</Banner>;
   if (!data) return <SkeletonRows />;
@@ -678,35 +669,33 @@ function AssetsTab({ runId }: { runId: string }) {
 
 // ── 탐색 그래프 ──
 function GraphTab({ runId }: { runId: string }) {
-  const [data, setData] = useState<{ assets: AssetRow[]; edges: AssetEdgeRow[] } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error } = useAssets(runId);
 
-  const load = useCallback(() => {
-    api.get<{ assets: AssetRow[]; edges: AssetEdgeRow[] }>(`/api/runs/${runId}/assets`)
-      .then((d) => { setData(d); setError(null); }).catch((e) => setError(e.message));
-  }, [runId]);
-  useEffect(load, [load]);
-  usePolling(load, 10000);
+  // data 참조가 폴링마다 바뀌지 않는 한(usePolling 은 실제로 바뀐 응답만 setData 한다) 재계산하지 않는다.
+  const graph = useMemo(() => {
+    const assets = data?.assets ?? [], edges = data?.edges ?? [];
+    const labels = Array.from(new Set([
+      ...assets.map((a) => `${a.kind}:${a.value}`),
+      ...edges.flatMap((e) => [e.src, e.dst]),
+    ]));
+    const kindByLabel = new Map(assets.map((a) => [`${a.kind}:${a.value}`, a.kind]));
+    const size = Math.max(420, Math.min(900, 140 + labels.length * 36));
+    const cx = size / 2, cy = size / 2, radius = size / 2 - 70;
+    const pos = new Map(
+      labels.map((label, i) => {
+        const angle = (i / labels.length) * 2 * Math.PI;
+        return [label, { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }] as const;
+      }),
+    );
+    return { labels, kindByLabel, pos, size };
+  }, [data]);
 
   if (error && !data) return <Banner>{error}</Banner>;
   if (!data) return <SkeletonRows />;
+  if (graph.labels.length === 0) return <Empty title="그릴 자산 관계가 없습니다" />;
 
-  const labels = Array.from(new Set([
-    ...data.assets.map((a) => `${a.kind}:${a.value}`),
-    ...data.edges.flatMap((e) => [e.src, e.dst]),
-  ]));
-  if (labels.length === 0) return <Empty title="그릴 자산 관계가 없습니다" />;
-
-  const kindByLabel = new Map(data.assets.map((a) => [`${a.kind}:${a.value}`, a.kind]));
+  const { labels, kindByLabel, pos, size } = graph;
   const kindOf = (label: string) => kindByLabel.get(label) ?? label.split(":")[0] ?? "asset";
-  const size = Math.max(420, Math.min(900, 140 + labels.length * 36));
-  const cx = size / 2, cy = size / 2, radius = size / 2 - 70;
-  const pos = new Map(
-    labels.map((label, i) => {
-      const angle = (i / labels.length) * 2 * Math.PI;
-      return [label, { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }] as const;
-    }),
-  );
   const KIND_COLOR: Record<string, string> = {
     host: "var(--accent)", url: "#7c3aed", service: "#0ea5e9", path: "#f59e0b",
   };
@@ -746,15 +735,7 @@ function GraphTab({ runId }: { runId: string }) {
 
 // ── 트래픽(자체 레코딩 프록시) ──
 function TrafficTab({ runId }: { runId: string }) {
-  const [items, setItems] = useState<TrafficEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    api.get<TrafficEntry[]>(`/api/runs/${runId}/traffic`).then((d) => { setItems(d); setError(null); })
-      .catch((e) => setError(e.message));
-  }, [runId]);
-  useEffect(load, [load]);
-  usePolling(load, 6000);
+  const { data: items, error } = useRunResource<TrafficEntry[]>(`/api/runs/${runId}/traffic`, 6000);
 
   if (error && !items) return <Banner>{error}</Banner>;
   if (!items) return <SkeletonRows />;
@@ -801,17 +782,9 @@ function TrafficTab({ runId }: { runId: string }) {
 // ── 질문(LLM 의 사이드 질문, human-in-the-loop) ──
 function ChatTab({ runId }: { runId: string }) {
   const toast = useToast();
-  const [items, setItems] = useState<Question[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: items, error, reload } = useRunResource<Question[]>(`/api/runs/${runId}/questions`, 6000);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    api.get<Question[]>(`/api/runs/${runId}/questions`).then((d) => { setItems(d); setError(null); })
-      .catch((e) => setError(e.message));
-  }, [runId]);
-  useEffect(load, [load]);
-  usePolling(load, 6000);
 
   async function answer(q: Question) {
     const text = (drafts[q.id] ?? "").trim();
@@ -820,7 +793,7 @@ function ChatTab({ runId }: { runId: string }) {
     try {
       await api.post(`/api/runs/${runId}/questions/${q.id}/answer`, { answer: text });
       toast("ok", "답변을 기록했습니다. 다음 계획 주기에서 LLM 이 이어서 탐색합니다.");
-      load();
+      reload();
     } catch (e) {
       toast("danger", e instanceof ApiError ? e.message : "답변 기록에 실패했습니다");
     } finally {
@@ -873,16 +846,9 @@ function ChatTab({ runId }: { runId: string }) {
 
 // ── 실행 기록 ──
 function ActivityTab({ runId }: { runId: string }) {
-  const [items, setItems] = useState<ActivityEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: items, error } = useRunResource<ActivityEntry[]>(`/api/runs/${runId}/activity`, 4000);
   const [q, setQ] = useState("");
   const [onlyProblems, setOnlyProblems] = useState(false);
-
-  const load = useCallback(() => {
-    api.get<ActivityEntry[]>(`/api/runs/${runId}/activity`).then((d) => { setItems(d); setError(null); }).catch((e) => setError(e.message));
-  }, [runId]);
-  useEffect(load, [load]);
-  usePolling(load, 4000);
 
   if (error && !items) return <Banner>{error}</Banner>;
   if (!items) return <SkeletonRows />;
@@ -933,17 +899,10 @@ function ActivityTab({ runId }: { runId: string }) {
 // ── 서버 로그 ──
 function ServerLogTab({ runId }: { runId: string }) {
   const toast = useToast();
-  const [items, setItems] = useState<ServerLogEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
+  const { data: items, error } = useRunResource<ServerLogEntry[]>(`/api/runs/${runId}/server-log`, 2000, !paused);
   const [follow, setFollow] = useState(true);
   const boxRef = useRef<HTMLDivElement>(null);
-
-  const load = useCallback(() => {
-    api.get<ServerLogEntry[]>(`/api/runs/${runId}/server-log`).then((d) => { setItems(d); setError(null); }).catch((e) => setError(e.message));
-  }, [runId]);
-  useEffect(load, [load]);
-  usePolling(load, 2000, !paused);
 
   useEffect(() => {
     if (follow && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;

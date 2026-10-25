@@ -319,11 +319,7 @@ def cmd_backlog(args, cfg=None, conn=None):
 
 
 def _item(conn, run, ref):
-    rows = conn.execute("SELECT * FROM backlog_items WHERE run_id=%s AND id::text LIKE %s",
-                        (run["id"], ref.replace("%", "") + "%")).fetchall()
-    if len(rows) != 1:
-        raise AuditError(f"작업 '{ref}' 을(를) 하나로 특정할 수 없음 ({len(rows)}건)")
-    return rows[0]
+    return db.resolve_by_prefix(conn, "backlog_items", run["id"], ref, "작업")
 
 
 def cmd_approve(args):
@@ -332,20 +328,7 @@ def cmd_approve(args):
     run = db.resolve_run(conn, args.run)
     ctx = runs.build_context(cfg, conn, run)
     item = _item(conn, run, args.item)
-    it, n = worker.load_item(ctx, item), 0
-    for _, tool, call_args in worker.calls(it):
-        d = policy.decide(ctx, tool, call_args, item["asset_id"])
-        if d.decision != policy.ALLOW_WITH_APPROVAL:
-            continue
-        print(f"{'거부' if args.reject else '승인'}: {tool} 인자={mask_secrets(json.dumps(d.args, ensure_ascii=False))}")
-        conn.execute("INSERT INTO approvals (run_id, asset_id, tool, args_sha256, approver, decision, expires_at) "
-                     "VALUES (%s,%s,%s,%s,%s,%s, now() + make_interval(hours => %s))",
-                     (run["id"], item["asset_id"], tool, policy.args_hash(d.args), args.approver,
-                      "REJECTED" if args.reject else "APPROVED", cfg.approval_ttl_h))
-        db.audit(conn, run["id"], "approval_recorded", {"backlog_item": str(item["id"]), "tool": tool, "args": d.args,
-                                                         "approver": args.approver, "rejected": args.reject})
-        n += 1
-    db.notify_change(conn, run["id"], "approval", item["id"])
+    n = worker.decide_approvals(ctx, item, args.approver, args.reject)
     conn.commit()
     print(f"기록된 결정 {n}건 (유효 {cfg.approval_ttl_h}시간). 이어서: run start {run['id']}" if n
           else "이 작업에는 승인 대기 중인 도구 호출이 없음")
@@ -356,15 +339,7 @@ def cmd_retry(args):
     cfg, conn = _open(args)
     run = db.resolve_run(conn, args.run)
     item = _item(conn, run, args.item)
-    if item["status"] not in ("FAILED", "BLOCKED"):
-        raise AuditError(f"FAILED/BLOCKED 작업만 다시 시도할 수 있음 (현재 {item['status']})")
-    conn.execute("UPDATE backlog_items SET status='PENDING', policy_class=NULL, blocked_reason=NULL, attempts=0, "
-                 "updated_at=now() WHERE id=%s", (item["id"],))  # 명시적 재시도: 정책 판정부터 다시 받는다
-    db.audit(conn, run["id"], "retry_requested", {"backlog_item": str(item["id"]), "operator": args.operator,
-                                                   "reason": args.reason})
-    db.notify_change(conn, run["id"], "retry", item["id"])
-    if run["status"] == "COMPLETED":
-        conn.execute("UPDATE runs SET status='PAUSED', stop_reason='재시도 요청', ended_at=NULL WHERE id=%s", (run["id"],))
+    worker.retry_item(conn, run, item, args.operator, args.reason)
     conn.commit()
     print(f"재시도 등록됨. 이어서: run start {run['id']}")
     return 0
@@ -400,11 +375,7 @@ def cmd_review(args):
 
 
 def _finding(conn, run, ref):
-    rows = conn.execute("SELECT * FROM findings WHERE run_id=%s AND id::text LIKE %s",
-                        (run["id"], ref.replace("%", "") + "%")).fetchall()
-    if len(rows) != 1:
-        raise AuditError(f"finding '{ref}' 을(를) 하나로 특정할 수 없음 ({len(rows)}건)")
-    return rows[0]
+    return db.resolve_by_prefix(conn, "findings", run["id"], ref, "finding")
 
 
 def cmd_proxy(args):

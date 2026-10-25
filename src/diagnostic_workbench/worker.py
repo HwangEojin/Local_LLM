@@ -46,6 +46,41 @@ def load_item(ctx, item: dict) -> dict:
     return it
 
 
+def decide_approvals(ctx, item: dict, approver: str, reject: bool) -> int:
+    """승인 대기 중인 도구 호출을 정확한 대상·도구·인자 단위로 승인/거부한다. cli.cmd_approve 와
+    webapi approve_backlog_item 이 공유한다(둘 다 새 진단 로직 없이 이 함수만 부른다).
+    돌려주는 값은 기록한 결정 건수 — 0 이면 이 작업에는 승인 대기 중인 호출이 없었다는 뜻."""
+    conn, run_id = ctx.conn, ctx.run["id"]
+    it, n = load_item(ctx, item), 0
+    for _, tool, call_args in calls(it):
+        d = policy.decide(ctx, tool, call_args, item["asset_id"])
+        if d.decision != policy.ALLOW_WITH_APPROVAL:
+            continue
+        conn.execute("INSERT INTO approvals (run_id, asset_id, tool, args_sha256, approver, decision, expires_at) "
+                     "VALUES (%s,%s,%s,%s,%s,%s, now() + make_interval(hours => %s))",
+                     (run_id, item["asset_id"], tool, policy.args_hash(d.args), approver,
+                      "REJECTED" if reject else "APPROVED", ctx.cfg.approval_ttl_h))
+        db.audit(conn, run_id, "approval_recorded", {"backlog_item": str(item["id"]), "tool": tool, "args": d.args,
+                                                      "approver": approver, "rejected": reject})
+        n += 1
+    db.notify_change(conn, run_id, "approval", item["id"])
+    return n
+
+
+def retry_item(conn, run: dict, item: dict, operator: str, reason: str) -> None:
+    """FAILED/BLOCKED 작업을 정책 판정부터 다시 받도록 PENDING 으로 되돌린다(명시적 재시도). cli.cmd_retry 와
+    webapi retry_backlog_item 이 공유한다. 호출자가 trim 된 reason 과 commit 을 책임진다."""
+    if item["status"] not in ("FAILED", "BLOCKED"):
+        raise AuditError(f"FAILED/BLOCKED 작업만 다시 시도할 수 있음 (현재 {item['status']})")
+    conn.execute("UPDATE backlog_items SET status='PENDING', policy_class=NULL, blocked_reason=NULL, attempts=0, "
+                 "updated_at=now() WHERE id=%s", (item["id"],))
+    db.audit(conn, run["id"], "retry_requested", {"backlog_item": str(item["id"]), "operator": operator,
+                                                   "reason": reason})
+    db.notify_change(conn, run["id"], "retry", item["id"])
+    if run["status"] == "COMPLETED":
+        conn.execute("UPDATE runs SET status='PAUSED', stop_reason='재시도 요청', ended_at=NULL WHERE id=%s", (run["id"],))
+
+
 def calls(it: dict) -> list[tuple[str, str, dict]]:
     """이 작업이 수행할 도구 호출 목록: (요구사항 id, 도구, 인자)."""
     if it["kind"] == "exploration":
