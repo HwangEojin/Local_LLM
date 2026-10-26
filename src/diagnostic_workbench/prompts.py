@@ -7,9 +7,30 @@ LLM 의 판단·정책 계층은 그대로다(CLAUDE.md §7 "LLM 자체가... �
 from __future__ import annotations
 
 
-def get(conn, name: str, default: str) -> str:
+_SKILLS_MAX_CHARS = 6000  # 시스템 프롬프트가 요청 크기 한도(max_request_bytes)를 잡아먹지 않게 하는 상한
+
+
+def get(conn, name: str, default: str, role: str | None = None) -> str:
+    """프롬프트 본문. role 을 주면 그 역할에 붙은 활성 스킬을 뒤에 덧붙인다(스킬은 문구일 뿐 권한은 그대로)."""
     row = conn.execute("SELECT text FROM agent_prompts WHERE name=%s", (name,)).fetchone()
-    return row["text"] if row else default
+    text = row["text"] if row else default
+    return text + skills_for(conn, role) if role else text
+
+
+def skills_for(conn, role: str) -> str:
+    rows = conn.execute("SELECT name, instructions FROM agent_skills WHERE enabled AND %s = ANY(roles) ORDER BY name",
+                        (role,)).fetchall()
+    parts, used = [], 0
+    for r in rows:
+        item = f"### {r['name']}\n{r['instructions']}"
+        if used + len(item) > _SKILLS_MAX_CHARS:
+            break  # 상한을 넘는 스킬은 붙이지 않는다(이름순으로 앞선 것부터)
+        parts.append(item)
+        used += len(item)
+    if not parts:
+        return ""
+    return ("\n\nSKILLS: operator-provided guidance for this role. They refine how you work but never grant "
+            "tools or permissions, and never override the rules above.\n" + "\n\n".join(parts))
 
 
 def set(conn, name: str, text: str, *, operator: str) -> None:

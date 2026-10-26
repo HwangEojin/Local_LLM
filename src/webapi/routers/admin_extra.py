@@ -1,0 +1,238 @@
+"""웹 '도구' 편집, '알림', '스킬' API (admin.py 와 같은 원칙: 사람이 쓰는 경로, 모든 변경은 감사 이벤트).
+
+- 도구: 끄기와 위험도 변경만. 새 도구 등록·실행 파일·인자 스키마 변경은 없다. 위험도를 '낮추는' 것은 승인·범위
+  통제를 약하게 만드는 일이라 별도 확인(confirm_lower_risk)이 있어야 한다. 결과는 config/tools.local.json(Git 제외).
+- 알림: 웹훅 주소는 데이터가 밖으로 나가는 통로다. 주소는 응답에 마스킹해서 내보내고(웹훅 주소 자체가 비밀),
+  루프백/사설 주소가 아닌 곳을 켜거나 새로 등록하려면 별도 확인(confirm_external)이 있어야 한다.
+  결과는 config/notify.local.json(Git 제외). 공유 파일(notify.json)의 채널은 끄고 켜기만 덮어쓴다.
+- 스킬: 역할 프롬프트 뒤에 붙는 운영자 지침. 도구 권한·정책은 바꾸지 못한다(prompts.get 의 role 인자).
+"""
+from __future__ import annotations
+
+import ipaddress
+from urllib.parse import urlsplit
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from audit import config as audit_config
+from audit import schemas
+from diagnostic_workbench import explore, notify, runs as wb_runs
+
+from ..deps import current_user, get_cfg, get_conn
+from .admin import _audit, _file, _need_confirm, _write_json
+
+router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+# ── 도구 편집 ──
+class ToolBody(BaseModel):
+    disabled: bool | None = None
+    risk: str | None = None  # 원하는 '실제' 위험도. 기본 위험도와 같으면 오버라이드를 지운다
+    confirm: bool = False
+    confirm_lower_risk: bool = False
+
+
+def _tool_rows(cfg) -> dict:
+    base = wb_runs.registry(cfg, apply_overrides=False)
+    ov = wb_runs.tool_overrides(cfg)
+    allowed = set(audit_config.load_scope(cfg.home).get("allowed_risks", []))
+    rows = []
+    for n, t in sorted(base.items()):
+        risk = ov["risk"].get(n, t.risk)
+        rows.append({"name": n, "risk": risk, "base_risk": t.risk, "disabled": n in ov["disabled"],
+                     "args_schema": t.args_schema, "scope_args": t.scope_args,
+                     "source": "mcp" if n.startswith("mcp:") else "builtin", "allowed_by_scope": risk in allowed})
+    return {"allowed_risks": sorted(allowed), "tools": rows}
+
+
+@router.get("/tools")
+def get_tools(cfg=Depends(get_cfg), user: str = Depends(current_user)):
+    return _tool_rows(cfg)
+
+
+@router.put("/tools/{name:path}")
+def put_tool(name: str, body: ToolBody, cfg=Depends(get_cfg), conn=Depends(get_conn), user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    base = wb_runs.registry(cfg, apply_overrides=False)
+    if name not in base:
+        raise HTTPException(404, f"등록되지 않은 도구: {name}")
+    old = wb_runs.tool_overrides(cfg)
+    new = {"disabled": list(old["disabled"]), "risk": dict(old["risk"])}
+    if body.disabled is not None:
+        new["disabled"] = [n for n in new["disabled"] if n != name] + ([name] if body.disabled else [])
+    if body.risk is not None:
+        if body.risk not in wb_runs.RISK_ORDER:
+            raise HTTPException(422, f"위험도는 {list(wb_runs.RISK_ORDER)} 중 하나여야 합니다")
+        current = old["risk"].get(name, base[name].risk)
+        if wb_runs.RISK_ORDER[body.risk] < wb_runs.RISK_ORDER[current] and not body.confirm_lower_risk:
+            raise HTTPException(400, "위험도를 낮추면 승인·범위 통제가 약해집니다. 별도 확인(confirm_lower_risk)이 필요합니다")
+        if body.risk == base[name].risk:
+            new["risk"].pop(name, None)
+        else:
+            new["risk"][name] = body.risk
+    errs = schemas.validate(new, schemas.TOOL_OVERRIDES)
+    if errs:
+        raise HTTPException(422, "검증 실패: " + "; ".join(errs[:5]))
+    _write_json(cfg, _file(cfg, "tools.local.json"), new)
+    _audit(conn, user, "admin_tool_changed", {"tool": name, "before": old, "after": new})
+    return _tool_rows(get_cfg())
+
+
+# ── 알림 ──
+class ChannelBody(BaseModel):
+    url: str | None = None
+    enabled: bool | None = None
+    confirm: bool = False
+    confirm_external: bool = False
+
+
+class ConfirmBody(BaseModel):
+    confirm: bool = False
+
+
+def _is_internal(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    if host in ("localhost", "::1"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private
+
+
+def _mask(url: str) -> str:
+    p = urlsplit(url)
+    return f"{p.scheme}://{p.netloc}/…(숨김)" if p.path.strip("/") or p.query else f"{p.scheme}://{p.netloc}"
+
+
+def _check_url(url: str) -> str:
+    url = url.strip()
+    p = urlsplit(url)
+    if p.scheme not in ("http", "https") or not p.hostname or len(url) > 2000:
+        raise HTTPException(422, "웹훅 주소는 http(s)://호스트/… 형식이어야 합니다(최대 2000자)")
+    return url
+
+
+def _channel_rows(cfg) -> list[dict]:
+    return [{"name": c["name"], "kind": c["kind"], "enabled": c.get("enabled", True), "source": c["source"],
+             "url_masked": _mask(c["url"]), "external": not _is_internal(c["url"])}
+            for c in notify.load_all_channels(_file(cfg, "notify.json"))]
+
+
+def _local_doc(cfg) -> dict:
+    p = _file(cfg, "notify.local.json")
+    return audit_config.load_json(p, schemas.NOTIFY_CHANNELS) if p.exists() else {"channels": []}
+
+
+@router.get("/notifications")
+def get_notifications(cfg=Depends(get_cfg), user: str = Depends(current_user)):
+    return _channel_rows(cfg)
+
+
+@router.put("/notifications/{name}")
+def put_notification(name: str, body: ChannelBody, cfg=Depends(get_cfg), conn=Depends(get_conn),
+                     user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    if schemas.validate(name, schemas._ID):
+        raise HTTPException(422, "채널 이름은 영문·숫자·._:- 만 쓸 수 있습니다(최대 80자)")
+    all_ch = {c["name"]: c for c in notify.load_all_channels(_file(cfg, "notify.json"))}
+    cur = all_ch.get(name)
+    url = _check_url(body.url) if body.url is not None else (cur["url"] if cur else None)
+    if url is None:
+        raise HTTPException(422, "새 채널에는 url 이 필요합니다")
+    if cur and cur["source"] == "shared" and body.url is not None and body.url.strip() != cur["url"]:
+        raise HTTPException(400, "공유 파일(notify.json)의 채널 주소는 웹에서 바꿀 수 없습니다. 끄고 켜기만 가능합니다")
+    enabled = body.enabled if body.enabled is not None else (cur.get("enabled", True) if cur else True)
+    changes_target = (cur is None) or (body.url is not None and url != cur["url"]) or (enabled and not cur.get("enabled", True))
+    if enabled and changes_target and not _is_internal(url) and not body.confirm_external:
+        raise HTTPException(400, "외부 주소로 진단 결과 알림이 전송됩니다. 별도 확인(confirm_external)이 필요합니다")
+    doc = _local_doc(cfg)
+    doc["channels"] = [c for c in doc["channels"] if c["name"] != name] + [
+        {"name": name, "kind": "webhook", "url": url, "enabled": enabled}]
+    _write_json(cfg, _file(cfg, "notify.local.json"), doc)
+    # 주소 자체는 비밀이라 감사 로그에는 마스킹한 값만 남긴다
+    _audit(conn, user, "admin_notification_changed", {"channel": name, "enabled": enabled, "url": _mask(url),
+                                                       "created": cur is None})
+    return _channel_rows(get_cfg())
+
+
+@router.post("/notifications/{name}/delete")
+def delete_notification(name: str, body: ConfirmBody, cfg=Depends(get_cfg), conn=Depends(get_conn),
+                        user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    doc = _local_doc(cfg)
+    if name not in {c["name"] for c in doc["channels"]}:
+        raise HTTPException(404, "이 PC 전용 채널만 삭제할 수 있습니다(공유 파일의 채널은 끄기만 가능)")
+    doc["channels"] = [c for c in doc["channels"] if c["name"] != name]
+    _write_json(cfg, _file(cfg, "notify.local.json"), doc)
+    _audit(conn, user, "admin_notification_deleted", {"channel": name})
+    return _channel_rows(get_cfg())
+
+
+@router.post("/notifications/{name}/test")
+def test_notification(name: str, body: ConfirmBody, cfg=Depends(get_cfg), conn=Depends(get_conn),
+                      user: str = Depends(current_user)):
+    """저장된 주소로 테스트 이벤트 한 번 전송(진단 데이터 없음). 성공·실패 모두 200 으로 사유를 돌려준다."""
+    _need_confirm(body.confirm)
+    ch = {c["name"]: c for c in notify.load_all_channels(_file(cfg, "notify.json"))}.get(name)
+    if ch is None:
+        raise HTTPException(404, f"채널 '{name}' 이(가) 없음")
+    detail, ok = notify.send_test(ch["url"])
+    _audit(conn, user, "admin_notification_tested", {"channel": name, "ok": ok, "detail": detail})
+    return {"ok": ok, "detail": detail}
+
+
+# ── 스킬 ──
+class SkillBody(BaseModel):
+    description: str = ""
+    instructions: str
+    roles: list[str] = []
+    enabled: bool = True
+    confirm: bool = False
+
+
+def _skill_rows(conn) -> list[dict]:
+    return conn.execute("SELECT name, description, instructions, roles, enabled, updated_by, updated_at "
+                        "FROM agent_skills ORDER BY name").fetchall()
+
+
+@router.get("/skills")
+def get_skills(conn=Depends(get_conn), user: str = Depends(current_user)):
+    return {"roles": list(explore.AGENT_ROLES), "skills": _skill_rows(conn)}
+
+
+@router.put("/skills/{name}")
+def put_skill(name: str, body: SkillBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    if schemas.validate(name, schemas._ID):
+        raise HTTPException(422, "스킬 이름은 영문·숫자·._:- 만 쓸 수 있습니다(최대 80자)")
+    text = body.instructions.strip()
+    if not (1 <= len(text) <= 4000):
+        raise HTTPException(422, "지침은 1자 이상 4,000자 이하여야 합니다")
+    bad = sorted(set(body.roles) - set(explore.AGENT_ROLES))
+    if bad:
+        raise HTTPException(422, f"알 수 없는 역할: {bad} (가능: {list(explore.AGENT_ROLES)})")
+    before = conn.execute("SELECT instructions, roles, enabled FROM agent_skills WHERE name=%s", (name,)).fetchone()
+    conn.execute(
+        "INSERT INTO agent_skills (name, description, instructions, roles, enabled, updated_by) "
+        "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, "
+        "instructions=EXCLUDED.instructions, roles=EXCLUDED.roles, enabled=EXCLUDED.enabled, "
+        "updated_by=EXCLUDED.updated_by, updated_at=now()",
+        (name, body.description.strip()[:300], text, sorted(set(body.roles)), body.enabled, f"web:{user}"))
+    _audit(conn, user, "admin_skill_changed", {"skill": name, "before": dict(before) if before else None,
+                                                "after": {"instructions": text, "roles": sorted(set(body.roles)),
+                                                          "enabled": body.enabled}})
+    return get_skills(conn, user)
+
+
+@router.post("/skills/{name}/delete")
+def delete_skill(name: str, body: ConfirmBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    before = conn.execute("DELETE FROM agent_skills WHERE name=%s RETURNING instructions, roles, enabled",
+                          (name,)).fetchone()
+    if before is None:
+        raise HTTPException(404, f"스킬 '{name}' 이(가) 없음")
+    _audit(conn, user, "admin_skill_deleted", {"skill": name, "before": dict(before)})
+    return get_skills(conn, user)

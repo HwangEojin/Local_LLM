@@ -270,6 +270,16 @@ RULE_OVERLAYS = {
     "properties": {"overlays": {"type": "array", "items": RULE_OVERLAY}},
 }
 
+# 도구 오버라이드(웹에서 바꾸는 이 PC 전용 설정, config/tools.local.json): 도구를 끄거나 위험도를 바꾼다.
+# 도구를 새로 등록하거나 실행 파일·인자 스키마를 바꾸는 필드는 없다.
+TOOL_OVERRIDES = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "disabled": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "risk": {"type": "object", "additionalProperties": {"enum": ["read", "write", "dangerous"]}},
+    },
+}
+
 # 알림 채널(운영 편의 기능 — CLAUDE.md 범위 밖). 운영자가 직접 적는 값이며 LLM 이나
 # 대상 응답으로 바꿀 수 없다(config/mcp_servers.json 과 같은 신뢰 수준).
 NOTIFY_CHANNEL = {

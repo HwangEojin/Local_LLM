@@ -20,12 +20,28 @@ from . import db
 _TIMEOUT_S = 5
 
 
+def _read(path: Path) -> list[dict]:
+    return load_json(path, schemas.NOTIFY_CHANNELS)["channels"] if Path(path).exists() else []
+
+
+def load_all_channels(path: Path) -> list[dict]:
+    """공유 파일(notify.json)과 이 PC 전용 파일(notify.local.json, 웹이 씀, Git 제외)의 채널을 합친다.
+    같은 이름이면 이 PC 전용 항목이 이긴다. 각 항목에 source("shared"|"local")를 붙인다. 꺼진 채널도 포함."""
+    path = Path(path)  # 공유 파일 경로. 이 PC 전용 파일은 같은 폴더의 notify.local.json
+    merged = {c["name"]: {**c, "source": "shared"} for c in _read(path)}
+    merged.update({c["name"]: {**c, "source": "local"} for c in _read(path.with_name("notify.local.json"))})
+    return list(merged.values())
+
+
 def load_channels(path: Path) -> list[dict]:
-    """path 가 없으면 빈 목록(알림 없음)."""
-    if not Path(path).exists():
-        return []
-    data = load_json(path, schemas.NOTIFY_CHANNELS)
-    return [c for c in data["channels"] if c.get("enabled", True)]
+    """켜진 채널만. 파일이 없으면 빈 목록(알림 없음)."""
+    return [c for c in load_all_channels(path) if c.get("enabled", True)]
+
+
+def send_test(url: str) -> tuple[str, bool]:
+    """채널 연결 테스트용 한 번 전송. 판정·증적 같은 진단 데이터는 담지 않는다."""
+    return _post(url, json.dumps({"event": "test", "message": "진단 워크벤치 알림 연결 테스트"},
+                                 ensure_ascii=False).encode("utf-8"))
 
 
 def notify_finding_confirmed(conn, cfg, run_id, finding_id, *, title, severity, actor) -> None:
