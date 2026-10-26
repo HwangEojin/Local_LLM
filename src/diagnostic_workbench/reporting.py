@@ -261,7 +261,7 @@ def _findings_for_pentest_report(conn, evidence_dir: Path, run: dict, meta: dict
         "WHERE f.run_id=%s AND f.status <> 'REJECTED' ORDER BY f.created_at", (run["id"],)).fetchall()
     status_counts: dict[str, int] = {}
     out = []
-    polish_system = prompts.get(conn, "reporter_system", _POLISH_SYSTEM)
+    polish_system = prompts.get(conn, "reporter_system", _POLISH_SYSTEM, "reporter")
     for r in rows:
         status_counts[r["status"]] = status_counts.get(r["status"], 0) + 1
         tinfo = targets.get(r["target_id"]) or {"name": r["target_id"], "url": "", "kind": "WEB"}

@@ -123,6 +123,129 @@ class SettingsMenusTest(unittest.TestCase):
         self.assertEqual(after["min_call_interval_ms"], 7)
         self.assertEqual(self.client.get("/api/admin/approvals").json()["ttl_h"], 48)
 
+    # ── 도구 편집 ──
+    def _tool(self, name="fs.read_file"):
+        return next(t for t in self.client.get("/api/admin/tools").json()["tools"] if t["name"] == name)
+
+    def _tput(self, body, name="fs.read_file"):
+        return self.client.put(f"/api/admin/tools/{name}", json=body)
+
+    def test_tool_disable_removes_it_from_the_registry_everywhere(self):
+        from audit.models import ConfigError
+        from diagnostic_workbench import runs as wb_runs
+        self.assertEqual(self._tput({"disabled": True}).status_code, 400)  # confirm 없음
+        self.assertEqual(self._tput({"disabled": True, "confirm": True}, "no.such.tool").status_code, 404)
+        self.assertEqual(self._tput({"disabled": True, "confirm": True}).status_code, 200)
+        self.assertTrue(self._tool()["disabled"])
+        self.assertNotIn("fs.read_file", wb_runs.registry(self.deps.get_cfg()))  # 정책·실행 생성이 보는 레지스트리
+        with self.assertRaises(ConfigError):  # 꺼진 도구는 '등록되지 않은 도구'
+            wb_runs.create_run(self.conn, self.deps.get_cfg(), ["baseline-demo"], "pytest", use_llm=True,
+                               allowed_tools=["fs.read_file"])
+        self.conn.rollback()
+        self.assertEqual(self._tput({"disabled": False, "confirm": True}).status_code, 200)
+        self.assertIn("fs.read_file", wb_runs.registry(self.deps.get_cfg()))
+
+    def test_tool_risk_raise_is_free_but_lowering_needs_extra_confirm(self):
+        from diagnostic_workbench import runs as wb_runs
+        base = self._tool()["base_risk"]
+        self.assertEqual(base, "read")
+        self.assertEqual(self._tput({"risk": "write", "confirm": True}).status_code, 200)
+        self.assertEqual(wb_runs.registry(self.deps.get_cfg())["fs.read_file"].risk, "write")
+        self.assertEqual(self._tput({"risk": "read", "confirm": True}).status_code, 400)  # 낮추기는 추가 확인 필요
+        self.assertEqual(self._tput({"risk": "read", "confirm": True, "confirm_lower_risk": True}).status_code, 200)
+        self.assertEqual(wb_runs.registry(self.deps.get_cfg())["fs.read_file"].risk, "read")
+        self.assertEqual(self._tput({"risk": "root", "confirm": True}).status_code, 422)
+
+    # ── 알림 ──
+    def test_notifications_mask_urls_and_require_external_confirm(self):
+        secret = "T0SECRETPATH/B0TOKEN"
+        url = f"https://hooks.example.test/services/{secret}"
+        put = lambda name, body: self.client.put(f"/api/admin/notifications/{name}", json=body)  # noqa: E731
+        self.assertEqual(put("ops", {"url": url, "confirm": True}).status_code, 400)  # 외부 주소는 별도 확인
+        self.assertEqual(put("ops", {"url": "ftp://x/y", "confirm": True, "confirm_external": True}).status_code, 422)
+        self.assertEqual(put("ops", {"confirm": True}).status_code, 422)  # 새 채널은 url 필요
+        r = put("ops", {"url": url, "confirm": True, "confirm_external": True})
+        self.assertEqual(r.status_code, 200)
+        listing = self.client.get("/api/admin/notifications")
+        self.assertNotIn(secret, listing.text)  # 주소의 비밀 부분은 응답에 나오지 않는다
+        row = next(c for c in listing.json() if c["name"] == "ops")
+        self.assertTrue(row["external"])
+        self.assertEqual(row["source"], "local")
+        saved = (self.home / "config" / "notify.local.json").read_text(encoding="utf-8")
+        self.assertIn(secret, saved)  # 파일(Git 제외)에는 실제 주소가 저장된다
+        events = self.conn.execute("SELECT details FROM audit_events WHERE event='admin_notification_changed' "
+                                   "ORDER BY id DESC LIMIT 1").fetchone()["details"]
+        self.assertNotIn(secret, json.dumps(events))  # 감사 로그에도 마스킹된 값만
+        self.assertEqual(self.client.post("/api/admin/notifications/ops/delete", json={}).status_code, 400)
+        self.assertEqual(self.client.post("/api/admin/notifications/ops/delete", json={"confirm": True}).status_code, 200)
+        self.assertNotIn("ops", [c["name"] for c in self.client.get("/api/admin/notifications").json()])
+
+    def test_notification_test_send_and_shared_channel_rules(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        got = []
+
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):
+                got.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        local_url = f"http://127.0.0.1:{srv.server_port}/hook"
+        # 루프백 주소는 외부 확인 없이 등록할 수 있다
+        self.assertEqual(self.client.put("/api/admin/notifications/local-hook",
+                                         json={"url": local_url, "confirm": True}).status_code, 200)
+        self.assertEqual(self.client.post("/api/admin/notifications/local-hook/test", json={}).status_code, 400)
+        out = self.client.post("/api/admin/notifications/local-hook/test", json={"confirm": True}).json()
+        self.assertTrue(out["ok"])
+        self.assertEqual(got[0]["event"], "test")
+        self.assertNotIn("finding_id", got[0])  # 테스트 전송에 진단 데이터는 없다
+        self.assertEqual(self.client.post("/api/admin/notifications/nope/test", json={"confirm": True}).status_code, 404)
+        # 공유 파일의 채널: 주소는 못 바꾸고, 끄기만 이 PC 전용 파일에 덮어쓴다
+        (self.home / "config" / "notify.json").write_text(json.dumps({"channels": [
+            {"name": "shared-hook", "kind": "webhook", "url": local_url, "enabled": True}]}), encoding="utf-8")
+        self.assertEqual(self.client.put("/api/admin/notifications/shared-hook",
+                                         json={"url": local_url + "x", "confirm": True}).status_code, 400)
+        r = self.client.put("/api/admin/notifications/shared-hook", json={"enabled": False, "confirm": True})
+        self.assertFalse(next(c for c in r.json() if c["name"] == "shared-hook")["enabled"])
+        from diagnostic_workbench import notify
+        self.assertNotIn("shared-hook", [c["name"] for c in notify.load_channels(self.home / "config" / "notify.json")])
+        self.assertEqual(self.client.post("/api/admin/notifications/shared-hook/delete",
+                                          json={"confirm": True}).status_code, 200)  # 덮어쓴 항목만 지워 공유 채널이 되살아남
+        self.assertTrue(next(c for c in self.client.get("/api/admin/notifications").json()
+                             if c["name"] == "shared-hook")["enabled"])
+
+    # ── 스킬 ──
+    def test_skills_attach_by_role_and_never_when_disabled(self):
+        name = "pytest-skill"
+        self.addCleanup(lambda: [self.conn.execute("DELETE FROM agent_skills WHERE name=%s", (name,)), self.conn.commit()])
+        body = {"description": "테스트", "instructions": "SKILL-MARKER 항상 증거 id 를 인용할 것", "roles": ["worker"],
+                "enabled": True, "confirm": True}
+        put = lambda b: self.client.put(f"/api/admin/skills/{name}", json=b)  # noqa: E731
+        self.assertEqual(put({**body, "confirm": False}).status_code, 400)
+        self.assertEqual(put({**body, "roles": ["nobody"]}).status_code, 422)
+        self.assertEqual(put({**body, "instructions": "  "}).status_code, 422)
+        self.assertEqual(put(body).status_code, 200)
+        self.assertEqual(self.client.put("/api/admin/skills/bad name", json=body).status_code, 422)
+        base = "BASE-PROMPT"
+        self.assertIn("SKILL-MARKER", wb_prompts.get(self.conn, "worker_agent_system", base, "worker"))
+        self.assertNotIn("SKILL-MARKER", wb_prompts.get(self.conn, "worker_agent_system", base, "planner"))  # 다른 역할
+        self.assertEqual(wb_prompts.get(self.conn, "worker_agent_system", base), base)  # role 없으면 그대로
+        self.assertEqual(wb_prompts.skills_for(self.conn, "analyst"), "")  # 붙지 않은 역할은 빈 문자열(analyst 주입 경로)
+        self.assertEqual(put({**body, "roles": ["analyst"]}).status_code, 200)
+        self.assertIn("SKILL-MARKER", wb_prompts.skills_for(self.conn, "analyst"))
+        self.assertEqual(put(body).status_code, 200)
+        self.assertEqual(put({**body, "enabled": False}).status_code, 200)
+        self.assertNotIn("SKILL-MARKER", wb_prompts.get(self.conn, "worker_agent_system", base, "worker"))
+        self.assertEqual(self.client.post(f"/api/admin/skills/{name}/delete", json={"confirm": True}).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/admin/skills/{name}/delete", json={"confirm": True}).status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

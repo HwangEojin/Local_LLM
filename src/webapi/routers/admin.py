@@ -372,18 +372,6 @@ def reset_prompt(name: str, body: ConfirmBody, conn=Depends(get_conn), user: str
     return {"name": name, "overridden": False}
 
 
-# ── 도구 카탈로그(조회 전용) ──
-@router.get("/tools")
-def get_tools(cfg=Depends(get_cfg), user: str = Depends(current_user)):
-    """등록된 도구와 위험도·인자 스키마, 현재 scope 가 허용하는 위험도. 도구 등록·삭제는 웹에서 하지 않는다
-    (MCP 서버 활성화는 MCP 메뉴, 실행 파일 경로는 workbench.json)."""
-    allowed = set(audit_config.load_scope(cfg.home).get("allowed_risks", []))
-    return {"allowed_risks": sorted(allowed),
-            "tools": [{"name": n, "risk": t.risk, "args_schema": t.args_schema, "scope_args": t.scope_args,
-                       "source": "mcp" if n.startswith("mcp:") else "builtin", "allowed_by_scope": t.risk in allowed}
-                      for n, t in sorted(wb_runs.registry(cfg).items())]}
-
-
 # ── 승인(전체 진단의 승인 대기·최근 결정) ──
 @router.get("/approvals")
 def get_approvals(cfg=Depends(get_cfg), conn=Depends(get_conn), user: str = Depends(current_user)):

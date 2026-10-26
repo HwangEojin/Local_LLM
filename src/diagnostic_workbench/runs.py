@@ -1,6 +1,7 @@
 """실행 생성: 체크리스트 버전을 DB 로 가져오고, 범위 내 대상을 자산으로 등록하고, 실행별 체크리스트 행을 만든다."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from psycopg.types.json import Jsonb
 
 from audit import config as audit_config
 from audit import overlays as overlays_mod
+from audit import schemas
 from audit.adapters import build_registry
 from audit.checklist_engine import Checklists, platform_match
 from audit.local_model import LLMError
@@ -48,7 +50,7 @@ def _decompose_goal(conn, cfg, run: dict, goal_text: str, targets: list[tuple[st
     text = ("GOAL: " + goal_text + "\nTARGETS: " +
             json.dumps({tid: f"{t.type}:{t.value}" for tid, t in targets}, ensure_ascii=False))
     try:
-        out = llm.structured_chat([{"role": "system", "content": prompts.get(conn, "goals_system", _GOAL_DECOMPOSE_SYSTEM)},
+        out = llm.structured_chat([{"role": "system", "content": prompts.get(conn, "goals_system", _GOAL_DECOMPOSE_SYSTEM, "goals")},
                                    {"role": "user", "content": text}], _GOAL_SCHEMA, "decompose_goal")
     except LLMError:
         return fallback
@@ -57,13 +59,35 @@ def _decompose_goal(conn, cfg, run: dict, goal_text: str, targets: list[tuple[st
     return subgoals or fallback
 
 
-def registry(cfg) -> dict:
-    """실행 가능한 도구 전체: 기존 audit 도구(fs, MCP) + 워크벤치 로컬 도구.
+RISK_ORDER = {"read": 0, "write": 1, "dangerous": 2}
+
+
+def tool_overrides(cfg) -> dict:
+    """이 PC 전용 도구 오버라이드(config/tools.local.json, 웹 '도구' 화면이 씀). 없으면 변경 없음.
+    파일이 깨졌으면 조용히 무시하지 않고 ConfigError — 끈 도구가 몰래 다시 켜지면 안 된다."""
+    p = cfg.home / "config" / "tools.local.json"
+    doc = audit_config.load_json(p, schemas.TOOL_OVERRIDES) if p.exists() else {}
+    return {"disabled": list(doc.get("disabled", [])), "risk": dict(doc.get("risk", {}))}
+
+
+def registry(cfg, apply_overrides: bool = True) -> dict:
+    """실행 가능한 도구 전체: 기존 audit 도구(fs, MCP) + 워크벤치 로컬 도구, 그 위에 웹에서 건 오버라이드
+    (도구 끄기·위험도 변경)를 적용한다. 모든 실행 경로(정책 판정·실행 생성·환경 조회)가 이 함수를 거치므로
+    꺼진 도구는 어디서도 '등록되지 않은 도구'로 거부된다.
 
     stop_file 을 넘겨 MCP 호출도 Kill Switch 로 진행 중에 취소할 수 있게 한다(CLAUDE.md §8 Kill Switch 동작).
+    apply_overrides=False 는 웹 '도구' 화면이 원래 상태(기본 위험도, 꺼진 도구 포함)를 보여 줄 때만 쓴다.
     """
-    return {**build_registry(cfg.settings, audit_config.load_mcp_servers(cfg.home), stop_file=cfg.stop_file),
-            **tools.make_tools(cfg)}
+    reg = {**build_registry(cfg.settings, audit_config.load_mcp_servers(cfg.home), stop_file=cfg.stop_file),
+           **tools.make_tools(cfg)}
+    if apply_overrides:
+        ov = tool_overrides(cfg)
+        for name in ov["disabled"]:
+            reg.pop(name, None)
+        for name, risk in ov["risk"].items():
+            if name in reg:
+                reg[name] = dataclasses.replace(reg[name], risk=risk)
+    return reg
 
 
 def automation_level(item: dict) -> str:

@@ -323,7 +323,9 @@ export type AgentRoleInfo = { role: string; prompts: AgentPrompt[] };
 
 export type ToolInfo = {
   name: string;
-  risk: string;
+  risk: string; // 실제 적용 위험도(오버라이드 반영)
+  base_risk: string; // 원래 등록된 위험도
+  disabled: boolean;
   args_schema: Record<string, unknown>;
   scope_args: Record<string, string>;
   source: "mcp" | "builtin";
@@ -355,3 +357,23 @@ export type ApprovalsOverview = {
     asset_value: string;
   }[];
 };
+
+export type NotificationChannel = {
+  name: string;
+  kind: string;
+  enabled: boolean;
+  source: "shared" | "local";
+  url_masked: string;
+  external: boolean;
+};
+
+export type Skill = {
+  name: string;
+  description: string;
+  instructions: string;
+  roles: string[];
+  enabled: boolean;
+  updated_by: string;
+  updated_at: string;
+};
+export type SkillsResponse = { roles: string[]; skills: Skill[] };
