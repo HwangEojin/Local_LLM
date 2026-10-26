@@ -7,7 +7,7 @@ import { Play, Settings } from "lucide-react";
 
 import { AuthGate } from "@/components/AuthGate";
 import { Header } from "@/components/Header";
-import { Banner, btnPrimary, Card, inputCls, SkeletonRows } from "@/components/ui";
+import { Banner, btnPrimary, btnSecondary, Card, inputCls, SkeletonRows } from "@/components/ui";
 import { api, ApiError, Environment, RunDetail, WorkbenchSettings } from "@/lib/api";
 import { AGENT_ROLE_LABEL, AUTONOMY_LABEL, DOCTOR_LABEL } from "@/lib/labels";
 
@@ -46,6 +46,12 @@ function DoctorPanel({ doctor }: { doctor: Environment["doctor"] }) {
   );
 }
 
+function TestChip({ t }: { t?: { busy: boolean; ok?: boolean; text?: string } }) {
+  if (!t) return null;
+  if (t.busy) return <span className="text-xs text-muted">테스트 중…</span>;
+  return <span className={`text-xs ${t.ok ? "text-ok" : "text-danger"}`}>{t.text}</span>;
+}
+
 const labelCls = "mb-1.5 block text-sm font-medium text-muted";
 const toNum = (s: string) => (s.trim() === "" ? undefined : Number(s));
 
@@ -65,6 +71,9 @@ function NewRunForm() {
   const [useLlm, setUseLlm] = useState(true);
   const [autonomy, setAutonomy] = useState("approval");
   const [llmProvider, setLlmProvider] = useState("ollama");
+  // 연결 테스트 결과. 키는 역할 이름 또는 "default"(실행 기본 모델)
+  const [tests, setTests] = useState<Record<string, { busy: boolean; ok?: boolean; text?: string }>>({});
+  const [refreshing, setRefreshing] = useState(false);
   const [agentModels, setAgentModels] = useState<Record<string, string>>({});
   const [goal, setGoal] = useState("");
   const [tools, setTools] = useState<string[]>([]);
@@ -95,6 +104,32 @@ function NewRunForm() {
       })
       .catch((e) => setError(`복제할 진단을 불러오지 못했습니다: ${e.message}`));
   }, [from]);
+
+  async function testModel(key: string, spec: string | null) {
+    setTests((t) => ({ ...t, [key]: { busy: true } }));
+    try {
+      const r = await api.post<{ ok: boolean; model?: string; version?: string; error?: string }>(
+        "/api/environment/llm-test",
+        { spec, provider: llmProvider },
+      );
+      setTests((t) => ({
+        ...t,
+        [key]: { busy: false, ok: r.ok, text: r.ok ? `연결됨 · ${r.model}${r.version ? ` (Ollama v${r.version})` : ""}` : r.error },
+      }));
+    } catch (e) {
+      setTests((t) => ({ ...t, [key]: { busy: false, ok: false, text: e instanceof Error ? e.message : "테스트 실패" } }));
+    }
+  }
+
+  async function refreshModels() {
+    setRefreshing(true);
+    try {
+      const r = await api.get<{ models: string[] | null }>("/api/environment/ollama-models");
+      setEnv((e) => (e ? { ...e, ollama_models: r.models } : e));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   function toggle(list: string[], set: (v: string[]) => void, id: string) {
     set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
@@ -253,6 +288,12 @@ function NewRunForm() {
                       </label>
                     ))}
                   </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <button type="button" className={btnSecondary} disabled={tests.default?.busy} onClick={() => testModel("default", null)}>
+                      기본 모델 연결 테스트
+                    </button>
+                    <TestChip t={tests.default} />
+                  </div>
                 </fieldset>
               )}
 
@@ -262,31 +303,49 @@ function NewRunForm() {
                   <p className="mb-2 text-xs text-faint">
                     비워 두면 위에서 고른 실행 기본 모델을 씁니다. 목록은 이 PC의 Ollama에 설치된 모델과 등록된 프로파일입니다.
                     {env.ollama_models === null && <span className="text-warn"> Ollama에 연결할 수 없어 설치된 모델을 확인하지 못했습니다.</span>}
+                    <button type="button" className="ml-2 text-accent hover:underline" disabled={refreshing} onClick={refreshModels}>
+                      {refreshing ? "불러오는 중…" : "설치된 모델 새로고침"}
+                    </button>
                   </p>
                   <div className="space-y-1.5 text-sm">
                     {(env.agent_roles ?? []).map((role) => (
-                      <label key={role} className="flex items-center justify-between gap-3">
-                        <span>
-                          {AGENT_ROLE_LABEL[role] ?? role}
-                          <span className="ml-1 font-mono text-xs text-faint">{role}</span>
-                        </span>
-                        <select
-                          className={`${inputCls} max-w-xs`}
-                          value={agentModels[role] ?? ""}
-                          onChange={(e) => {
-                            const { [role]: _drop, ...rest } = agentModels;
-                            setAgentModels(e.target.value ? { ...rest, [role]: e.target.value } : rest);
-                          }}
-                        >
-                          <option value="">실행 기본 모델</option>
-                          {(env.ollama_models ?? []).map((m) => (
-                            <option key={m} value={`ollama:${m}`}>Ollama · {m}</option>
-                          ))}
-                          {(env.llm_profiles ?? []).map((p) => (
-                            <option key={p.name} value={p.name}>프로파일 · {p.name}</option>
-                          ))}
-                        </select>
-                      </label>
+                      <div key={role}>
+                        <div className="flex items-center justify-between gap-3">
+                          <label htmlFor={`am-${role}`}>
+                            {AGENT_ROLE_LABEL[role] ?? role}
+                            <span className="ml-1 font-mono text-xs text-faint">{role}</span>
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <select
+                              id={`am-${role}`}
+                              className={`${inputCls} min-w-0 max-w-[14rem]`}
+                              value={agentModels[role] ?? ""}
+                              onChange={(e) => {
+                                const { [role]: _drop, ...rest } = agentModels;
+                                setAgentModels(e.target.value ? { ...rest, [role]: e.target.value } : rest);
+                                setTests((t) => ({ ...t, [role]: { busy: false } }));
+                              }}
+                            >
+                              <option value="">실행 기본 모델</option>
+                              {(env.ollama_models ?? []).map((m) => (
+                                <option key={m} value={`ollama:${m}`}>Ollama · {m}</option>
+                              ))}
+                              {(env.llm_profiles ?? []).map((p) => (
+                                <option key={p.name} value={p.name}>프로파일 · {p.name}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className={`${btnSecondary} shrink-0 whitespace-nowrap`}
+                              disabled={tests[role]?.busy}
+                              onClick={() => testModel(role, agentModels[role] ?? null)}
+                            >
+                              연결 테스트
+                            </button>
+                          </div>
+                        </div>
+                        <div className="mt-0.5 text-right"><TestChip t={tests[role]} /></div>
+                      </div>
                     ))}
                   </div>
                 </fieldset>
