@@ -5,7 +5,8 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from audit import config as audit_config
 from audit.checklist_engine import Checklists
@@ -59,3 +60,25 @@ def get_environment(cfg=Depends(get_cfg), user: str = Depends(current_user)):
         "agent_roles": list(explore.AGENT_ROLES),
         "doctor": _doctor_status(cfg),
     }
+
+
+class LlmTestBody(BaseModel):
+    spec: str | None = None  # 'ollama:<모델>' 또는 프로파일 이름. 비우면 provider 의 기본 모델
+    provider: str = "ollama"
+
+
+@router.get("/ollama-models")
+def get_ollama_models(cfg=Depends(get_cfg), user: str = Depends(current_user)):
+    """설치된 Ollama 모델 목록 새로고침. 연결할 수 없으면 models=null."""
+    return {"models": explore.installed_ollama_models(cfg)}
+
+
+@router.post("/llm-test")
+def test_llm(body: LlmTestBody, cfg=Depends(get_cfg), user: str = Depends(current_user)):
+    """모델 연결 테스트. 성공/실패 모두 200 으로 ok 와 사유를 돌려준다(화면에 그대로 보여 주려고)."""
+    if body.provider not in wb_runs.LLM_PROVIDERS:
+        raise HTTPException(422, f"provider 는 {list(wb_runs.LLM_PROVIDERS)} 중 하나여야 함")
+    try:
+        return {"ok": True, **explore.check_model(cfg, body.spec, body.provider)}
+    except Exception as e:  # LLMError/ConfigError 외 예기치 못한 오류도 화면에 사유로 보여 줌
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}

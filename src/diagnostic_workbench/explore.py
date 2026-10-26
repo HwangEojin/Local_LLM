@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 from psycopg.types.json import Jsonb
 
@@ -134,6 +135,14 @@ def installed_ollama_models(cfg) -> list[str] | None:
         return None
 
 
+def check_model(cfg, spec: str | None, provider: str = "ollama") -> dict:
+    """모델 하나의 연결 테스트(실제 check_ready). spec 은 'ollama:<모델>' 또는 프로파일 이름, 비우면 provider 의
+    기본 모델. 실패하면 LLMError. 웹 UI 의 '연결 테스트' 버튼이 쓴다 — 실행을 만들거나 DB 를 건드리지 않는다."""
+    run = {"id": None, "llm_provider": provider, "llm_agent_models": {"test": spec} if spec else {}}
+    llm = make_llm(SimpleNamespace(run=run, cfg=cfg, conn=None), "test")
+    return {"model": llm.model, **{k: v for k, v in (llm.ready_info or {}).items() if k != "model"}}
+
+
 def llm_for(ctx, role: str):
     """역할(role)별 모델 클라이언트. runs.llm_agent_models 에 그 역할이 지정돼 있으면 그 모델, 없으면 실행의
     기본 모델(ctx.llm)을 쓴다. ctx.llm 이 없으면(--llm 아님) 역할 지정이 있어도 None — LLM 사용 여부는
@@ -183,7 +192,7 @@ def make_llm(ctx, role: str | None = None):
         cfg = {**ctx.cfg.settings.ollama, **(profile or {})}
         llm = OllamaClient(cfg, ctx.cfg.settings.external_api_enabled,
                            storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])
-    llm.check_ready()
+    llm.ready_info = llm.check_ready()  # 연결 테스트(check_model)가 결과를 그대로 보여 줄 수 있게 남김
     return llm
 
 

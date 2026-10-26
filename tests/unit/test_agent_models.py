@@ -9,7 +9,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from audit.local_model import OllamaClient
+from audit.local_model import LLMError, OllamaClient
 from audit.models import ConfigError
 from diagnostic_workbench import config, db, explore, runs
 
@@ -70,6 +70,16 @@ class AgentModelsTest(unittest.TestCase):
     def test_no_llm_means_none_even_with_override(self):
         ctx = SimpleNamespace(llm=None, run={"llm_agent_models": {"worker": "ollama:small"}})
         self.assertIsNone(explore.llm_for(ctx, "worker"))
+
+    def test_check_model_reports_ok_and_failure(self):
+        info = {"version": "9.9.9", "model": "small", "capabilities": ["completion"]}
+        with mock.patch.object(OllamaClient, "check_ready", return_value=info):
+            out = explore.check_model(self.cfg, "ollama:small")
+        self.assertEqual(out["model"], "small")
+        self.assertEqual(out["version"], "9.9.9")
+        with mock.patch.object(OllamaClient, "check_ready", side_effect=LLMError("미설치")):
+            with self.assertRaises(LLMError):
+                explore.check_model(self.cfg, "ollama:small")
 
 
 if __name__ == "__main__":
