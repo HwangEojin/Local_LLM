@@ -123,8 +123,38 @@ class _ModelLog:
         self.conn.commit()
 
 
-def make_llm(ctx):
+AGENT_ROLES = ("planner", "worker", "analyst", "goals", "reporter")
+
+
+def installed_ollama_models(cfg) -> list[str] | None:
+    """로컬 Ollama 에 설치된 모델 이름들. Ollama 에 연결할 수 없으면 None(빈 목록과 구분)."""
+    try:
+        return OllamaClient(cfg.settings.ollama, cfg.settings.external_api_enabled).list_models()
+    except LLMError:
+        return None
+
+
+def llm_for(ctx, role: str):
+    """역할(role)별 모델 클라이언트. runs.llm_agent_models 에 그 역할이 지정돼 있으면 그 모델, 없으면 실행의
+    기본 모델(ctx.llm)을 쓴다. ctx.llm 이 없으면(--llm 아님) 역할 지정이 있어도 None — LLM 사용 여부는
+    역할이 아니라 실행 단위로 정해진다. 같은 지정은 클라이언트 하나를 공유한다.
+    생성에 실패(LLMError)하면 기본 모델로 조용히 바꾸지 않고 그대로 올린다(운영자가 고른 모델이 아니므로)."""
+    if not getattr(ctx, "llm", None):
+        return None
+    spec = (ctx.run.get("llm_agent_models") or {}).get(role)
+    if not spec:
+        return ctx.llm
+    cache = ctx.__dict__.setdefault("_role_llms", {})
+    if spec not in cache:
+        cache[spec] = make_llm(ctx, role)
+    return cache[spec]
+
+
+def make_llm(ctx, role: str | None = None):
     """설정된 모델 클라이언트를 준비한다. 사용할 수 없으면 LLMError (조용히 규칙 전용으로 바꾸지 않는다).
+
+    role 이 주어지고 runs.llm_agent_models 에 지정이 있으면 그 역할 전용 모델을 만든다: 값이 'ollama:<모델>'
+    이면 settings.json 의 ollama 블록 위에 model 만 덮어쓰고, 그 외에는 프로파일 이름으로 본다.
 
     실행 생성 시 고른 runs.llm_provider/llm_profile_name(scope/autonomy 와 같은 방식으로 고정, runs.py
     참고)을 그대로 따른다. llm_profile_name 이 있으면 config/llm_profiles.json 에서 그 이름의 프로파일을
@@ -136,8 +166,9 @@ def make_llm(ctx):
     대신 쓰는 경로다. 인터페이스(.model/check_ready()/structured_chat())만 같으면 되므로 나머지 explore.py
     로직은 어떤 클라이언트인지 몰라도 된다.
     """
-    profile_name = ctx.run.get("llm_profile_name")
-    profile = None
+    spec = (ctx.run.get("llm_agent_models") or {}).get(role) if role else None
+    profile_name = ctx.run.get("llm_profile_name") if not spec else (None if spec.startswith("ollama:") else spec)
+    profile = {"kind": "ollama", "model": spec[len("ollama:"):]} if spec and spec.startswith("ollama:") else None
     if profile_name:
         profiles = audit_config.load_llm_profiles(ctx.cfg.home)
         profile = profiles.get(profile_name)
@@ -233,7 +264,7 @@ def _bootstrap_probes(ctx, base_text: str, assets: dict) -> tuple[set[str], str]
             mask_secrets(json.dumps(log_entries, ensure_ascii=False, default=str))
         try:
             system = prompts.get(conn, "explore_probe_system", PROBE_SYSTEM)
-            out = ctx.llm.structured_chat(
+            out = llm_for(ctx, "planner").structured_chat(
                 [{"role": "system", "content": system}, {"role": "user", "content": text}],
                 _PROBE_SCHEMA, "bootstrap_probe")
         except LLMError as e:
@@ -258,7 +289,7 @@ def _bootstrap_probes(ctx, base_text: str, assets: dict) -> tuple[set[str], str]
                             "rationale": out["rationale"]})
     if log_entries:
         db.audit(conn, run_id, "bootstrap_probes", {"count": len(log_entries), "log": log_entries,
-                                                     "model": ctx.llm.model})
+                                                     "model": llm_for(ctx, "planner").model})
     return gathered, json.dumps(log_entries, ensure_ascii=False, default=str)
 
 
@@ -289,7 +320,7 @@ def propose(ctx) -> int:
                     "빈 배열([])로 제출해도 됩니다.\n" + text)
     try:
         system = prompts.get(conn, "explore_system", SYSTEM)
-        out = ctx.llm.structured_chat([{"role": "system", "content": system}, {"role": "user", "content": text}],
+        out = llm_for(ctx, "planner").structured_chat([{"role": "system", "content": system}, {"role": "user", "content": text}],
                                       PROPOSALS, "explore")
     except LLMError as e:  # 실패를 남기고 결정론적 작업은 계속한다
         db.audit(conn, run_id, "llm_error", {"purpose": "explore", "error": str(e)})
@@ -343,7 +374,7 @@ def propose(ctx) -> int:
             continue
         node = conn.execute(
             "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'intent','llm',%s) RETURNING id",
-            (run_id, db.masked({**p, "model": ctx.llm.model, "prompt_version": PROMPT_VERSION}))).fetchone()["id"]
+            (run_id, db.masked({**p, "model": llm_for(ctx, "planner").model, "prompt_version": PROMPT_VERSION}))).fetchone()["id"]
         conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'spawns')", (goal, node))
         conn.execute("INSERT INTO exploration_anchors (node_id, asset_id) VALUES (%s,%s)", (node, asset_id))
         for eid in sorted(cited):
@@ -367,7 +398,7 @@ def propose(ctx) -> int:
                         (item_id, accepted_item_ids[dep_idx]))
         accepted += 1
     db.audit(conn, run_id, "exploration_proposed", {"proposed": len(out["proposals"]), "accepted": accepted,
-                                                     "rejected": rejected, "model": ctx.llm.model,
+                                                     "rejected": rejected, "model": llm_for(ctx, "planner").model,
                                                      "prompt_version": PROMPT_VERSION})
     for fnd in out.get("findings", []):
         _report_llm_finding(ctx, fnd, assets, known)
@@ -392,7 +423,7 @@ def _ask_question(ctx, goal, q: dict, assets: dict) -> None:
         return
     node = conn.execute(
         "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'question','llm',%s) "
-        "RETURNING id", (run_id, Jsonb({"text": mask_secrets(q["text"]), "model": ctx.llm.model}))).fetchone()["id"]
+        "RETURNING id", (run_id, Jsonb({"text": mask_secrets(q["text"]), "model": llm_for(ctx, "planner").model}))).fetchone()["id"]
     conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'spawns')", (goal, node))
     asset_id = assets.get(q.get("target_id"))
     if asset_id:
@@ -430,9 +461,9 @@ def _report_llm_finding(ctx, fnd: dict, assets: dict, known: set[str]) -> None:
         return
     fid = worker.create_llm_finding(conn, run_id, asset_id, title=fnd["title"], severity=fnd["severity"],
                                     rationale=mask_secrets(fnd["rationale"]), remediation=fnd["remediation"],
-                                    evidence_ids=sorted(cited), model=ctx.llm.model)
+                                    evidence_ids=sorted(cited), model=llm_for(ctx, "planner").model)
     if fid:
         db.audit(conn, run_id, "llm_finding_confirmed", {"finding_id": str(fid), "title": fnd["title"],
-                                                          "model": ctx.llm.model})
+                                                          "model": llm_for(ctx, "planner").model})
         notify.notify_finding_confirmed(conn, ctx.cfg, run_id, fid, title=fnd["title"], severity=fnd["severity"],
-                                        actor=f"llm:{ctx.llm.model}")
+                                        actor=f"llm:{llm_for(ctx, 'planner').model}")

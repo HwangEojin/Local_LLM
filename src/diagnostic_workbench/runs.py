@@ -42,7 +42,7 @@ def _decompose_goal(conn, cfg, run: dict, goal_text: str, targets: list[tuple[st
     """
     fallback = [(goal_text, [tid for tid, _ in targets])]
     try:
-        llm = explore.make_llm(SimpleNamespace(run=run, cfg=cfg, conn=conn))
+        llm = explore.make_llm(SimpleNamespace(run=run, cfg=cfg, conn=conn), "goals")
     except LLMError:
         return fallback
     text = ("GOAL: " + goal_text + "\nTARGETS: " +
@@ -169,10 +169,38 @@ def next_run_code(conn, abbr: str) -> str:
     return f"{abbr}-{day}-{(last or 0) + 1:02d}"
 
 
+def _check_agent_models(cfg, agent_models: dict[str, str], use_llm: bool) -> dict[str, str]:
+    """역할별 모델 지정을 검증한다. 값은 llm_profiles.json 의 프로파일 이름 또는 'ollama:<설치된 모델>'.
+    지정은 운영자가 실행 생성 시에만 하고(LLM 이 바꾸지 못함) 이후 고정된다. Ollama 에 연결할 수 없으면
+    설치 여부는 검증하지 못하므로 통과시키고, 실제로 쓸 때 check_ready 가 막는다."""
+    if not agent_models:
+        return {}
+    if not use_llm:
+        raise ConfigError("에이전트별 모델 지정은 --llm 과 함께만 쓸 수 있음")
+    bad = sorted(set(agent_models) - set(explore.AGENT_ROLES))
+    if bad:
+        raise ConfigError(f"알 수 없는 에이전트 역할: {bad} (가능: {list(explore.AGENT_ROLES)})")
+    profiles = audit_config.load_llm_profiles(cfg.home)
+    installed = None
+    for role, spec in agent_models.items():
+        if spec.startswith("ollama:"):
+            installed = explore.installed_ollama_models(cfg) if installed is None else installed
+            name = spec[len("ollama:"):]
+            if not name:
+                raise ConfigError(f"{role}: 'ollama:' 뒤에 모델명이 필요함")
+            if installed and name not in installed and f"{name}:latest" not in installed:
+                raise ConfigError(f"{role}: 모델 '{name}' 이(가) 설치되어 있지 않음 (설치된 모델: {installed})")
+        elif spec not in profiles:
+            raise ConfigError(f"{role}: '{spec}' 은(는) llm_profiles.json 프로파일도 'ollama:<모델>' 도 아님 "
+                              f"(등록된 프로파일: {sorted(profiles) or '없음'})")
+    return dict(agent_models)
+
+
 def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id: str | None = None,
                version: str | None = None, check_ids: list[str] | None = None, use_llm: bool = False,
                budget: dict | None = None, allowed_tools: list[str] | None = None, autonomy: str = "approval",
-               goal_text: str | None = None, llm_provider: str = "ollama", llm_profile: str | None = None) -> dict:
+               goal_text: str | None = None, llm_provider: str = "ollama", llm_profile: str | None = None,
+               agent_models: dict[str, str] | None = None) -> dict:
     """실행 생성. checklist_id 가 없으면 체크리스트 항목 없이 자율 탐색만 하는 실행이 된다 — 체크리스트는
     필수 조건이 아니라 선택적으로 곁들이는 기능이다(CLAUDE.md §3.2/§13).
 
@@ -190,6 +218,7 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
         llm_provider = profile["kind"]
     if llm_provider not in LLM_PROVIDERS:
         raise ConfigError(f"llm_provider 는 {LLM_PROVIDERS} 중 하나여야 함: {llm_provider}")
+    agent_models = _check_agent_models(cfg, agent_models or {}, use_llm)
     if not checklist_id and not use_llm:
         raise ConfigError("체크리스트 없이 실행하려면 --llm 이 필요함(자율 탐색은 LLM 제안에 의존함)")
     scope = audit_config.load_scope(cfg.home)
@@ -223,10 +252,11 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
     run_code = next_run_code(conn, target_abbr(first, code))
     run = conn.execute(
         "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm, allowed_tools, "
-        "autonomy, llm_provider, run_code, llm_profile_name) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "autonomy, llm_provider, run_code, llm_profile_name, llm_agent_models) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (scope["engagement_id"], operator, cv["id"] if cv else None, Jsonb(scope),
          Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy, llm_provider, run_code,
-         llm_profile)).fetchone()
+         llm_profile, Jsonb(agent_models))).fetchone()
     default_goal = f"체크리스트 {checklist_id}@{version} 진단" if checklist_id else f"자율 진단: {', '.join(target_ids)}"
     # 운영자가 목표를 직접 썼고 LLM 을 쓰는 실행이면 대상별 하위 목표로 나눠볼 수 있다(2단계, §13의 default_goal
     # 은 나눌 의미가 없어 대상으로 그대로 둠). 실패/미사용 시 기존처럼 목표 하나로 폴백한다.
@@ -261,7 +291,7 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
                  "targets": [tid for tid, _ in targets], "use_llm": use_llm},
         "scope": scope, "tasks": tasks, "use_llm": use_llm, "operator": operator, "budget": run["budget"],
         "allowed_tools": allowed_tools, "autonomy": autonomy, "llm_provider": llm_provider,
-        "llm_profile": llm_profile})
+        "llm_profile": llm_profile, "agent_models": agent_models})
     db.notify_change(conn, run["id"], "run_created")
     conn.commit()
     return run

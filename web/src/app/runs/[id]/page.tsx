@@ -43,6 +43,7 @@ import {
   formatTime,
   SEVERITY_ORDER,
   VERIFICATION_LABEL,
+  AGENT_ROLE_LABEL,
 } from "@/lib/labels";
 import { usePolling } from "@/lib/usePolling";
 import { useRunResource } from "@/lib/useRunResource";
@@ -253,6 +254,13 @@ function Summary({
           <p className="mt-1 text-sm text-muted">
             운영자 {run.operator as string} · 자율성 {AUTONOMY_LABEL[run.autonomy as string] ?? (run.autonomy as string)} · LLM{" "}
             {run.use_llm ? (run.llm_provider as string) : "사용 안 함"}
+            {Object.keys((run.llm_agent_models ?? {}) as Record<string, string>).length > 0 && (
+              <> · 에이전트별 모델{" "}
+                {Object.entries(run.llm_agent_models as Record<string, string>)
+                  .map(([role, m]) => `${AGENT_ROLE_LABEL[role] ?? role}=${m.replace(/^ollama:/, "")}`)
+                  .join(", ")}
+              </>
+            )}
             {run.stop_reason ? <> · 종료 사유: {run.stop_reason as string}</> : null}
           </p>
         </div>

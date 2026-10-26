@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 
 from audit import config as audit_config
 from audit.checklist_engine import Checklists
-from diagnostic_workbench import runs as wb_runs
+from diagnostic_workbench import explore, runs as wb_runs
 
 from ..deps import current_user, get_cfg
 
@@ -55,5 +55,7 @@ def get_environment(cfg=Depends(get_cfg), user: str = Depends(current_user)):
         "autonomy_levels": list(wb_runs.AUTONOMY_LEVELS),
         "llm_providers": list(wb_runs.LLM_PROVIDERS),
         "llm_profiles": llm_profiles,
+        "ollama_models": explore.installed_ollama_models(cfg),  # None = Ollama 연결 불가
+        "agent_roles": list(explore.AGENT_ROLES),
         "doctor": _doctor_status(cfg),
     }

@@ -275,6 +275,9 @@ export type Environment = {
   tools: { name: string; risk: string }[];
   autonomy_levels: string[];
   llm_providers: string[];
+  llm_profiles: { name: string; kind: string; model: string | null }[];
+  ollama_models: string[] | null; // null = Ollama 에 연결할 수 없음
+  agent_roles: string[];
   doctor: DoctorRow[];
 };
 
