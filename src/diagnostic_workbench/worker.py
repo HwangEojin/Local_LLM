@@ -25,6 +25,19 @@ from audit.verdict import decide, evaluate_rule
 from . import backlog, db, evidence, policy, tools
 
 _LEGACY_TO_DB = {"MANUAL_REVIEW": "NEEDS_REVIEW"}
+_WORKER_PICK_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["tool", "args", "rationale"],
+    "properties": {"tool": {"type": "string", "maxLength": 600}, "args": {"type": "object"},
+                   "rationale": {"type": "string", "maxLength": 600}},
+}
+_WORKER_AGENT_SYSTEM = (
+    "You execute one exploration step for an authorized security audit. The planner already decided WHY this "
+    "step matters (INTENT) and suggested one action (SUGGESTED). You decide HOW: confirm SUGGESTED as-is, or "
+    "pick a different tool+args against the SAME target from TOOLS if you have a clearly better idea (e.g. "
+    "ALREADY_TRIED shows the suggestion was tried before). Only the read-only tools listed in TOOLS are "
+    "available here — write/dangerous tools are never offered, so do not invent one. If unsure, confirm "
+    "SUGGESTED. Reply with JSON only: {tool, args, rationale}. Write rationale in Korean."
+)
 _LINK = re.compile(r"/url: (\S+)")  # Playwright 스냅샷의 링크 표기
 # Burp 이력/Organizer/Scanner 결과 — 전부 adapters.burp.scope_filter(post) 가 같은 모양({"items": [...]})
 # 으로 걸러준 뒤 증적에 저장되므로(범위 밖은 이미 제거됨), 같은 방식으로 자산을 추출한다
@@ -524,9 +537,58 @@ def _resolve_retest(ctx, it, eid, args, out) -> None:
         ctx.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s) ON CONFLICT DO NOTHING", (finding_id, eid))
 
 
+def _worker_decide(ctx, it) -> tuple[str, dict]:
+    """탐색 작업을 실행하기 전에 Worker 가 '어떻게 할지' 다시 판단한다(멀티에이전트 1단계 — artex 의
+    Planner/Worker 역할 분리를 재현). Planner(explore.propose)가 고른 tool/args 는 제안일 뿐이고, Worker 가
+    같은 대상·read 위험도 안에서 다른 선택을 할 수 있다. 무엇을 고르든 run_tool() 하나만 거쳐 정책 검사를
+    다시 받으므로(CLAUDE.md §7/§8) 실행 권한의 경계는 그대로다.
+
+    write/dangerous 제안은 사람의 승인이 이미 그 정확한 tool+args 해시에 묶여 있어(policy.args_hash) 재판단
+    하면 승인이 무의미해지므로 건드리지 않고 Planner 제안을 그대로 쓴다. LLM 이 없거나 실패/엉뚱한 응답이면
+    조용히 Planner 제안으로 폴백한다(CLAUDE.md §7 "LLM 응답 없어도 정책·실행은 정상 유지").
+    """
+    payload = it["payload"]
+    tool, args = payload["tool"], payload["args"]
+    spec = ctx.registry.get(tool)
+    if not ctx.llm or spec is None or spec.risk != "read":
+        return tool, args
+    read_tools = {name: {"args_schema": s.args_schema} for name, s in ctx.registry.items() if s.risk == "read"}
+    tried = ctx.conn.execute(
+        "SELECT payload FROM backlog_items WHERE run_id=%s AND kind='exploration' AND asset_id=%s "
+        "AND status NOT IN ('PENDING','READY','RUNNING')", (ctx.run["id"], it["asset_id"])).fetchall()
+    intent = ctx.conn.execute(
+        "SELECT payload->>'rationale' AS rationale, payload->>'expected_evidence' AS expected_evidence, "
+        "payload->>'retest_of_finding' AS retest_of_finding "
+        "FROM exploration_nodes WHERE id=%s", (it["exploration_node_id"],)).fetchone()
+    if intent and intent["retest_of_finding"]:  # 재검증은 원래 신호와 똑같은 호출을 다시 해야 의미가 있다 — 재판단 안 함
+        return tool, args
+    dump = lambda o: mask_secrets(json.dumps(o, ensure_ascii=False, default=str))  # noqa: E731
+    text = "\n".join([
+        "TARGET: " + dump(f"{it['target'].type}:{it['target'].value}"),
+        "INTENT(왜): " + dump(dict(intent) if intent else {}),
+        "SUGGESTED: " + dump({"tool": tool, "args": args}),
+        "TOOLS: " + dump(read_tools)[:4000],
+        "ALREADY_TRIED(이 대상에 이미 실행함): " + dump([t["payload"] for t in tried]),
+    ])
+    try:
+        out = ctx.llm.structured_chat([{"role": "system", "content": _WORKER_AGENT_SYSTEM},
+                                       {"role": "user", "content": text}], _WORKER_PICK_SCHEMA, "worker_decide")
+    except LLMError as e:
+        db.audit(ctx.conn, ctx.run["id"], "llm_error", {"purpose": "worker_decide", "error": str(e)})
+        return tool, args
+    picked = ctx.registry.get(out["tool"])
+    if picked is None or picked.risk != "read":  # 엉뚱한 응답 — Planner 제안 유지(CLAUDE.md §7)
+        return tool, args
+    db.audit(ctx.conn, ctx.run["id"], "worker_agent_decided",
+             {"backlog_item": str(it["id"]), "suggested": {"tool": tool, "args": args},
+              "picked": {"tool": out["tool"], "args": out["args"]}, "rationale": out["rationale"],
+              "model": ctx.llm.model})
+    return out["tool"], out["args"]
+
+
 def _run_exploration(ctx, it, wr) -> tuple[str, str | None]:
-    (req_id, tool, args), = calls(it)
-    eid, out = run_tool(ctx, it, wr, 1, req_id, tool, args)
+    tool, args = _worker_decide(ctx, it)
+    eid, out = run_tool(ctx, it, wr, 1, "explore", tool, args)
     payload = {"tool": tool, "success": out is not None}
     if out is not None:  # 발췌는 다음 계획의 참고 자료다(신뢰할 수 없는 데이터, 비밀 값은 가린다)
         payload["excerpt"] = mask_secrets(out.data[:600].decode("utf-8", errors="replace"))

@@ -1,9 +1,11 @@
 """실행 생성: 체크리스트 버전을 DB 로 가져오고, 범위 내 대상을 자산으로 등록하고, 실행별 체크리스트 행을 만든다."""
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from types import SimpleNamespace
 
 from psycopg.types.json import Jsonb
 
@@ -11,10 +13,48 @@ from audit import config as audit_config
 from audit import overlays as overlays_mod
 from audit.adapters import build_registry
 from audit.checklist_engine import Checklists, platform_match
+from audit.local_model import LLMError
 from audit.models import ConfigError, Target
 from audit.policy import Policy
 
-from . import db, tools
+from . import db, explore, tools
+
+_GOAL_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["subgoals"],
+    "properties": {"subgoals": {"type": "array", "minItems": 1, "maxItems": 5, "items": {
+        "type": "object", "additionalProperties": False, "required": ["text", "target_id"],
+        "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 300},
+                       "target_id": {"type": "string", "maxLength": 300}}}}},
+}
+_GOAL_DECOMPOSE_SYSTEM = (
+    "Split the operator's goal for an authorized security audit into independent sub-goals, one per target it "
+    "actually concerns. If the goal is already single-purpose and concerns only one target, return exactly one "
+    "sub-goal unchanged. Only use target_ids listed in TARGETS. Reply with JSON only. Write each sub-goal's text "
+    "in Korean."
+)
+
+
+def _decompose_goal(conn, cfg, run: dict, goal_text: str, targets: list[tuple[str, Target]]) -> list[tuple[str, list[str]]]:
+    """목표를 대상별 하위 목표로 선택적으로 나눈다(멀티에이전트 2단계 — artex 의 DecomposeGoals 참고).
+
+    실행 권한에는 영향이 없다 — 하위 목표도 explore.propose 의 제안 → policy.decide 검증을 그대로 거치는 입력일
+    뿐이다. LLM 이 없거나 실패/엉뚱한 응답이면 원래 목표 하나로 조용히 폴백한다(CLAUDE.md §7).
+    """
+    fallback = [(goal_text, [tid for tid, _ in targets])]
+    try:
+        llm = explore.make_llm(SimpleNamespace(run=run, cfg=cfg, conn=conn))
+    except LLMError:
+        return fallback
+    text = ("GOAL: " + goal_text + "\nTARGETS: " +
+            json.dumps({tid: f"{t.type}:{t.value}" for tid, t in targets}, ensure_ascii=False))
+    try:
+        out = llm.structured_chat([{"role": "system", "content": _GOAL_DECOMPOSE_SYSTEM},
+                                   {"role": "user", "content": text}], _GOAL_SCHEMA, "decompose_goal")
+    except LLMError:
+        return fallback
+    known = {tid for tid, _ in targets}
+    subgoals = [(s["text"], [s["target_id"]]) for s in out["subgoals"] if s["target_id"] in known]
+    return subgoals or fallback
 
 
 def registry(cfg) -> dict:
@@ -188,9 +228,17 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
          Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy, llm_provider, run_code,
          llm_profile)).fetchone()
     default_goal = f"체크리스트 {checklist_id}@{version} 진단" if checklist_id else f"자율 진단: {', '.join(target_ids)}"
-    goal = conn.execute(
-        "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'goal','operator',%s) RETURNING id",
-        (run["id"], Jsonb({"text": goal_text or default_goal, "targets": target_ids}))).fetchone()
+    # 운영자가 목표를 직접 썼고 LLM 을 쓰는 실행이면 대상별 하위 목표로 나눠볼 수 있다(2단계, §13의 default_goal
+    # 은 나눌 의미가 없어 대상으로 그대로 둠). 실패/미사용 시 기존처럼 목표 하나로 폴백한다.
+    subgoals = _decompose_goal(conn, cfg, run, goal_text, targets) if goal_text and use_llm \
+        else [(goal_text or default_goal, target_ids)]
+    goal_ids_by_target: dict[str, list] = {tid: [] for tid, _ in targets}
+    for text, tids in subgoals:
+        gid = conn.execute(
+            "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'goal','operator',%s) "
+            "RETURNING id", (run["id"], Jsonb({"text": text, "targets": tids}))).fetchone()["id"]
+        for tid in tids:
+            goal_ids_by_target.setdefault(tid, []).append(gid)
     tasks = []
     for tid, t in targets:
         asset = conn.execute(
@@ -200,7 +248,8 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
             "RETURNING id", (t.type, t.value, t.platform, t.company, run["id"])).fetchone()
         conn.execute("INSERT INTO run_assets (run_id, asset_id, target_id) VALUES (%s,%s,%s)",
                      (run["id"], asset["id"], tid))
-        conn.execute("INSERT INTO exploration_anchors (node_id, asset_id) VALUES (%s,%s)", (goal["id"], asset["id"]))
+        for gid in goal_ids_by_target.get(tid, []):
+            conn.execute("INSERT INTO exploration_anchors (node_id, asset_id) VALUES (%s,%s)", (gid, asset["id"]))
         for it in items:
             if platform_match(it["body"], t):  # 다른 platform 용 항목은 이 대상의 진단 항목이 아니다
                 conn.execute("INSERT INTO run_checklist_items (run_id, checklist_item_id, asset_id) "

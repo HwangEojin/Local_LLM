@@ -195,13 +195,15 @@ def _context(ctx) -> tuple[str, set[str]]:
             "JOIN exploration_anchors an2 ON an2.node_id = n.id WHERE an2.evidence_id::text = %s AND n.kind='fact' "
             "LIMIT 1) LIMIT 1", (latest_fact["evidence_ids"][0],)).fetchone()
         latest_fact_target = row["target_id"] if row else None
-    goal = conn.execute("SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='goal' "
-                        "ORDER BY created_at LIMIT 1", (run_id,)).fetchone()
+    goals = conn.execute("SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='goal' "
+                         "ORDER BY created_at", (run_id,)).fetchall()
     questions = conn.execute("SELECT id, state, payload FROM exploration_nodes WHERE run_id=%s AND kind='question' "
                              "ORDER BY created_at DESC LIMIT 5", (run_id,)).fetchall()
     dump = lambda o: mask_secrets(json.dumps(o, ensure_ascii=False, default=str))  # noqa: E731
     text = "\n".join([
-        "GOAL: " + dump((goal["payload"] if goal else {}).get("text", "")),
+        # 목표가 하나뿐이면(기존 동작) 글자 그대로, runs.create_run 이 분해했으면(2단계) 대상별 하위 목표 목록으로
+        "GOAL: " + dump(goals[0]["payload"].get("text", "") if len(goals) == 1
+                        else [g["payload"] for g in goals] if goals else ""),
         "TARGETS: " + dump({ctx.target_ids[a]: f"{t.type}:{t.value}" for a, t in ctx.targets.items()}),
         "TOOLS: " + dump(tools)[:6000],
         "QUESTIONS (OPEN = 아직 답변 없음 — 새로 묻지 말 것, ANSWERED = 사람이 답변함 — 참고해서 진행): " +
@@ -292,6 +294,9 @@ def propose(ctx) -> int:
     except LLMError as e:  # 실패를 남기고 결정론적 작업은 계속한다
         db.audit(conn, run_id, "llm_error", {"purpose": "explore", "error": str(e)})
         return 0
+    # ponytail: runs.create_run 이 목표를 여러 개로 나눴어도(2단계) spawns 간선은 항상 가장 먼저 만든 목표에
+    # 붙인다 — intent 가 어느 하위 목표에서 왔는지 정확히 매칭하는 건 그래프 조회용일 뿐 실행 권한과 무관하므로
+    # 미룸. 필요해지면 target_id 로 goal 을 골라 매칭.
     goal = conn.execute("SELECT id FROM exploration_nodes WHERE run_id=%s AND kind='goal' ORDER BY created_at LIMIT 1",
                         (run_id,)).fetchone()["id"]
     accepted, rejected, accepted_item_ids = 0, [], {}
