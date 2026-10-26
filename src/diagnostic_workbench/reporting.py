@@ -254,6 +254,7 @@ def generate_autonomous(cfg, conn, run: dict, meta_path, findings_path=None) -> 
     테이블에서 직접 읽는 방식으로 바꿔 넣는다 — 서식은 하나만 유지한다.
     """
     from audit import pentest_report, schemas
+    from audit.models import free_path
     if run["status"] != "COMPLETED":
         raise AuditError(f"실행 {run['id']} 의 상태가 {run['status']} 임. COMPLETED 상태의 실행만 보고서로 출력할 수 있음")
     if not meta_path:
@@ -273,7 +274,7 @@ def generate_autonomous(cfg, conn, run: dict, meta_path, findings_path=None) -> 
     b.finish()
     out_dir = cfg.settings.path("reports_dir") / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = pentest_report._free(out_dir / f"web_pentest_report_{run_id}.docx")
+    out = free_path(out_dir / f"web_pentest_report_{run_id}.docx")
     b.doc.save(str(out))
     problems, warnings = pentest_report.verify(out, findings, b.unmatched)
     rejected_n = conn.execute(

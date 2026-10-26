@@ -11,7 +11,8 @@ BEGIN
         PERFORM pg_advisory_xact_lock(hashtext('run_code'));
         SELECT coalesce(max(substring(run_code from '-(\d+)$')::int), 0) + 1 INTO n
           FROM runs WHERE run_code LIKE 'RUN-' || d || '-%';
-        NEW.run_code := 'RUN-' || d || '-' || lpad(n::text, 2, '0');
+        -- 0009 와 같은 이유로 4자리로 넉넉히 둔다(2자리는 100건째부터 truncate 로 겹침).
+        NEW.run_code := 'RUN-' || d || '-' || lpad(n::text, 4, '0');
     END IF;
     RETURN NEW;
 END;
