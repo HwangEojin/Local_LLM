@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Cpu, Crosshair, Lock, OctagonAlert, Plug, Plus, Power, PowerOff, RotateCcw, Save, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Bot, ClipboardList, Cpu, Crosshair, FileText, Lock, OctagonAlert, Plug, Plus, Power, PowerOff, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Wrench } from "lucide-react";
 
 import { AuthGate } from "@/components/AuthGate";
 import { Header } from "@/components/Header";
@@ -20,14 +21,23 @@ import {
   WorkbenchSettings,
 } from "@/lib/api";
 import { formatTime } from "@/lib/labels";
+import { AgentsSection } from "./AgentsSection";
+import { ApprovalsSection } from "./ApprovalsSection";
+import { errMsg, Field, ICON, NumField, ReadOnlyRow } from "./parts";
+import { ToolsSection } from "./ToolsSection";
 
-const ICON = "h-4 w-4 shrink-0";
-type SectionKey = "scope" | "limits" | "llm" | "mcp" | "kill-switch";
-const SECTIONS: { key: SectionKey; label: string; Icon: typeof Crosshair }[] = [
+type SectionKey = "scope" | "llm" | "agents" | "mcp" | "tools" | "checklists" | "approvals" | "limits" | "kill-switch";
+// href 가 있는 항목은 구역이 아니라 다른 화면으로 가는 링크다(감사 로그).
+const SECTIONS: { key: SectionKey | "logs"; label: string; Icon: typeof Crosshair; href?: string }[] = [
   { key: "scope", label: "진단 대상", Icon: Crosshair },
-  { key: "limits", label: "제외·예산·제한", Icon: SlidersHorizontal },
-  { key: "llm", label: "LLM·호출 제한", Icon: Cpu },
-  { key: "mcp", label: "MCP·체크리스트", Icon: Plug },
+  { key: "llm", label: "LLM", Icon: Cpu },
+  { key: "agents", label: "에이전트", Icon: Bot },
+  { key: "mcp", label: "MCP", Icon: Plug },
+  { key: "tools", label: "도구", Icon: Wrench },
+  { key: "checklists", label: "체크리스트", Icon: ClipboardList },
+  { key: "approvals", label: "승인", Icon: ShieldCheck },
+  { key: "logs", label: "로그", Icon: FileText, href: "/audit" },
+  { key: "limits", label: "시스템", Icon: SlidersHorizontal },
   { key: "kill-switch", label: "중지 스위치", Icon: OctagonAlert },
 ];
 
@@ -36,38 +46,6 @@ const RISKS: { key: string; label: string; hint: string }[] = [
   { key: "write", label: "쓰기", hint: "대상 상태를 바꿀 수 있는 도구(승인 정책 적용)" },
   { key: "dangerous", label: "위험", hint: "서비스 장애·데이터 손상 가능성이 있는 도구" },
 ];
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-medium text-muted">{label}</span>
-      {children}
-      {hint && <span className="mt-1 block text-xs text-faint">{hint}</span>}
-    </label>
-  );
-}
-
-function NumField({ label, hint, value, onChange, min = 0 }: { label: string; hint?: string; value: number; onChange: (n: number) => void; min?: number }) {
-  return (
-    <Field label={label} hint={hint}>
-      <input type="number" min={min} value={Number.isFinite(value) ? value : ""} onChange={(e) => onChange(e.target.valueAsNumber)} className={inputCls} />
-    </Field>
-  );
-}
-
-function ReadOnlyRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-line bg-canvas px-3 py-2 text-sm">
-      <span className="flex items-center gap-2 text-muted">
-        <Lock className="h-3.5 w-3.5" aria-hidden />
-        {label}
-      </span>
-      <span className="font-mono text-xs text-ink">{value || "(없음)"}</span>
-    </div>
-  );
-}
 
 const emptyTarget = (): Target => ({ target_id: "", type: "url", value: "", platform: "", description: "", code: "" });
 
@@ -326,10 +304,9 @@ function LimitsSection() {
       </Card>
       <Card className="space-y-4 p-4">
         <h2 className="text-sm font-semibold">실행 제어</h2>
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-3">
           <NumField label="작업 점유 시간 (초)" min={1} value={draft.lease_s} onChange={(n) => setDraft({ ...draft, lease_s: n })} />
           <NumField label="작업 재시도 횟수" min={1} value={draft.max_attempts} onChange={(n) => setDraft({ ...draft, max_attempts: n })} />
-          <NumField label="승인 유효 시간 (시간)" min={1} value={draft.approval_ttl_h} onChange={(n) => setDraft({ ...draft, approval_ttl_h: n })} />
           <NumField label="도구 호출 최소 간격 (ms)" hint="요청 속도 제한" value={draft.min_call_interval_ms} onChange={(n) => setDraft({ ...draft, min_call_interval_ms: n })} />
         </div>
         <div className="space-y-2">
@@ -518,7 +495,7 @@ function LlmSection() {
 }
 
 // ── MCP·체크리스트 ──
-function McpSection() {
+function McpSection({ part }: { part: "mcp" | "checklists" }) {
   const toast = useToast();
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [checklists, setChecklists] = useState<ChecklistEntry[] | null>(null);
@@ -547,7 +524,7 @@ function McpSection() {
   return (
     <div className="space-y-4">
       {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
-      <Card className="p-4">
+      {part === "mcp" && <Card className="p-4">
         <h2 className="mb-3 text-sm font-semibold">MCP 서버</h2>
         {!servers ? (
           <SkeletonRows rows={3} />
@@ -572,9 +549,9 @@ function McpSection() {
           </ul>
         )}
         <p className="mt-3 text-xs text-faint">명령·주소·허용 도구는 웹에서 바꿀 수 없고 활성/비활성만 바꿉니다. 변경은 이 PC 전용 파일(mcp_servers.local.json)에 저장됩니다.</p>
-      </Card>
+      </Card>}
 
-      <Card className="p-4">
+      {part === "checklists" && <Card className="p-4">
         <h2 className="mb-3 text-sm font-semibold">체크리스트</h2>
         {!checklists ? (
           <SkeletonRows rows={2} />
@@ -603,7 +580,7 @@ function McpSection() {
           </table>
         )}
         <p className="mt-3 text-xs text-faint">체크리스트 활성화는 원본 해시 검증과 사람의 확인이 필요해 현재는 CLI(checklist activate)에서만 합니다. 여기서는 조회만 가능합니다.</p>
-      </Card>
+      </Card>}
 
       {target && (
         <ConfirmDialog title={`${target.name} 서버를 활성화할까요?`} confirmLabel="활성화" busy={busy} onConfirm={() => toggle(target)} onCancel={() => setTarget(null)}>
@@ -698,7 +675,7 @@ function SettingsBody() {
   // AuthGate 통과 후에만 렌더되므로(클라이언트 전용) lazy 초기화에서 location 을 읽어도 안전하다.
   const [section, setSectionState] = useState<SectionKey>(() => {
     const h = window.location.hash.slice(1) as SectionKey;
-    return SECTIONS.some((s) => s.key === h) ? h : "scope";
+    return SECTIONS.some((s) => s.key === h && !s.href) ? h : "scope";
   });
   const setSection = (k: SectionKey) => {
     setSectionState(k);
@@ -710,10 +687,19 @@ function SettingsBody() {
       <p className="mb-5 text-sm text-muted">진단 환경을 제어합니다. 모든 변경은 감사 로그에 기록됩니다.</p>
       <div className="grid gap-6 md:grid-cols-[13rem_1fr]">
         <nav aria-label="설정 구역" className="flex gap-1 md:flex-col">
-          {SECTIONS.map(({ key, label, Icon }) => (
+          {SECTIONS.map(({ key, label, Icon, href }) => href ? (
+            <Link
+              key={key}
+              href={href}
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-muted transition-colors hover:bg-raised/60 hover:text-ink"
+            >
+              <Icon className={ICON} aria-hidden />
+              {label}
+            </Link>
+          ) : (
             <button
               key={key}
-              onClick={() => setSection(key)}
+              onClick={() => setSection(key as SectionKey)}
               aria-current={section === key ? "page" : undefined}
               className={`flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${section === key ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised/60 hover:text-ink"}`}
             >
@@ -726,7 +712,11 @@ function SettingsBody() {
           {section === "scope" && <ScopeSection />}
           {section === "limits" && <LimitsSection />}
           {section === "llm" && <LlmSection />}
-          {section === "mcp" && <McpSection />}
+          {section === "agents" && <AgentsSection />}
+          {section === "mcp" && <McpSection part="mcp" />}
+          {section === "tools" && <ToolsSection />}
+          {section === "checklists" && <McpSection part="checklists" />}
+          {section === "approvals" && <ApprovalsSection />}
           {section === "kill-switch" && <KillSwitchSection />}
         </div>
       </div>
