@@ -8,7 +8,7 @@ import { Play, Settings } from "lucide-react";
 import { AuthGate } from "@/components/AuthGate";
 import { Header } from "@/components/Header";
 import { Banner, btnPrimary, btnSecondary, Card, inputCls, SkeletonRows } from "@/components/ui";
-import { api, ApiError, Environment, RunDetail, WorkbenchSettings } from "@/lib/api";
+import { api, testLlm, ApiError, Environment, RunDetail, WorkbenchSettings } from "@/lib/api";
 import { AGENT_ROLE_LABEL, AUTONOMY_LABEL, DOCTOR_LABEL } from "@/lib/labels";
 
 const DOCTOR_TONE: Record<string, string> = {
@@ -107,18 +107,8 @@ function NewRunForm() {
 
   async function testModel(key: string, spec: string | null) {
     setTests((t) => ({ ...t, [key]: { busy: true } }));
-    try {
-      const r = await api.post<{ ok: boolean; model?: string; version?: string; error?: string }>(
-        "/api/environment/llm-test",
-        { spec, provider: llmProvider },
-      );
-      setTests((t) => ({
-        ...t,
-        [key]: { busy: false, ok: r.ok, text: r.ok ? `연결됨 · ${r.model}${r.version ? ` (Ollama v${r.version})` : ""}` : r.error },
-      }));
-    } catch (e) {
-      setTests((t) => ({ ...t, [key]: { busy: false, ok: false, text: e instanceof Error ? e.message : "테스트 실패" } }));
-    }
+    const r = await testLlm(spec, llmProvider);
+    setTests((t) => ({ ...t, [key]: { busy: false, ok: r.ok, text: r.text } }));
   }
 
   async function refreshModels() {

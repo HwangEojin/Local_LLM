@@ -11,10 +11,12 @@ import {
   ApiError,
   ChecklistEntry,
   KillSwitch,
+  LlmProfileRef,
   LlmSettings,
   McpServer,
   Scope,
   Target,
+  testLlm,
   WorkbenchSettings,
 } from "@/lib/api";
 import { formatTime } from "@/lib/labels";
@@ -361,8 +363,33 @@ function LlmSection() {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  // 설치된 Ollama 모델(null = 연결 불가), 등록된 프로파일, 연결 테스트 결과(키: "model" 또는 프로파일 이름)
+  const [models, setModels] = useState<string[] | null | undefined>(undefined);
+  const [profiles, setProfiles] = useState<LlmProfileRef[]>([]);
+  const [tests, setTests] = useState<Record<string, { busy: boolean; ok?: boolean; text?: string }>>({});
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadModels = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const r = await api.get<{ models: string[] | null; profiles: LlmProfileRef[] }>("/api/environment/ollama-models");
+      setModels(r.models);
+      setProfiles(r.profiles ?? []);
+    } catch {
+      setModels(null);
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  async function runTest(key: string, spec: string | null, provider = "ollama") {
+    setTests((t) => ({ ...t, [key]: { busy: true } }));
+    const r = await testLlm(spec, provider);
+    setTests((t) => ({ ...t, [key]: { busy: false, ok: r.ok, text: r.text } }));
+  }
 
   useEffect(() => {
+    loadModels();
     api
       .get<LlmSettings>("/api/admin/settings")
       .then((s) => {
@@ -406,8 +433,29 @@ function LlmSection() {
           <Field label="주소" hint="로컬(127.0.0.1/localhost) 주소만 웹에서 지정할 수 있습니다">
             <input className={inputCls} value={o.base_url} onChange={(e) => setO({ base_url: e.target.value })} />
           </Field>
-          <Field label="모델">
-            <input className={inputCls} value={o.model} onChange={(e) => setO({ model: e.target.value })} />
+          <Field label="모델" hint={models === null ? "Ollama에 연결할 수 없어 직접 입력합니다" : "이 PC의 Ollama에 설치된 모델에서 고릅니다"}>
+            {models ? (
+              <select className={inputCls} value={o.model} onChange={(e) => setO({ model: e.target.value })}>
+                {!models.includes(o.model) && <option value={o.model}>{o.model} (설치되지 않음)</option>}
+                {models.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            ) : (
+              <input className={inputCls} value={o.model} onChange={(e) => setO({ model: e.target.value })} />
+            )}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button type="button" className={btnSecondary} disabled={tests.model?.busy} onClick={() => runTest("model", `ollama:${o.model}`)}>
+                연결 테스트
+              </button>
+              <button type="button" className={btnGhost} disabled={refreshing} onClick={loadModels}>
+                {refreshing ? "불러오는 중…" : "설치된 모델 새로고침"}
+              </button>
+              {tests.model && (tests.model.busy
+                ? <span className="text-xs text-muted">테스트 중…</span>
+                : <span className={`text-xs ${tests.model.ok ? "text-ok" : "text-danger"}`}>{tests.model.text}</span>)}
+            </div>
+            {dirty && <p className="mt-1 text-xs text-faint">테스트는 저장된 주소로 연결합니다(주소를 바꿨다면 먼저 저장하세요).</p>}
           </Field>
           <NumField label="응답 대기 시간 (초)" min={1} value={o.timeout_s} onChange={(n) => setO({ timeout_s: n })} />
           <NumField label="진단당 최대 LLM 호출 수" min={1} value={o.max_calls_per_run} onChange={(n) => setO({ max_calls_per_run: n })} />
@@ -417,6 +465,32 @@ function LlmSection() {
         </div>
         <ReadOnlyRow label="외부 LLM API 허용" value={draft.external_api.enabled ? "허용됨" : "차단됨"} />
         <p className="text-xs text-faint">외부 API 허용 여부는 데이터가 밖으로 나갈 수 있는 설정이라 웹에서 바꿀 수 없습니다. config/settings.json 을 직접 수정하세요.</p>
+      </Card>
+      <Card className="space-y-3 p-4">
+        <h2 className="text-sm font-semibold">등록된 LLM 프로파일</h2>
+        {profiles.length === 0 ? (
+          <p className="text-xs text-faint">등록된 프로파일이 없습니다. config/llm_profiles.json 에 추가하면 새 진단의 에이전트별 모델로 고를 수 있습니다.</p>
+        ) : (
+          <ul className="divide-y divide-line text-sm">
+            {profiles.map((p) => (
+              <li key={p.name} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span>
+                  <span className="font-medium">{p.name}</span>
+                  <span className="ml-2 text-xs text-muted">{p.kind} · {p.model ?? "기본 모델"}</span>
+                </span>
+                <span className="flex items-center gap-2">
+                  {tests[p.name] && (tests[p.name].busy
+                    ? <span className="text-xs text-muted">테스트 중…</span>
+                    : <span className={`text-xs ${tests[p.name].ok ? "text-ok" : "text-danger"}`}>{tests[p.name].text}</span>)}
+                  <button type="button" className={btnSecondary} disabled={tests[p.name]?.busy} onClick={() => runTest(p.name, p.name, p.kind)}>
+                    연결 테스트
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="text-xs text-faint">프로파일은 주소·모델을 바꿀 수 있어 웹에서 편집하지 않습니다. config/llm_profiles.json 을 직접 수정하세요.</p>
       </Card>
       <Card className="space-y-4 p-4">
         <h2 className="text-sm font-semibold">진단당 호출·증적 제한</h2>
