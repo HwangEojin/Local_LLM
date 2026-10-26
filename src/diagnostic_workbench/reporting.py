@@ -8,13 +8,43 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from audit.checklist_engine import Checklists
 from audit.evidence import EvidenceStore
+from audit.local_model import LLMError
 from audit.models import AuditError
 from audit.policy import mask_secrets
 
-from . import db
+from . import db, explore
+
+_POLISH_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["result", "recommendation"],
+    "properties": {"result": {"type": "string", "minLength": 1, "maxLength": 1200},
+                   "recommendation": {"type": "string", "minLength": 1, "maxLength": 1200}},
+}
+_POLISH_SYSTEM = (
+    "Rewrite the following finding's result(rationale) and recommendation(remediation) for a formal Korean "
+    "penetration-test report: clearer, more formal wording only. Do not add new facts, evidence, severity "
+    "judgments or claims beyond what is given, and do not drop any technical detail. If it already reads like a "
+    "finished report, return it unchanged. Reply with JSON only, in Korean."
+)
+
+
+def _polish_finding_text(llm, title: str, result: str, recommendation: str) -> tuple[str, str]:
+    """Reporter 에이전트(멀티에이전트 3단계) — 서술만 다듬는다. CLAUDE.md §3.3: 원문(findings.rationale/
+    remediation, DB)은 그대로 두고 이 보고서 출력 문장만 바꾼다 — 다듬기가 실패하거나 엉뚱해도 DB 로
+    역전파되지 않으므로 원래 판정·근거는 그대로 안전하다. LLM 이 없거나 실패하면 원문을 그대로 쓴다.
+    """
+    if llm is None:
+        return result, recommendation
+    text = f"TITLE: {title}\nRESULT: {result}\nRECOMMENDATION: {recommendation}"
+    try:
+        out = llm.structured_chat([{"role": "system", "content": _POLISH_SYSTEM}, {"role": "user", "content": text}],
+                                  _POLISH_SCHEMA, "report_polish")
+    except LLMError:
+        return result, recommendation
+    return out["result"], out["recommendation"]
 
 _TO_LEGACY = {"NEEDS_REVIEW": "MANUAL_REVIEW", "NOT_RUN": "INCONCLUSIVE"}
 _RESULTS = (
@@ -214,7 +244,7 @@ def _finding_images(conn, evidence_dir: Path, finding_id) -> list[Path]:
     return out
 
 
-def _findings_for_pentest_report(conn, evidence_dir: Path, run: dict, meta: dict) -> tuple[list[dict], dict[str, int]]:
+def _findings_for_pentest_report(conn, evidence_dir: Path, run: dict, meta: dict, llm=None) -> tuple[list[dict], dict[str, int]]:
     """findings 테이블(체크리스트 없는 실행이 자율 탐색으로 쌓은 발견 사항) 을 audit.pentest_report._Builder
     가 기대하는 findings 리스트 모양으로 변환한다. check_id/target_id 는 FAIL 판정과 맞추는 용도가 아니라
     _Builder 가 쓰는 필드 이름일 뿐이므로 체크리스트 없이도 채울 수 있다.
@@ -238,12 +268,13 @@ def _findings_for_pentest_report(conn, evidence_dir: Path, run: dict, meta: dict
         images = _finding_images(conn, evidence_dir, r["id"])
         cases = [{"title": "증적 스크린샷", "steps": [
             {"text": f"증적 {i + 1}/{len(images)}", "image": str(p)} for i, p in enumerate(images)]}] if images else []
+        result, recommendation = _polish_finding_text(llm, r["title"], mask_secrets(r["rationale"]), r["remediation"] or "")
         out.append({
             "check_id": str(r["id"])[:8], "target_id": r["target_id"], "target_name": tinfo["name"],
             "url": tinfo.get("url", ""), "kind": tinfo.get("kind", "WEB"), "name": r["title"],
-            "result": mask_secrets(r["rationale"]), "path": tinfo.get("url", "") or r["target_id"],
-            "notes": notes, "cases": cases, "recommendation": r["remediation"] or "", "rec_titles": [],
-            "reason": r["rationale"],
+            "result": result, "path": tinfo.get("url", "") or r["target_id"],
+            "notes": notes, "cases": cases, "recommendation": recommendation, "rec_titles": [],
+            "reason": r["rationale"],  # 보고서 서술은 다듬어도 이 필드는 항상 원문(§3.3) — 내부 대조/감사용
         })
     return out, status_counts
 
@@ -262,7 +293,11 @@ def generate_autonomous(cfg, conn, run: dict, meta_path, findings_path=None) -> 
     run_id = str(run["id"])
     meta = pentest_report._load_json(meta_path, schemas.REPORT_META, "report meta")
     tpl, rec_paths = pentest_report.find_templates(cfg.settings.path("templates_dir"), "web")
-    findings, status_counts = _findings_for_pentest_report(conn, cfg.evidence_dir, run, meta)
+    try:  # Reporter(3단계) — 없거나 실패해도 보고서는 원문으로 계속 나와야 한다(CLAUDE.md §7)
+        llm = explore.make_llm(SimpleNamespace(run=run, cfg=cfg, conn=conn))
+    except LLMError:
+        llm = None
+    findings, status_counts = _findings_for_pentest_report(conn, cfg.evidence_dir, run, meta, llm)
     b = pentest_report._Builder(tpl, pentest_report.load_recommendations(rec_paths), meta, findings)
     if findings_path:
         b.improvements = json.loads(Path(findings_path).read_text(encoding="utf-8")).get("improvements", [])
