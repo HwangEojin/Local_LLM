@@ -22,7 +22,7 @@ from audit.models import AuditError, PolicyDenied, ToolError, ToolOutput
 from audit.policy import mask_secrets, redact, secret_values
 from audit.verdict import decide, evaluate_rule
 
-from . import backlog, db, evidence, policy, tools
+from . import backlog, db, evidence, policy, prompts, tools
 
 _LEGACY_TO_DB = {"MANUAL_REVIEW": "NEEDS_REVIEW"}
 _WORKER_PICK_SCHEMA = {
@@ -577,7 +577,7 @@ def _worker_decide(ctx, it) -> tuple[str, dict]:
     ])
     try:
         llm = _llm_for(ctx, "worker")
-        out = llm.structured_chat([{"role": "system", "content": _WORKER_AGENT_SYSTEM},
+        out = llm.structured_chat([{"role": "system", "content": prompts.get(ctx.conn, "worker_agent_system", _WORKER_AGENT_SYSTEM)},
                                        {"role": "user", "content": text}], _WORKER_PICK_SCHEMA, "worker_decide")
     except LLMError as e:
         db.audit(ctx.conn, ctx.run["id"], "llm_error", {"purpose": "worker_decide", "error": str(e)})

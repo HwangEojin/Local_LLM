@@ -309,3 +309,49 @@ export async function testLlm(spec: string | null, provider = "ollama"): Promise
     return { ok: false, text: e instanceof Error ? e.message : "테스트 실패" };
   }
 }
+
+export type AgentPrompt = {
+  name: string;
+  label: string;
+  default: string;
+  text: string;
+  overridden: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+};
+export type AgentRoleInfo = { role: string; prompts: AgentPrompt[] };
+
+export type ToolInfo = {
+  name: string;
+  risk: string;
+  args_schema: Record<string, unknown>;
+  scope_args: Record<string, string>;
+  source: "mcp" | "builtin";
+  allowed_by_scope: boolean;
+};
+export type ToolCatalog = { allowed_risks: string[]; tools: ToolInfo[] };
+
+export type ApprovalsOverview = {
+  ttl_h: number;
+  pending: {
+    id: string;
+    run_code: string;
+    kind: string;
+    reason: string;
+    tool: string | null;
+    updated_at: string;
+    asset_kind: string;
+    asset_value: string;
+  }[];
+  recent: {
+    id: string;
+    run_code: string;
+    tool: string;
+    decision: "APPROVED" | "REJECTED";
+    approver: string;
+    decided_at: string;
+    expires_at: string;
+    expired: boolean;
+    asset_value: string;
+  }[];
+};

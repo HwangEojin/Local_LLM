@@ -26,3 +26,22 @@ def reset(conn, name: str) -> None:
 
 def list_all(conn) -> list:
     return conn.execute("SELECT * FROM agent_prompts ORDER BY name").fetchall()
+
+
+def catalog() -> list[dict]:
+    """웹 '에이전트' 화면용: 역할별로 편집 가능한 프롬프트와 코드 기본값. 기본값이 각 모듈에 있어 순환 import 를
+    피하려고 호출 시점에 가져온다. analyst(체크리스트 분석)의 프롬프트는 audit.local_model 에 고정돼 있어
+    편집 대상이 아니다(빈 목록)."""
+    from . import explore, reporting, runs, worker
+    return [
+        {"role": "planner", "prompts": [
+            {"name": "explore_system", "label": "탐색 제안", "default": explore.SYSTEM},
+            {"name": "explore_probe_system", "label": "최초 정찰 프로브", "default": explore.PROBE_SYSTEM}]},
+        {"role": "worker", "prompts": [
+            {"name": "worker_agent_system", "label": "도구 선택", "default": worker._WORKER_AGENT_SYSTEM}]},
+        {"role": "analyst", "prompts": []},
+        {"role": "goals", "prompts": [
+            {"name": "goals_system", "label": "목표 분해", "default": runs._GOAL_DECOMPOSE_SYSTEM}]},
+        {"role": "reporter", "prompts": [
+            {"name": "reporter_system", "label": "보고서 문장 다듬기", "default": reporting._POLISH_SYSTEM}]},
+    ]

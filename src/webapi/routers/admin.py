@@ -23,7 +23,7 @@ from audit import schemas
 from audit.checklist_engine import Checklists
 from audit.models import AuditError, ConfigError
 from audit.policy import Policy
-from diagnostic_workbench import config as wb_config, db as wb_db
+from diagnostic_workbench import config as wb_config, db as wb_db, prompts as wb_prompts, runs as wb_runs
 
 from .. import deps
 from ..deps import current_user, get_cfg, get_conn
@@ -310,3 +310,91 @@ def get_audit(conn=Depends(get_conn), user: str = Depends(current_user), event: 
     sql = ("SELECT a.id, a.ts, a.event, a.details, r.run_code FROM audit_events a LEFT JOIN runs r ON r.id = a.run_id "
            + ("WHERE " + " AND ".join(where) + " " if where else "") + "ORDER BY a.id DESC LIMIT %(limit)s")
     return conn.execute(sql, params).fetchall()
+
+
+# ── 에이전트(역할별 프롬프트) ──
+# 프롬프트는 LLM 이 받는 '문구'일 뿐이다 — 도구 실행 권한·정책 검사는 프롬프트와 무관하게 policy.decide() 가 정한다.
+class PromptBody(BaseModel):
+    text: str
+    confirm: bool = False
+
+
+class ConfirmBody(BaseModel):
+    confirm: bool = False
+
+
+def _prompt_default(name: str) -> str:
+    for role in wb_prompts.catalog():
+        for p in role["prompts"]:
+            if p["name"] == name:
+                return p["default"]
+    raise HTTPException(404, f"편집할 수 없는 프롬프트: {name}")
+
+
+@router.get("/agents")
+def get_agents(conn=Depends(get_conn), user: str = Depends(current_user)):
+    overrides = {r["name"]: r for r in wb_prompts.list_all(conn)}
+    out = []
+    for role in wb_prompts.catalog():
+        prompts = []
+        for p in role["prompts"]:
+            o = overrides.get(p["name"])
+            prompts.append({**p, "text": o["text"] if o else p["default"], "overridden": bool(o),
+                            "updated_by": o["updated_by"] if o else None,
+                            "updated_at": o["updated_at"] if o else None})
+        out.append({"role": role["role"], "prompts": prompts})
+    return out
+
+
+@router.put("/agents/prompts/{name}")
+def put_prompt(name: str, body: PromptBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    default = _prompt_default(name)
+    text = body.text.strip()
+    if not (20 <= len(text) <= 12000):
+        raise HTTPException(422, "프롬프트는 20자 이상 12,000자 이하여야 합니다")
+    before = wb_prompts.get(conn, name, default)
+    if text == default.strip():  # 기본값과 같으면 오버라이드를 남기지 않는다
+        wb_prompts.reset(conn, name)
+    else:
+        wb_prompts.set(conn, name, text, operator=f"web:{user}")
+    _audit(conn, user, "admin_prompt_changed", {"name": name, "before": before, "after": text})
+    return {"name": name, "overridden": text != default.strip()}
+
+
+@router.post("/agents/prompts/{name}/reset")
+def reset_prompt(name: str, body: ConfirmBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    default = _prompt_default(name)
+    before = wb_prompts.get(conn, name, default)
+    wb_prompts.reset(conn, name)
+    _audit(conn, user, "admin_prompt_reset", {"name": name, "before": before})
+    return {"name": name, "overridden": False}
+
+
+# ── 도구 카탈로그(조회 전용) ──
+@router.get("/tools")
+def get_tools(cfg=Depends(get_cfg), user: str = Depends(current_user)):
+    """등록된 도구와 위험도·인자 스키마, 현재 scope 가 허용하는 위험도. 도구 등록·삭제는 웹에서 하지 않는다
+    (MCP 서버 활성화는 MCP 메뉴, 실행 파일 경로는 workbench.json)."""
+    allowed = set(audit_config.load_scope(cfg.home).get("allowed_risks", []))
+    return {"allowed_risks": sorted(allowed),
+            "tools": [{"name": n, "risk": t.risk, "args_schema": t.args_schema, "scope_args": t.scope_args,
+                       "source": "mcp" if n.startswith("mcp:") else "builtin", "allowed_by_scope": t.risk in allowed}
+                      for n, t in sorted(wb_runs.registry(cfg).items())]}
+
+
+# ── 승인(전체 진단의 승인 대기·최근 결정) ──
+@router.get("/approvals")
+def get_approvals(cfg=Depends(get_cfg), conn=Depends(get_conn), user: str = Depends(current_user)):
+    pending = conn.execute(
+        "SELECT b.id, r.run_code, b.kind, b.reason, b.payload->>'tool' AS tool, b.updated_at, a.kind AS asset_kind, "
+        "a.value AS asset_value FROM backlog_items b JOIN runs r ON r.id=b.run_id JOIN assets a ON a.id=b.asset_id "
+        "WHERE b.status='BLOCKED' AND b.policy_class='ALLOW_WITH_APPROVAL' AND r.deleted_at IS NULL "
+        "ORDER BY b.updated_at DESC LIMIT 200").fetchall()
+    recent = conn.execute(
+        "SELECT ap.id, r.run_code, ap.tool, ap.decision, ap.approver, ap.decided_at, ap.expires_at, "
+        "ap.expires_at < now() AS expired, a.value AS asset_value FROM approvals ap "
+        "JOIN runs r ON r.id=ap.run_id JOIN assets a ON a.id=ap.asset_id ORDER BY ap.decided_at DESC LIMIT 50"
+    ).fetchall()
+    return {"ttl_h": cfg.approval_ttl_h, "pending": pending, "recent": recent}

@@ -16,7 +16,7 @@ from audit.local_model import LLMError
 from audit.models import AuditError
 from audit.policy import mask_secrets
 
-from . import db, explore
+from . import db, explore, prompts
 
 _POLISH_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["result", "recommendation"],
@@ -31,7 +31,8 @@ _POLISH_SYSTEM = (
 )
 
 
-def _polish_finding_text(llm, title: str, result: str, recommendation: str) -> tuple[str, str]:
+def _polish_finding_text(llm, title: str, result: str, recommendation: str,
+                         system: str = _POLISH_SYSTEM) -> tuple[str, str]:
     """Reporter 에이전트(멀티에이전트 3단계) — 서술만 다듬는다. CLAUDE.md §3.3: 원문(findings.rationale/
     remediation, DB)은 그대로 두고 이 보고서 출력 문장만 바꾼다 — 다듬기가 실패하거나 엉뚱해도 DB 로
     역전파되지 않으므로 원래 판정·근거는 그대로 안전하다. LLM 이 없거나 실패하면 원문을 그대로 쓴다.
@@ -40,7 +41,7 @@ def _polish_finding_text(llm, title: str, result: str, recommendation: str) -> t
         return result, recommendation
     text = f"TITLE: {title}\nRESULT: {result}\nRECOMMENDATION: {recommendation}"
     try:
-        out = llm.structured_chat([{"role": "system", "content": _POLISH_SYSTEM}, {"role": "user", "content": text}],
+        out = llm.structured_chat([{"role": "system", "content": system}, {"role": "user", "content": text}],
                                   _POLISH_SCHEMA, "report_polish")
     except LLMError:
         return result, recommendation
@@ -260,6 +261,7 @@ def _findings_for_pentest_report(conn, evidence_dir: Path, run: dict, meta: dict
         "WHERE f.run_id=%s AND f.status <> 'REJECTED' ORDER BY f.created_at", (run["id"],)).fetchall()
     status_counts: dict[str, int] = {}
     out = []
+    polish_system = prompts.get(conn, "reporter_system", _POLISH_SYSTEM)
     for r in rows:
         status_counts[r["status"]] = status_counts.get(r["status"], 0) + 1
         tinfo = targets.get(r["target_id"]) or {"name": r["target_id"], "url": "", "kind": "WEB"}
@@ -268,7 +270,8 @@ def _findings_for_pentest_report(conn, evidence_dir: Path, run: dict, meta: dict
         images = _finding_images(conn, evidence_dir, r["id"])
         cases = [{"title": "증적 스크린샷", "steps": [
             {"text": f"증적 {i + 1}/{len(images)}", "image": str(p)} for i, p in enumerate(images)]}] if images else []
-        result, recommendation = _polish_finding_text(llm, r["title"], mask_secrets(r["rationale"]), r["remediation"] or "")
+        result, recommendation = _polish_finding_text(llm, r["title"], mask_secrets(r["rationale"]), r["remediation"] or "",
+                                                 polish_system)
         out.append({
             "check_id": str(r["id"])[:8], "target_id": r["target_id"], "target_name": tinfo["name"],
             "url": tinfo.get("url", ""), "kind": tinfo.get("kind", "WEB"), "name": r["title"],
