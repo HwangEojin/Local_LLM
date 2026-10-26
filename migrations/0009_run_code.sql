@@ -7,7 +7,10 @@ ALTER TABLE runs ADD COLUMN run_code text;
 UPDATE runs r SET run_code = x.code
 FROM (
     SELECT id,
-           abbr || '-' || d || '-' || lpad(row_number() OVER (PARTITION BY abbr, d ORDER BY created_at, id)::text, 2, '0') AS code
+           -- lpad 폭 2 는 같은 abbr+날짜에 100건 이상 쌓이면 자릿수가 모자라 통째로 잘려서(lpad 는
+           -- 길이 초과 시 truncate) 서로 다른 일련번호가 같은 코드로 겹친다(실제로 겪음: rn=100/101 이
+           -- 둘 다 '10' 이 됨) — 4자리(최대 9999건/일)로 넉넉히 늘림.
+           abbr || '-' || d || '-' || lpad(row_number() OVER (PARTITION BY abbr, d ORDER BY created_at, id)::text, 4, '0') AS code
     FROM (
         SELECT r2.id, r2.created_at,
                to_char(r2.created_at AT TIME ZONE 'Asia/Seoul', 'YYYYMMDD') AS d,
