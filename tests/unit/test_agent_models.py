@@ -73,10 +73,13 @@ class AgentModelsTest(unittest.TestCase):
 
     def test_check_model_reports_ok_and_failure(self):
         info = {"version": "9.9.9", "model": "small", "capabilities": ["completion"]}
-        with mock.patch.object(OllamaClient, "check_ready", return_value=info):
+        with mock.patch.object(OllamaClient, "check_ready", return_value=info),                 mock.patch.object(OllamaClient, "structured_chat", return_value={"pong": True}) as chat:
             out = explore.check_model(self.cfg, "ollama:small")
         self.assertEqual(out["model"], "small")
         self.assertEqual(out["version"], "9.9.9")
+        self.assertEqual(out["reply"], {"pong": True})  # check_ready 만이 아니라 실제 생성까지 해 본다
+        self.assertEqual(chat.call_args.args[2], "connection_test")
+        self.assertIn("elapsed_ms", out)
         with mock.patch.object(OllamaClient, "check_ready", side_effect=LLMError("미설치")):
             with self.assertRaises(LLMError):
                 explore.check_model(self.cfg, "ollama:small")
