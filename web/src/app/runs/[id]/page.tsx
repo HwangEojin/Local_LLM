@@ -259,6 +259,22 @@ function Summary({
         <RunControls detail={detail} onChanged={onChanged} />
       </div>
 
+      {detail.goals?.length > 0 && (
+        <div className="mt-4 border-t border-line pt-4">
+          <div className="mb-2 text-xs font-medium text-muted">
+            목표{detail.goals.length > 1 ? ` · 대상별로 ${detail.goals.length}개로 나뉨` : ""}
+          </div>
+          <ul className="space-y-1 text-sm">
+            {detail.goals.map((g, i) => (
+              <li key={i} className="text-ink">
+                {g.text}
+                {g.targets.length > 0 && <span className="ml-2 text-xs text-muted">({g.targets.join(", ")})</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {approvals > 0 && (
         <div className="mt-4 flex items-center justify-between gap-3 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
           <span className="text-warn">사람의 승인을 기다리는 작업이 {approvals}건 있습니다. 승인하기 전에는 실행되지 않습니다.</span>
