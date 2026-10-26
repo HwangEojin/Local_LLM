@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from types import SimpleNamespace
 
 from psycopg.types.json import Jsonb
@@ -135,12 +136,23 @@ def installed_ollama_models(cfg) -> list[str] | None:
         return None
 
 
+_PING_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["pong"],
+                "properties": {"pong": {"type": "boolean"}}}
+
+
 def check_model(cfg, spec: str | None, provider: str = "ollama") -> dict:
-    """모델 하나의 연결 테스트(실제 check_ready). spec 은 'ollama:<모델>' 또는 프로파일 이름, 비우면 provider 의
-    기본 모델. 실패하면 LLMError. 웹 UI 의 '연결 테스트' 버튼이 쓴다 — 실행을 만들거나 DB 를 건드리지 않는다."""
+    """모델 하나의 연결 테스트. spec 은 'ollama:<모델>' 또는 프로파일 이름, 비우면 provider 의 기본 모델.
+    1) check_ready: 서버 버전·모델 설치·기능 확인  2) 실제 생성 한 번: 아주 작은 구조화 질의를 보내 응답이
+    스키마에 맞게 돌아오는지와 걸린 시간을 잰다 — 모델이 로드돼 실제로 답할 수 있다는 증거다. 실패하면 LLMError.
+    실행/DB 에는 아무것도 남기지 않는다(storage 없음)."""
     run = {"id": None, "llm_provider": provider, "llm_agent_models": {"test": spec} if spec else {}}
     llm = make_llm(SimpleNamespace(run=run, cfg=cfg, conn=None), "test")
-    return {"model": llm.model, **{k: v for k, v in (llm.ready_info or {}).items() if k != "model"}}
+    llm.storage = None  # 호출 기록·호출 수 한도에서 제외
+    t0 = time.monotonic()
+    reply = llm.structured_chat([{"role": "user", "content": 'Reply with exactly this JSON: {"pong": true}'}],
+                                _PING_SCHEMA, "connection_test")
+    return {"model": llm.model, **{k: v for k, v in (llm.ready_info or {}).items() if k != "model"},
+            "reply": reply, "elapsed_ms": int((time.monotonic() - t0) * 1000)}
 
 
 def llm_for(ctx, role: str):
