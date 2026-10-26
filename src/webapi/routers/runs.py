@@ -171,8 +171,11 @@ def get_run(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_us
         {"r": run["id"]}).fetchone()
     targets = [r["target_id"] for r in conn.execute(
         "SELECT target_id FROM run_assets WHERE run_id=%s ORDER BY target_id", (run["id"],))]
+    # 목표 노드(여러 개면 2단계 목표 분해가 실제로 일어난 것, runs.create_run/_decompose_goal)
+    goals = [{"text": g["payload"].get("text", ""), "targets": g["payload"].get("targets", [])} for g in conn.execute(
+        "SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='goal' ORDER BY created_at", (run["id"],))]
     return {"run": run, "targets": targets, "coverage": {"verdicts": cov["verdicts"], "backlog": counts},
-            "usage": n, "loop_running": _loop_running(run["id"])}
+            "usage": n, "loop_running": _loop_running(run["id"]), "goals": goals}
 
 
 @router.post("/{run_ref}/start")

@@ -124,6 +124,8 @@ export type RunDetail = {
   coverage: { verdicts: Record<string, number>; backlog: Record<string, number> };
   usage: { tools: number; explore_tools: number; evidence: number; findings: number; llm_calls: number };
   loop_running: boolean;
+  // 목표 노드. 2개 이상이면 운영자가 쓴 목표가 대상별 하위 목표로 분해된 것(멀티에이전트 2단계)
+  goals: { text: string; targets: string[] }[];
 };
 
 export type Evidence = {
