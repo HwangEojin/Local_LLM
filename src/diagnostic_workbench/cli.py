@@ -195,6 +195,28 @@ def cmd_tools(args):
     return 0
 
 
+def _parse_agent_models(items: list[str] | None) -> dict[str, str]:
+    out = {}
+    for it in items or []:
+        role, sep, spec = it.partition("=")
+        if not sep or not role or not spec:
+            raise AuditError(f"--agent-model 형식은 역할=모델 이어야 함 (예: worker=ollama:qwen2.5:3b): {it}")
+        out[role.strip()] = spec.strip()
+    return out
+
+
+def cmd_llm_models(args):
+    """로컬 Ollama 에 설치된 모델 목록. run create --agent-model 역할=ollama:<모델> 로 고른다."""
+    cfg = config.load(args.home)
+    models = explore.installed_ollama_models(cfg)
+    if models is None:
+        print("Ollama 에 연결할 수 없음", file=sys.stderr)
+        return 1
+    print("\n".join(models) if models else "설치된 모델 없음")
+    print(f"역할: {', '.join(explore.AGENT_ROLES)}")
+    return 0
+
+
 def cmd_llm_profiles(args):
     """config/llm_profiles.json 에 등록된 프로파일 목록과(--check 일 때) 실제 연결 가능 여부.
 
@@ -234,7 +256,8 @@ def _status(conn, run):
         checklist_desc = f"{cv['checklist_id']}@{cv['version']}"
     print(f"실행 {rid}\n  상태={run['status']}" + (f" ({run['stop_reason']})" if run["stop_reason"] else "")
           + f"  체크리스트={checklist_desc}  운영자={run['operator']}  use_llm={run['use_llm']}"
-          + f"  자율모드={run['autonomy']}")
+          + f"  자율모드={run['autonomy']}"
+          + (f"  에이전트모델={run['llm_agent_models']}" if run["llm_agent_models"] else ""))
     cov = reporting.coverage(conn, rid)
     print("  판정: " + (", ".join(f"{k}={v}" for k, v in cov["verdicts"].items()) or "없음"))
     print("  작업: " + (", ".join(f"{k}={v}" for k, v in cov["backlog"].items()) or "없음"))
@@ -271,7 +294,7 @@ def cmd_run(args):
                               check_ids=args.check_ids.split(",") if args.check_ids else None, use_llm=args.llm,
                               budget=budget, allowed_tools=args.tools.split(",") if args.tools else None,
                               autonomy=args.autonomy, goal_text=args.goal, llm_provider=args.llm_provider,
-                              llm_profile=args.llm_profile)
+                              llm_profile=args.llm_profile, agent_models=_parse_agent_models(args.agent_model))
         print(f"실행 생성됨: {run['id']}  자율 모드={run['autonomy']}"
               + ("" if cid else "  (체크리스트 없음 — 자율 탐색 전용)")
               + (f"  LLM={run['llm_profile_name'] or run['llm_provider']}" if run["llm_provider"] != "ollama"
@@ -279,6 +302,8 @@ def cmd_run(args):
         if run["autonomy"] == "full":
             print("  주의: 위험도 'write/dangerous' 도구가 범위 내에서 사람 승인 없이 자동 실행됩니다. "
                   "실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
+        if run["llm_agent_models"]:
+            print("  에이전트별 모델: " + ", ".join(f"{k}={v}" for k, v in run["llm_agent_models"].items()))
         print(f"미리 보기: run plan {run['id']}   시작: run start {run['id']}")
         return 0
     if args.action == "list":
@@ -719,6 +744,7 @@ def build_parser():
     c.add_argument("--pdf", help="import 시 쪽 번호를 연결할 참고 PDF 경로(pdftotext 필요)")
     c.add_argument("--replace-draft", action="store_true", help="import 시 같은 버전이 draft 이면 교체")
     sub.add_parser("tools", help="등록된 도구와 위험도 목록")
+    sub.add_parser("llm-models", help="로컬 Ollama 에 설치된 모델 목록(에이전트별 모델 지정용)")
     lp = sub.add_parser("llm-profiles", help="등록된 LLM 프로파일 목록(--check 로 실제 연결 확인)")
     lp.add_argument("--check", action="store_true", help="각 프로파일로 실제 check_ready() 를 호출해 본다")
     r = sub.add_parser("run", help="실행 생성/미리 보기/시작(재개)/상태/취소/목록")
@@ -739,6 +765,10 @@ def build_parser():
                         "API 과금 아님). --llm 과 함께 쓸 때만 의미 있음. --llm-profile 을 주면 무시됨")
     r.add_argument("--llm-profile", help="config/llm_profiles.json 에 등록된 프로파일 이름(--llm-provider 대신 "
                                          "이름으로 모델·주소·타임아웃을 한 번에 고름)")
+    r.add_argument("--agent-model", action="append", metavar="역할=모델",
+                   help="에이전트 역할별 모델 지정(여러 번 가능). 역할: planner|worker|analyst|goals|reporter, "
+                        "모델: 'ollama:<설치된 모델>' 또는 llm_profiles.json 프로파일 이름. 생략한 역할은 실행 기본 모델 "
+                        "(--llm 과 함께만)")
     r.add_argument("--max-tasks", type=int)
     r.add_argument("--max-explorations", type=int)
     b = sub.add_parser("backlog", help="작업 큐(TodoList) 조회")
@@ -814,7 +844,7 @@ def build_parser():
 
 
 COMMANDS = {"doctor": cmd_doctor, "web": cmd_web, "migrate": cmd_migrate, "checklist": cmd_checklist, "tools": cmd_tools,
-           "llm-profiles": cmd_llm_profiles, "run": cmd_run, "backlog": cmd_backlog,
+           "llm-profiles": cmd_llm_profiles, "llm-models": cmd_llm_models, "run": cmd_run, "backlog": cmd_backlog,
             "approve": cmd_approve, "retry": cmd_retry, "review": cmd_review, "finding": cmd_finding,
             "question": cmd_question, "prompt": cmd_prompt, "proxy": cmd_proxy,
             "evidence": cmd_evidence, "collect": cmd_collect, "trace": cmd_trace, "graph": cmd_graph,

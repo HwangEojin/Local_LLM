@@ -46,6 +46,11 @@ _BURP_HISTORY_TOOLS = {"mcp:burp/get_proxy_http_history", "mcp:burp/get_proxy_ht
                        "mcp:burp/get_organizer_items", "mcp:burp/get_scanner_issues"}
 
 
+def _llm_for(ctx, role: str):
+    from . import explore  # explore 가 worker 를 import 하므로 순환을 피해 호출 시점에 가져온다
+    return explore.llm_for(ctx, role)
+
+
 def load_item(ctx, item: dict) -> dict:
     """작업 행에 체크리스트 항목 원문과 대상(Target)을 붙인다."""
     it = dict(item)
@@ -366,7 +371,7 @@ def _analyze(ctx, body, target, ev: dict) -> dict:
     """LLM 참고 의견. 알려진 증적 id 를 인용하지 않으면 버린다. 판정을 확정하지 않는다."""
     msgs = build_analysis_messages(body, target, ev, ctx.cfg.settings.ollama["max_request_bytes"] // 2)
     try:
-        out = ctx.llm.structured_chat(msgs, schemas.LLM_ANALYSIS, f"analyze:{body['check_id']}")
+        out = _llm_for(ctx, "analyst").structured_chat(msgs, schemas.LLM_ANALYSIS, f"analyze:{body['check_id']}")
     except LLMError as e:
         db.audit(ctx.conn, ctx.run["id"], "llm_error", {"check_id": body["check_id"], "error": str(e)})
         return {"verdict": "ERROR", "error": str(e)}
@@ -571,7 +576,8 @@ def _worker_decide(ctx, it) -> tuple[str, dict]:
         "ALREADY_TRIED(이 대상에 이미 실행함): " + dump([t["payload"] for t in tried]),
     ])
     try:
-        out = ctx.llm.structured_chat([{"role": "system", "content": _WORKER_AGENT_SYSTEM},
+        llm = _llm_for(ctx, "worker")
+        out = llm.structured_chat([{"role": "system", "content": _WORKER_AGENT_SYSTEM},
                                        {"role": "user", "content": text}], _WORKER_PICK_SCHEMA, "worker_decide")
     except LLMError as e:
         db.audit(ctx.conn, ctx.run["id"], "llm_error", {"purpose": "worker_decide", "error": str(e)})
@@ -582,7 +588,7 @@ def _worker_decide(ctx, it) -> tuple[str, dict]:
     db.audit(ctx.conn, ctx.run["id"], "worker_agent_decided",
              {"backlog_item": str(it["id"]), "suggested": {"tool": tool, "args": args},
               "picked": {"tool": out["tool"], "args": out["args"]}, "rationale": out["rationale"],
-              "model": ctx.llm.model})
+              "model": llm.model})
     return out["tool"], out["args"]
 
 

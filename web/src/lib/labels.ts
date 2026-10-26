@@ -70,3 +70,12 @@ export function formatBytes(n: number | null | undefined): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
+
+// 에이전트 역할 -> 화면 표시 이름 (서버의 explore.AGENT_ROLES 와 같은 키)
+export const AGENT_ROLE_LABEL: Record<string, string> = {
+  planner: "계획(Planner)",
+  worker: "실행 도구 선택(Worker)",
+  analyst: "체크리스트 분석",
+  goals: "목표 분해",
+  reporter: "보고서 문장",
+};

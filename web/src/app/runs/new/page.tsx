@@ -9,7 +9,7 @@ import { AuthGate } from "@/components/AuthGate";
 import { Header } from "@/components/Header";
 import { Banner, btnPrimary, Card, inputCls, SkeletonRows } from "@/components/ui";
 import { api, ApiError, Environment, RunDetail, WorkbenchSettings } from "@/lib/api";
-import { AUTONOMY_LABEL, DOCTOR_LABEL } from "@/lib/labels";
+import { AGENT_ROLE_LABEL, AUTONOMY_LABEL, DOCTOR_LABEL } from "@/lib/labels";
 
 const DOCTOR_TONE: Record<string, string> = {
   OK: "text-ok",
@@ -65,6 +65,7 @@ function NewRunForm() {
   const [useLlm, setUseLlm] = useState(true);
   const [autonomy, setAutonomy] = useState("approval");
   const [llmProvider, setLlmProvider] = useState("ollama");
+  const [agentModels, setAgentModels] = useState<Record<string, string>>({});
   const [goal, setGoal] = useState("");
   const [tools, setTools] = useState<string[]>([]);
   const [maxTasks, setMaxTasks] = useState("");
@@ -85,6 +86,7 @@ function NewRunForm() {
         setUseLlm(!!r.use_llm);
         setAutonomy(r.autonomy as string);
         setLlmProvider(r.llm_provider as string);
+        setAgentModels((r.llm_agent_models ?? {}) as Record<string, string>);
         if (Array.isArray(r.allowed_tools)) setTools(r.allowed_tools as string[]);
         const b = (r.budget ?? {}) as Record<string, number>;
         if (b.max_tasks) setMaxTasks(String(b.max_tasks));
@@ -118,6 +120,7 @@ function NewRunForm() {
         use_llm: useLlm,
         autonomy,
         llm_provider: llmProvider,
+        agent_models: useLlm && Object.keys(agentModels).length ? agentModels : null,
         goal: goal.trim() || null,
         tools: tools.length ? tools : null,
         max_tasks: toNum(maxTasks),
@@ -247,6 +250,42 @@ function NewRunForm() {
                             <span className="block text-xs text-faint">이 PC에 로그인된 claude CLI 구독을 호출합니다. API 과금은 아닙니다.</span>
                           )}
                         </span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              )}
+
+              {useLlm && (
+                <fieldset>
+                  <legend className={labelCls}>에이전트별 모델 (선택)</legend>
+                  <p className="mb-2 text-xs text-faint">
+                    비워 두면 위에서 고른 실행 기본 모델을 씁니다. 목록은 이 PC의 Ollama에 설치된 모델과 등록된 프로파일입니다.
+                    {env.ollama_models === null && <span className="text-warn"> Ollama에 연결할 수 없어 설치된 모델을 확인하지 못했습니다.</span>}
+                  </p>
+                  <div className="space-y-1.5 text-sm">
+                    {(env.agent_roles ?? []).map((role) => (
+                      <label key={role} className="flex items-center justify-between gap-3">
+                        <span>
+                          {AGENT_ROLE_LABEL[role] ?? role}
+                          <span className="ml-1 font-mono text-xs text-faint">{role}</span>
+                        </span>
+                        <select
+                          className={`${inputCls} max-w-xs`}
+                          value={agentModels[role] ?? ""}
+                          onChange={(e) => {
+                            const { [role]: _drop, ...rest } = agentModels;
+                            setAgentModels(e.target.value ? { ...rest, [role]: e.target.value } : rest);
+                          }}
+                        >
+                          <option value="">실행 기본 모델</option>
+                          {(env.ollama_models ?? []).map((m) => (
+                            <option key={m} value={`ollama:${m}`}>Ollama · {m}</option>
+                          ))}
+                          {(env.llm_profiles ?? []).map((p) => (
+                            <option key={p.name} value={p.name}>프로파일 · {p.name}</option>
+                          ))}
+                        </select>
                       </label>
                     ))}
                   </div>

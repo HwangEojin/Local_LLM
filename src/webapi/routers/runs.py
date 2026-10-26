@@ -133,6 +133,7 @@ class CreateRunBody(BaseModel):
     goal: str | None = None
     llm_provider: str = "ollama"
     llm_profile: str | None = None
+    agent_models: dict[str, str] | None = None  # 역할 -> 'ollama:<모델>' 또는 프로파일 이름
 
 
 @router.post("")
@@ -148,7 +149,8 @@ def create_run(body: CreateRunBody, cfg=Depends(get_cfg), conn=Depends(get_conn)
         run = wb_runs.create_run(conn, cfg, body.targets, body.operator, checklist_id=cid, version=ver,
                                  check_ids=body.check_ids, use_llm=body.use_llm, budget=budget,
                                  allowed_tools=body.tools, autonomy=body.autonomy, goal_text=body.goal,
-                                 llm_provider=body.llm_provider, llm_profile=body.llm_profile)
+                                 llm_provider=body.llm_provider, llm_profile=body.llm_profile,
+                                 agent_models=body.agent_models)
     except AuditError as e:
         conn.rollback()
         raise HTTPException(400, str(e)) from None

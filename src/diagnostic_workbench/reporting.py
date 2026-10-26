@@ -294,7 +294,7 @@ def generate_autonomous(cfg, conn, run: dict, meta_path, findings_path=None) -> 
     meta = pentest_report._load_json(meta_path, schemas.REPORT_META, "report meta")
     tpl, rec_paths = pentest_report.find_templates(cfg.settings.path("templates_dir"), "web")
     try:  # Reporter(3단계) — 없거나 실패해도 보고서는 원문으로 계속 나와야 한다(CLAUDE.md §7)
-        llm = explore.make_llm(SimpleNamespace(run=run, cfg=cfg, conn=conn))
+        llm = explore.make_llm(SimpleNamespace(run=run, cfg=cfg, conn=conn), "reporter")
     except LLMError:
         llm = None
     findings, status_counts = _findings_for_pentest_report(conn, cfg.evidence_dir, run, meta, llm)
