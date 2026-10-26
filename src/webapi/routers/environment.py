@@ -40,6 +40,11 @@ def _doctor_status(cfg) -> list[dict]:
     return rows
 
 
+def _llm_profiles(cfg) -> list[dict]:
+    return [{"name": name, "kind": p["kind"], "model": p.get("model")}
+            for name, p in sorted(audit_config.load_llm_profiles(cfg.home).items())]
+
+
 @router.get("")
 def get_environment(cfg=Depends(get_cfg), user: str = Depends(current_user)):
     scope = audit_config.load_scope(cfg.home)
@@ -47,8 +52,7 @@ def get_environment(cfg=Depends(get_cfg), user: str = Depends(current_user)):
     checklists = [{"checklist_id": cid, "version": v["version"], "sha256": v.get("sha256")}
                   for cid, v in cl.entries() if v["status"] == "active"]
     tools = [{"name": name, "risk": spec.risk} for name, spec in sorted(wb_runs.registry(cfg).items())]
-    llm_profiles = [{"name": name, "kind": p["kind"], "model": p.get("model")}
-                    for name, p in sorted(audit_config.load_llm_profiles(cfg.home).items())]
+    llm_profiles = _llm_profiles(cfg)
     return {
         "targets": scope["targets"],
         "checklists": checklists,
@@ -69,8 +73,8 @@ class LlmTestBody(BaseModel):
 
 @router.get("/ollama-models")
 def get_ollama_models(cfg=Depends(get_cfg), user: str = Depends(current_user)):
-    """설치된 Ollama 모델 목록 새로고침. 연결할 수 없으면 models=null."""
-    return {"models": explore.installed_ollama_models(cfg)}
+    """설치된 Ollama 모델 목록 새로고침(연결할 수 없으면 models=null)과 등록된 LLM 프로파일 목록."""
+    return {"models": explore.installed_ollama_models(cfg), "profiles": _llm_profiles(cfg)}
 
 
 @router.post("/llm-test")

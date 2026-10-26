@@ -289,3 +289,20 @@ export const FINDING_STATUSES = [
   "INCONCLUSIVE",
   "NOT_TESTED",
 ] as const;
+
+export type LlmProfileRef = { name: string; kind: string; model: string | null };
+
+// 모델 연결 테스트(서버가 실제 check_ready 를 호출). spec: 'ollama:<모델>' | 프로파일 이름 | null(provider 기본 모델)
+export async function testLlm(spec: string | null, provider = "ollama"): Promise<{ ok: boolean; text: string }> {
+  try {
+    const r = await api.post<{ ok: boolean; model?: string; version?: string; error?: string }>(
+      "/api/environment/llm-test",
+      { spec, provider },
+    );
+    return r.ok
+      ? { ok: true, text: `연결됨 · ${r.model}${r.version ? ` (Ollama v${r.version})` : ""}` }
+      : { ok: false, text: r.error ?? "연결하지 못했습니다" };
+  } catch (e) {
+    return { ok: false, text: e instanceof Error ? e.message : "테스트 실패" };
+  }
+}
