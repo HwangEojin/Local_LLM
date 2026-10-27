@@ -31,6 +31,7 @@ import {
   Evidence,
   Finding,
   FINDING_STATUSES,
+  findingsExportUrl,
   Question,
   RunDetail,
   ServerLogEntry,
@@ -367,12 +368,14 @@ function Summary({
 
 // ── 발견 사항 ──
 function FindingsTab({
+  runId,
   findings,
   filter,
   setFilter,
   selectedId,
   onSelect,
 }: {
+  runId: string;
   findings: Finding[] | null;
   filter: FindingFilter;
   setFilter: (f: FindingFilter) => void;
@@ -431,6 +434,12 @@ function FindingsTab({
               필터 초기화
             </button>
           )}
+          <a href={findingsExportUrl(runId, "csv")} className={btnGhost} download>
+            <Download className="h-4 w-4" aria-hidden /> CSV
+          </a>
+          <a href={findingsExportUrl(runId, "json")} className={btnGhost} download>
+            <Download className="h-4 w-4" aria-hidden /> JSON
+          </a>
           <span className="ml-auto text-xs text-faint tabular">
             {rows?.length ?? 0} / {findings.length}건
           </span>
@@ -1083,7 +1092,7 @@ function RunDetailBody({ runId }: { runId: string }) {
 
       <div role="tabpanel" id="tabpanel" aria-labelledby={`tab-${tab}`}>
         {tab === "findings" && (
-          <FindingsTab findings={findings} filter={filter} setFilter={setFilter} selectedId={selectedId} onSelect={setSelectedId} />
+          <FindingsTab runId={runId} findings={findings} filter={filter} setFilter={setFilter} selectedId={selectedId} onSelect={setSelectedId} />
         )}
         {tab === "backlog" && <BacklogTab runId={runId} items={backlog} onChanged={load} />}
         {tab === "assets" && <AssetsTab runId={runId} />}
