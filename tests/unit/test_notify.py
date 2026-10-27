@@ -150,6 +150,44 @@ class NotifyFindingConfirmedDB(unittest.TestCase):
         finally:
             srv.close()
 
+    def test_min_severity_filters_lower_severity_findings(self):
+        run, fid = self._run_and_finding()
+        srv = _Server(status=200)
+        try:
+            tmp = Path(tempfile.mkdtemp())
+            (tmp / "config").mkdir()
+            (tmp / "config" / "notify.json").write_text(
+                json.dumps({"channels": [{"name": "high-only", "kind": "webhook", "url": srv.url(),
+                                          "enabled": True, "min_severity": "high"}]}), encoding="utf-8")
+            fake_cfg = types.SimpleNamespace(home=tmp)
+            notify.notify_finding_confirmed(self.conn, fake_cfg, run["id"], fid, title="t", severity="low",
+                                            actor="test")
+            sent = self.conn.execute(
+                "SELECT 1 FROM audit_events WHERE run_id=%s AND event IN ('notification_sent','notification_failed')",
+                (run["id"],)).fetchone()
+            self.assertIsNone(sent)  # low < high 라 채널에 안 걸림, 아무 전송도 시도 안 함
+
+            notify.notify_finding_confirmed(self.conn, fake_cfg, run["id"], fid, title="t", severity="critical",
+                                            actor="test")
+            row = self.conn.execute(
+                "SELECT details FROM audit_events WHERE run_id=%s AND event='notification_sent'",
+                (run["id"],)).fetchone()
+            self.assertIsNotNone(row)  # critical >= high 라 걸림
+            self.assertEqual(row["details"]["severity"], "critical")
+        finally:
+            srv.close()
+
+
+class MinSeverityFilter(unittest.TestCase):
+    def test_passes_severity_ranking_and_unknown_values(self):
+        no_floor = {"name": "x"}
+        floor_high = {"name": "x", "min_severity": "high"}
+        self.assertTrue(notify._passes_severity(no_floor, "info"))
+        self.assertTrue(notify._passes_severity(floor_high, "critical"))
+        self.assertTrue(notify._passes_severity(floor_high, "high"))
+        self.assertFalse(notify._passes_severity(floor_high, "medium"))
+        self.assertTrue(notify._passes_severity(floor_high, "risk-3"))  # 모르는 값은 거르지 않음(놓치는 것보다 나음)
+
 
 if __name__ == "__main__":
     unittest.main()

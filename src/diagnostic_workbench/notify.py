@@ -44,9 +44,20 @@ def send_test(url: str) -> tuple[str, bool]:
                                  ensure_ascii=False).encode("utf-8"))
 
 
+_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+def _passes_severity(ch: dict, severity: str) -> bool:
+    """min_severity 가 없으면 항상 통과. 모르는 severity 값(risk-N 등)은 걸러지지 않고 보낸다(놓치는 것보다 낫다)."""
+    floor = ch.get("min_severity")
+    if not floor or severity not in _SEVERITY_RANK:
+        return True
+    return _SEVERITY_RANK[severity] <= _SEVERITY_RANK[floor]
+
+
 def notify_finding_confirmed(conn, cfg, run_id, finding_id, *, title, severity, actor) -> None:
-    """등록된 채널 전체에 finding 확정을 알린다. 채널이 없으면 아무 일도 하지 않는다."""
-    channels = load_channels(cfg.home / "config" / "notify.json")
+    """등록된 채널 중 이 심각도를 받기로 한 채널에 finding 확정을 알린다. 채널이 없으면 아무 일도 하지 않는다."""
+    channels = [c for c in load_channels(cfg.home / "config" / "notify.json") if _passes_severity(c, severity)]
     if not channels:
         return
     payload = json.dumps({"event": "finding_confirmed", "run_id": str(run_id), "finding_id": str(finding_id),
@@ -55,7 +66,7 @@ def notify_finding_confirmed(conn, cfg, run_id, finding_id, *, title, severity, 
     for ch in channels:
         detail, ok = _post(ch["url"], payload)
         db.audit(conn, run_id, "notification_sent" if ok else "notification_failed",
-                 {"channel": ch["name"], "finding_id": str(finding_id), "detail": detail})
+                 {"channel": ch["name"], "finding_id": str(finding_id), "detail": detail, "severity": severity})
 
 
 def _post(url: str, body: bytes) -> tuple[str, bool]:

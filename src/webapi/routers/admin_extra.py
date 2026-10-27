@@ -84,6 +84,7 @@ def put_tool(name: str, body: ToolBody, cfg=Depends(get_cfg), conn=Depends(get_c
 class ChannelBody(BaseModel):
     url: str | None = None
     enabled: bool | None = None
+    min_severity: str | None = None  # "" 를 보내면 필터 지움(전부 보냄), None 이면 그대로 둠
     confirm: bool = False
     confirm_external: bool = False
 
@@ -118,7 +119,8 @@ def _check_url(url: str) -> str:
 
 def _channel_rows(cfg) -> list[dict]:
     return [{"name": c["name"], "kind": c["kind"], "enabled": c.get("enabled", True), "source": c["source"],
-             "url_masked": _mask(c["url"]), "external": not _is_internal(c["url"])}
+             "url_masked": _mask(c["url"]), "external": not _is_internal(c["url"]),
+             "min_severity": c.get("min_severity")}
             for c in notify.load_all_channels(_file(cfg, "notify.json"))]
 
 
@@ -149,14 +151,31 @@ def put_notification(name: str, body: ChannelBody, cfg=Depends(get_cfg), conn=De
     changes_target = (cur is None) or (body.url is not None and url != cur["url"]) or (enabled and not cur.get("enabled", True))
     if enabled and changes_target and not _is_internal(url) and not body.confirm_external:
         raise HTTPException(400, "외부 주소로 진단 결과 알림이 전송됩니다. 별도 확인(confirm_external)이 필요합니다")
+    min_severity = (cur or {}).get("min_severity") if body.min_severity is None else (body.min_severity or None)
+    entry = {"name": name, "kind": "webhook", "url": url, "enabled": enabled}
+    if min_severity:
+        entry["min_severity"] = min_severity
     doc = _local_doc(cfg)
-    doc["channels"] = [c for c in doc["channels"] if c["name"] != name] + [
-        {"name": name, "kind": "webhook", "url": url, "enabled": enabled}]
+    doc["channels"] = [c for c in doc["channels"] if c["name"] != name] + [entry]
+    errs = schemas.validate(doc, schemas.NOTIFY_CHANNELS)
+    if errs:
+        raise HTTPException(422, "검증 실패: " + "; ".join(errs[:5]))
     _write_json(cfg, _file(cfg, "notify.local.json"), doc)
     # 주소 자체는 비밀이라 감사 로그에는 마스킹한 값만 남긴다
     _audit(conn, user, "admin_notification_changed", {"channel": name, "enabled": enabled, "url": _mask(url),
-                                                       "created": cur is None})
+                                                       "min_severity": min_severity, "created": cur is None})
     return _channel_rows(get_cfg())
+
+
+@router.get("/notifications/history")
+def notification_history(limit: int = 100, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """최근 전송 이력(audit_events 의 notification_sent/notification_failed). 새 테이블 없음 — 이미 §8 감사
+    로그에 남는 기록을 전송 이력 형태로만 보여준다."""
+    limit = max(1, min(limit, 500))
+    return conn.execute(
+        "SELECT a.id, a.ts, a.event, a.details, r.run_code FROM audit_events a LEFT JOIN runs r ON r.id = a.run_id "
+        "WHERE a.event IN ('notification_sent','notification_failed') ORDER BY a.id DESC LIMIT %s",
+        (limit,)).fetchall()
 
 
 @router.post("/notifications/{name}/delete")

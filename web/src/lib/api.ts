@@ -368,6 +368,14 @@ export type NotificationChannel = {
   source: "shared" | "local";
   url_masked: string;
   external: boolean;
+  min_severity: string | null;
+};
+export type NotificationHistoryEntry = {
+  id: number;
+  ts: string;
+  event: "notification_sent" | "notification_failed";
+  details: { channel?: string; finding_id?: string; detail?: string; severity?: string };
+  run_code: string | null;
 };
 
 export type Skill = {

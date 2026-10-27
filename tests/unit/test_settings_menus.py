@@ -181,6 +181,21 @@ class SettingsMenusTest(unittest.TestCase):
         self.assertEqual(self.client.post("/api/admin/notifications/ops/delete", json={"confirm": True}).status_code, 200)
         self.assertNotIn("ops", [c["name"] for c in self.client.get("/api/admin/notifications").json()])
 
+    def test_notification_min_severity_and_history(self):
+        url = "http://127.0.0.1:1/unused"  # 내부 주소라 confirm_external 없이도 등록 가능, 실제 전송은 안 함
+        put = lambda name, body: self.client.put(f"/api/admin/notifications/{name}", json=body)  # noqa: E731
+        self.addCleanup(lambda: self.client.post("/api/admin/notifications/sev-test/delete", json={"confirm": True}))
+        r = put("sev-test", {"url": url, "min_severity": "high", "confirm": True})
+        self.assertEqual(r.status_code, 200)
+        row = next(c for c in r.json() if c["name"] == "sev-test")
+        self.assertEqual(row["min_severity"], "high")
+        r2 = put("sev-test", {"min_severity": "", "confirm": True})  # 빈 값 = 필터 지움
+        self.assertIsNone(next(c for c in r2.json() if c["name"] == "sev-test")["min_severity"])
+        self.assertEqual(put("sev-test", {"min_severity": "극한", "confirm": True}).status_code, 422)
+        hist = self.client.get("/api/admin/notifications/history")
+        self.assertEqual(hist.status_code, 200)
+        self.assertIsInstance(hist.json(), list)
+
     def test_notification_test_send_and_shared_channel_rules(self):
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer
