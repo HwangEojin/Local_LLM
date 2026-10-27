@@ -284,7 +284,7 @@ def _bootstrap_probes(ctx, base_text: str, assets: dict) -> tuple[set[str], str]
         text = base_text + "\nPROBE_LOG (이번 라운드에 이미 실행한 프로브): " + \
             mask_secrets(json.dumps(log_entries, ensure_ascii=False, default=str))
         try:
-            system = prompts.get(conn, "explore_probe_system", PROBE_SYSTEM, "planner")
+            system = prompts.get(conn, "explore_probe_system", PROBE_SYSTEM, "planner", run_id)
             out = llm_for(ctx, "planner").structured_chat(
                 [{"role": "system", "content": system}, {"role": "user", "content": text}],
                 _PROBE_SCHEMA, "bootstrap_probe")
@@ -340,7 +340,7 @@ def propose(ctx) -> int:
                     "안전한 read 전용 정찰(예: 디렉터리/서비스 나열, 배너 확인)을 제안하세요. based_on_evidence_ids 는 "
                     "빈 배열([])로 제출해도 됩니다.\n" + text)
     try:
-        system = prompts.get(conn, "explore_system", SYSTEM, "planner")
+        system = prompts.get(conn, "explore_system", SYSTEM, "planner", run_id)
         out = llm_for(ctx, "planner").structured_chat([{"role": "system", "content": system}, {"role": "user", "content": text}],
                                       PROPOSALS, "explore")
     except LLMError as e:  # 실패를 남기고 결정론적 작업은 계속한다

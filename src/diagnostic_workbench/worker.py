@@ -370,7 +370,7 @@ def _observe_assets(ctx, it, tool, args, out, evidence_id):
 def _analyze(ctx, body, target, ev: dict) -> dict:
     """LLM 참고 의견. 알려진 증적 id 를 인용하지 않으면 버린다. 판정을 확정하지 않는다."""
     msgs = build_analysis_messages(body, target, ev, ctx.cfg.settings.ollama["max_request_bytes"] // 2)
-    msgs[0]["content"] += prompts.skills_for(ctx.conn, "analyst")  # 이 역할에 붙인 스킬(없으면 빈 문자열)
+    msgs[0]["content"] += prompts.skills_for(ctx.conn, "analyst", ctx.run["id"])  # 이 역할에 붙인 스킬(없으면 빈 문자열)
     try:
         out = _llm_for(ctx, "analyst").structured_chat(msgs, schemas.LLM_ANALYSIS, f"analyze:{body['check_id']}")
     except LLMError as e:
@@ -578,7 +578,7 @@ def _worker_decide(ctx, it) -> tuple[str, dict]:
     ])
     try:
         llm = _llm_for(ctx, "worker")
-        out = llm.structured_chat([{"role": "system", "content": prompts.get(ctx.conn, "worker_agent_system", _WORKER_AGENT_SYSTEM, "worker")},
+        out = llm.structured_chat([{"role": "system", "content": prompts.get(ctx.conn, "worker_agent_system", _WORKER_AGENT_SYSTEM, "worker", ctx.run["id"])},
                                        {"role": "user", "content": text}], _WORKER_PICK_SCHEMA, "worker_decide")
     except LLMError as e:
         db.audit(ctx.conn, ctx.run["id"], "llm_error", {"purpose": "worker_decide", "error": str(e)})

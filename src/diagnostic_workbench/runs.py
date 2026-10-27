@@ -50,7 +50,7 @@ def _decompose_goal(conn, cfg, run: dict, goal_text: str, targets: list[tuple[st
     text = ("GOAL: " + goal_text + "\nTARGETS: " +
             json.dumps({tid: f"{t.type}:{t.value}" for tid, t in targets}, ensure_ascii=False))
     try:
-        out = llm.structured_chat([{"role": "system", "content": prompts.get(conn, "goals_system", _GOAL_DECOMPOSE_SYSTEM, "goals")},
+        out = llm.structured_chat([{"role": "system", "content": prompts.get(conn, "goals_system", _GOAL_DECOMPOSE_SYSTEM, "goals", run["id"])},
                                    {"role": "user", "content": text}], _GOAL_SCHEMA, "decompose_goal")
     except LLMError:
         return fallback

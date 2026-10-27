@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import { formatTime } from "@/lib/labels";
 import { AgentsSection } from "./AgentsSection";
+import { McpAddCard } from "./McpAddCard";
 import { ApprovalsSection } from "./ApprovalsSection";
 import { NotificationsSection } from "./NotificationsSection";
 import { errMsg, Field, ICON, NumField, ReadOnlyRow } from "./parts";
@@ -505,6 +506,7 @@ function McpSection({ part }: { part: "mcp" | "checklists" }) {
   const [checklists, setChecklists] = useState<ChecklistEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [target, setTarget] = useState<McpServer | null>(null);
+  const [removing, setRemoving] = useState<McpServer | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -525,9 +527,23 @@ function McpSection({ part }: { part: "mcp" | "checklists" }) {
     }
   }
 
+  async function remove(s: McpServer) {
+    setBusy(true);
+    try {
+      setServers(await api.post<McpServer[]>(`/api/admin/mcp/${encodeURIComponent(s.name)}/delete`, { confirm: true }));
+      toast("ok", `${s.name} 서버를 삭제했습니다`);
+    } catch (e) {
+      setError(errMsg(e, "삭제에 실패했습니다"));
+    } finally {
+      setBusy(false);
+      setRemoving(null);
+    }
+  }
+
   return (
     <div className="space-y-4">
       {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+      {part === "mcp" && <McpAddCard onAdded={(list) => { setServers(list); toast("ok", "MCP 서버를 등록했습니다"); }} />}
       {part === "mcp" && <Card className="p-4">
         <h2 className="mb-3 text-sm font-semibold">MCP 서버</h2>
         {!servers ? (
@@ -544,10 +560,17 @@ function McpSection({ part }: { part: "mcp" | "checklists" }) {
                   </div>
                   {s.description && <p className="mt-1 line-clamp-2 text-xs text-muted">{s.description}</p>}
                 </div>
-                <button disabled={busy} onClick={() => (s.enabled ? toggle(s) : setTarget(s))} className={`${s.enabled ? btnSecondary : btnPrimary} shrink-0 whitespace-nowrap`}>
-                  {s.enabled ? <PowerOff className={ICON} aria-hidden /> : <Power className={ICON} aria-hidden />}
-                  {s.enabled ? "비활성화" : "활성화"}
-                </button>
+                <div className="flex shrink-0 gap-2">
+                  <button disabled={busy} onClick={() => (s.enabled ? toggle(s) : setTarget(s))} className={`${s.enabled ? btnSecondary : btnPrimary} whitespace-nowrap`}>
+                    {s.enabled ? <PowerOff className={ICON} aria-hidden /> : <Power className={ICON} aria-hidden />}
+                    {s.enabled ? "비활성화" : "활성화"}
+                  </button>
+                  {s.source === "local" && s.transport === "sse" && (
+                    <button disabled={busy} onClick={() => setRemoving(s)} className={btnDanger} title="이 PC 전용 서버 삭제">
+                      <Trash2 className={ICON} aria-hidden /> 삭제
+                    </button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
@@ -586,6 +609,11 @@ function McpSection({ part }: { part: "mcp" | "checklists" }) {
         <p className="mt-3 text-xs text-faint">체크리스트 활성화는 원본 해시 검증과 사람의 확인이 필요해 현재는 CLI(checklist activate)에서만 합니다. 여기서는 조회만 가능합니다.</p>
       </Card>}
 
+      {removing && (
+        <ConfirmDialog title={`${removing.name} 서버를 삭제할까요?`} confirmLabel="삭제" danger busy={busy} onConfirm={() => remove(removing)} onCancel={() => setRemoving(null)}>
+          이 PC 전용 설정에서 서버와 등록된 도구 {removing.tools.length}개가 지워집니다. 공유 파일(mcp_servers.json)에도 있는 서버는 지울 수 없습니다.
+        </ConfirmDialog>
+      )}
       {target && (
         <ConfirmDialog title={`${target.name} 서버를 활성화할까요?`} confirmLabel="활성화" busy={busy} onConfirm={() => toggle(target)} onCancel={() => setTarget(null)}>
           활성화하면 이 서버의 도구 {target.tools.length}개를 진단에서 호출할 수 있게 됩니다. 호출은 여전히 범위·정책 검사를 통과해야 합니다.

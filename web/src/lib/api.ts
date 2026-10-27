@@ -370,10 +370,26 @@ export type NotificationChannel = {
 export type Skill = {
   name: string;
   description: string;
+  license: string;
+  source: "manual" | "import";
   instructions: string;
   roles: string[];
   enabled: boolean;
   updated_by: string;
   updated_at: string;
 };
+export type SkillUsage = {
+  recent: { run_id: string; run_code: string | null; role: string; calls: number; first_at: string; last_at: string }[];
+  by_role: { role: string; runs: number; calls: number }[];
+};
 export type SkillsResponse = { roles: string[]; skills: Skill[] };
+
+export type DiscoveredTool = {
+  name: string;
+  description: string;
+  input_schema: { properties?: Record<string, { type?: string; description?: string }> } & Record<string, unknown>;
+  schema_ok: boolean;
+  schema_error: string | null;
+  suggested_scope: Record<string, "path" | "host" | "url">;
+};
+export type McpDiscovery = { ok: true; server: string; tools: DiscoveredTool[] } | { ok: false; error: string };
