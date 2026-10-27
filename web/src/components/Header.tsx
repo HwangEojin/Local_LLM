@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { LayoutDashboard, List, LogOut, OctagonAlert, Plus, ScrollText, Settings, ShieldCheck, SunMoon } from "lucide-react";
+import { LayoutDashboard, List, LogOut, OctagonAlert, Plus, ScrollText, Settings, ShieldCheck, SunMoon, Terminal } from "lucide-react";
 
 import { api, KillSwitch } from "@/lib/api";
 import { formatTime } from "@/lib/labels";
@@ -98,6 +98,7 @@ export function Header() {
             {link("/runs", "진단 목록", path === "/runs" || (path.startsWith("/runs/") && path !== "/runs/new"), List)}
             {link("/runs/new", "새 진단", path === "/runs/new", Plus)}
             {link("/settings", "설정", path === "/settings", Settings)}
+            {link("/commands", "명령 이력", path === "/commands", Terminal)}
             {link("/audit", "감사 로그", path === "/audit", ScrollText)}
           </nav>
         </div>

@@ -303,6 +303,28 @@ def retry_backlog_item(run_ref: str, item_ref: str, body: RetryBody, conn=Depend
     return {"retried": str(item["id"])}
 
 
+@router.post("/{run_ref}/backlog/retry-all")
+def retry_all_blocked(run_ref: str, body: RetryBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """FAILED/BLOCKED 작업을 한 번에 재시도(artex 의 '막힌 의도 전체 재시도' 참고). 승인 대기 중인 작업
+    (policy_class='ALLOW_WITH_APPROVAL')은 사람이 승인/거부해야 하므로 여기서 건드리지 않는다 — 승인을
+    건너뛰는 경로를 만들지 않기 위함(각 작업은 worker.retry_item 을 그대로 거쳐 정책 판정부터 다시 받는다)."""
+    if not body.reason.strip():
+        raise HTTPException(422, "재시도 사유를 입력하세요")
+    run = _load_run(conn, run_ref)
+    items = conn.execute(
+        "SELECT * FROM backlog_items WHERE run_id=%s AND status IN ('FAILED','BLOCKED') "
+        "AND NOT (status='BLOCKED' AND policy_class='ALLOW_WITH_APPROVAL')", (run["id"],)).fetchall()
+    retried = []
+    for item in items:
+        try:
+            worker.retry_item(conn, run, item, f"web:{user}", body.reason.strip())
+            retried.append(str(item["id"]))
+        except AuditError:
+            continue  # 상태가 그 사이 바뀐 작업은 건너뛴다(개별 재시도와 동시에 와도 안전)
+    conn.commit()
+    return {"retried": retried, "count": len(retried)}
+
+
 class ApproveBody(BaseModel):
     reject: bool = False
 

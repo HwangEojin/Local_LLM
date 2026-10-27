@@ -17,16 +17,39 @@ _FROM = ("FROM tool_invocations ti LEFT JOIN assets a ON a.id = ti.asset_id "
          "LEFT JOIN evidence e ON e.id = ti.evidence_id ")
 
 
-def search_all_worker_traces(conn, query: str = "", *, tool=None, status=None, exclude_run=None, limit=20):
-    """도구 이름·인자·오류·작업 이유에서 query 를 찾는다. exclude_run 으로 현재 실행을 뺄 수 있다."""
+def _where(query: str, tool, status, exclude_run, run):
     where, params = ["(%s = '' OR ti.tool ILIKE %s OR ti.args::text ILIKE %s OR ti.error ILIKE %s "
                      "OR b.reason ILIKE %s)"], [query] + [f"%{query}%"] * 4
-    for col, val in (("ti.tool = %s", tool), ("ti.status = %s", status), ("ti.run_id <> %s", exclude_run)):
+    for col, val in (("ti.tool = %s", tool), ("ti.status = %s", status), ("ti.run_id <> %s", exclude_run),
+                     ("ti.run_id = %s", run)):
         if val is not None:
             where.append(col)
             params.append(val)
-    return conn.execute(f"SELECT {_COLS} {_FROM} WHERE {' AND '.join(where)} ORDER BY ti.started_at DESC LIMIT %s",
-                        (*params, limit)).fetchall()
+    return where, params
+
+
+def search_all_worker_traces(conn, query: str = "", *, tool=None, status=None, exclude_run=None, run=None,
+                             limit=20, offset=0):
+    """도구 이름·인자·오류·작업 이유에서 query 를 찾는다. exclude_run 으로 현재 실행을 뺄 수 있고, run 으로 그
+    실행 하나만 볼 수 있다(웹 '명령' 화면이 run 없이 전체 실행을 가로질러 쓴다)."""
+    where, params = _where(query, tool, status, exclude_run, run)
+    return conn.execute(
+        f"SELECT {_COLS}, r.run_code {_FROM} LEFT JOIN runs r ON r.id = ti.run_id "
+        f"WHERE {' AND '.join(where)} ORDER BY ti.started_at DESC LIMIT %s OFFSET %s",
+        (*params, limit, offset)).fetchall()
+
+
+def count_all_worker_traces(conn, query: str = "", *, tool=None, status=None, exclude_run=None, run=None) -> int:
+    where, params = _where(query, tool, status, exclude_run, run)
+    return conn.execute(f"SELECT count(*) AS n {_FROM} WHERE {' AND '.join(where)}", params).fetchone()["n"]
+
+
+def tool_stats(conn, limit=50) -> list[dict]:
+    """도구별 호출·실패 집계(웹 '명령' 화면 상단 요약)."""
+    return conn.execute(
+        "SELECT tool, count(*) AS calls, count(*) FILTER (WHERE status='FAILED') AS failures, "
+        "max(started_at) AS last_at FROM tool_invocations GROUP BY tool ORDER BY calls DESC LIMIT %s",
+        (limit,)).fetchall()
 
 
 def get_run_trace(conn, run_id, limit=100):
