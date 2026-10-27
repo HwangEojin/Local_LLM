@@ -489,6 +489,7 @@ function BacklogTab({ runId, items, onChanged }: { runId: string; items: Backlog
   const [busyId, setBusyId] = useState<string | null>(null);
   const [onlyPending, setOnlyPending] = useState(false);
   const [retrying, setRetrying] = useState<BacklogItem | null>(null);
+  const [retryingAll, setRetryingAll] = useState(false);
 
   async function retry(reason: string) {
     if (!retrying) return;
@@ -501,6 +502,20 @@ function BacklogTab({ runId, items, onChanged }: { runId: string; items: Backlog
     } finally {
       setBusyId(null);
       setRetrying(null);
+      onChanged();
+    }
+  }
+
+  async function retryAll(reason: string) {
+    setBusyId("__all__");
+    try {
+      const r = await api.post<{ count: number }>(`/api/runs/${runId}/backlog/retry-all`, { reason });
+      toast("ok", `${r.count}건을 재시도 등록했습니다. 진단을 ‘재개’하면 다시 실행됩니다`);
+    } catch (e) {
+      toast("danger", e instanceof ApiError ? e.message : "일괄 재시도에 실패했습니다");
+    } finally {
+      setBusyId(null);
+      setRetryingAll(false);
       onChanged();
     }
   }
@@ -523,15 +538,21 @@ function BacklogTab({ runId, items, onChanged }: { runId: string; items: Backlog
   if (items.length === 0) return <Empty title="작업이 없습니다" hint="진단이 시작되면 AI가 계획한 작업이 쌓입니다." />;
 
   const pending = items.filter(needsApproval).length;
+  const retryable = items.filter((it) => !needsApproval(it) && (it.status === "FAILED" || it.status === "BLOCKED")).length;
   const rows = onlyPending ? items.filter(needsApproval) : items;
 
   return (
     <div>
-      <div className="mb-3 flex items-center gap-3 text-sm">
+      <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
         <label className="flex items-center gap-2">
           <input type="checkbox" className="accent-[var(--accent)]" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} />
           승인 대기만 보기 <span className="tabular text-warn">({pending})</span>
         </label>
+        {retryable > 0 && (
+          <button disabled={busyId !== null} onClick={() => setRetryingAll(true)} className={`${btnSecondary} ml-auto`}>
+            <RotateCw className="h-4 w-4" aria-hidden /> 막힌 작업 전체 재시도 ({retryable})
+          </button>
+        )}
       </div>
       {rows.length === 0 ? (
         <Empty title="승인을 기다리는 작업이 없습니다" />
@@ -582,6 +603,11 @@ function BacklogTab({ runId, items, onChanged }: { runId: string; items: Backlog
       {retrying && (
         <ConfirmDialog title="이 작업을 다시 시도할까요?" confirmLabel="재시도 등록" withReason busy={busyId !== null} onConfirm={retry} onCancel={() => setRetrying(null)}>
           <span className="font-mono">{retrying.kind}</span> 작업이 처음 상태로 돌아가 정책 판정부터 다시 받습니다. 사유가 감사 로그에 기록됩니다.
+        </ConfirmDialog>
+      )}
+      {retryingAll && (
+        <ConfirmDialog title={`실패·차단된 작업 ${retryable}건을 모두 다시 시도할까요?`} confirmLabel="전체 재시도 등록" withReason busy={busyId !== null} onConfirm={retryAll} onCancel={() => setRetryingAll(false)}>
+          승인 대기 중인 작업은 포함하지 않습니다(사람이 직접 승인/거부해야 함). 나머지는 각각 처음 상태로 돌아가 정책 판정부터 다시 받습니다. 사유가 감사 로그에 기록됩니다.
         </ConfirmDialog>
       )}
     </div>
