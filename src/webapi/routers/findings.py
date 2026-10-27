@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from audit.models import AuditError
@@ -12,6 +17,8 @@ from ..deps import current_user, get_cfg, get_conn
 router = APIRouter(prefix="/api/runs/{run_ref}/findings", tags=["findings"])
 
 _load_run = deps.load_run
+_EXPORT_COLS = ("title", "severity", "status", "verification", "asset_id", "rationale", "remediation",
+                "reviewed_by", "reviewed_at", "review_reason", "created_at")
 
 
 def _load_finding(conn, run_id, finding_ref: str) -> dict:
@@ -25,6 +32,37 @@ def _load_finding(conn, run_id, finding_ref: str) -> dict:
 def list_findings(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
     run = _load_run(conn, run_ref)
     return conn.execute("SELECT * FROM findings WHERE run_id=%s ORDER BY created_at DESC", (run["id"],)).fetchall()
+
+
+@router.get("/export")
+def export_findings(run_ref: str, format: str = "csv", status: str | None = None, conn=Depends(get_conn),
+                    user: str = Depends(current_user)):
+    """발견 사항을 CSV/JSON 으로 내려받는다(artex 의 findings export 참고). 새 진단 로직 없음 — findings 테이블을
+    그대로 읽어 모양만 바꾼다. status 를 안 주면 REJECTED 도 포함한다(여기서는 조회·보관 목적이라 §3.3 의
+    '기각된 후보를 발견처럼 싣지 않는다'는 Word 보고서 본문에만 적용 — CSV 는 기각 사유까지 감사용으로 남긴다)."""
+    if format not in ("csv", "json"):
+        raise HTTPException(422, "format 은 csv 또는 json 이어야 합니다")
+    run = _load_run(conn, run_ref)
+    where, params = ["run_id=%s"], [run["id"]]
+    if status:
+        where.append("status=%s")
+        params.append(status)
+    rows = conn.execute(f"SELECT * FROM findings WHERE {' AND '.join(where)} ORDER BY created_at",
+                        params).fetchall()
+    stamp = run["run_code"]
+    if format == "json":
+        body = json.dumps([{k: (str(r[k]) if r[k] is not None else None) for k in _EXPORT_COLS} for r in rows],
+                          ensure_ascii=False, indent=2)
+        return Response(body, media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="findings_{stamp}.json"'})
+    buf = io.StringIO()
+    buf.write("﻿")  # BOM: 엑셀이 한글 CSV 를 UTF-8 로 바로 열게
+    w = csv.writer(buf)
+    w.writerow(_EXPORT_COLS)
+    for r in rows:
+        w.writerow([r[c] for c in _EXPORT_COLS])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="findings_{stamp}.csv"'})
 
 
 @router.get("/{finding_ref}")

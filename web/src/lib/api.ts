@@ -48,6 +48,9 @@ export const api = {
 export const downloadUrl = (runId: string, evidenceId: string) =>
   `${apiBase()}/api/runs/${runId}/evidence/${evidenceId}/download`;
 
+export const findingsExportUrl = (runId: string, format: "csv" | "json") =>
+  `${apiBase()}/api/runs/${runId}/findings/export?format=${format}`;
+
 export type Run = {
   id: string;
   run_code: string; // 사람이 읽는 진단 ID. 예: BASE-20261023-01
