@@ -287,6 +287,9 @@ NOTIFY_CHANNEL = {
     "properties": {
         "name": _ID, "kind": {"enum": ["webhook"]}, "url": {"type": "string", "minLength": 1},
         "enabled": {"type": "boolean"},
+        # 이 심각도 이상인 finding 만 보낸다(안 적으면 전부). 없는 값(risk-N 등)은 걸러지지 않고 그냥 보내진다
+        # — 모르는 값을 조용히 삼키는 것보다 더 보내는 쪽이 "확정 알림을 놓친다"는 사고보다 낫다.
+        "min_severity": {"enum": ["critical", "high", "medium", "low", "info"]},
     },
 }
 
