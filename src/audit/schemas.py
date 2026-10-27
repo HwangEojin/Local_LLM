@@ -319,7 +319,7 @@ LLM_PROFILES = {
 INTERCEPT_RULE = {
     "type": "object", "additionalProperties": False, "required": ["name", "tool_pattern"],
     "properties": {"name": _ID, "tool_pattern": {"type": "string", "minLength": 1},
-                   "arg_pattern": {"type": "string", "minLength": 1}},
+                   "arg_pattern": {"type": "string", "minLength": 1}, "enabled": {"type": "boolean"}},
 }
 
 INTERCEPT_RULES = {

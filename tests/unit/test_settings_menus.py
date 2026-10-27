@@ -10,6 +10,7 @@ import re
 import shutil
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from audit.models import ConfigError
@@ -272,20 +273,67 @@ class SettingsMenusTest(unittest.TestCase):
         self.assertEqual(sorted(row["roles"]), ["reporter", "worker"])
         self.assertIn("IMPORT-MARKER", row["instructions"])
 
-        # 실제 LLM 호출 지점이 읽는 skills_for 를 run_id 와 함께 호출하면 skill_usage 에 기록된다(artex 의 skill 사용 집계 참고)
-        fake_run = self.conn.execute("SELECT id FROM runs LIMIT 1").fetchone()
-        if fake_run:
-            wb_prompts.skills_for(self.conn, "worker", fake_run["id"])
-            wb_prompts.skills_for(self.conn, "worker", fake_run["id"])  # 두 번째 호출은 같은 행의 calls 를 올림
-            usage = self.client.get(f"/api/admin/skills/{name}/usage").json()
-            self.assertEqual(len(usage["recent"]), 1)
-            self.assertEqual(usage["recent"][0]["calls"], 2)
-            self.assertEqual(usage["recent"][0]["role"], "worker")
+        # 실제 LLM 호출 지점이 읽는 skills_for 를 run_id 와 함께 호출하면 skill_usage 에 기록된다(artex 의 skill 사용 집계 참고).
+        # skill_usage 는 외래 키가 없으므로(마이그레이션 주석 참고) 진짜 실행을 만들 필요 없이 무작위 UUID 로 충분하다.
+        # 웹 API 는 이 테스트의 self.conn 과는 다른 커넥션을 쓰므로, 커밋해야 거기서 보인다.
+        run_id = uuid.uuid4()
+        wb_prompts.skills_for(self.conn, "worker", run_id)
+        wb_prompts.skills_for(self.conn, "worker", run_id)  # 두 번째 호출은 같은 행의 calls 를 올림
+        self.conn.commit()
+        usage = self.client.get(f"/api/admin/skills/{name}/usage").json()
+        self.assertEqual(len(usage["recent"]), 1)
+        self.assertEqual(usage["recent"][0]["calls"], 2)
+        self.assertEqual(usage["recent"][0]["role"], "worker")
+        self.assertIsNone(usage["recent"][0]["run_code"])  # 진짜 실행이 아니라 null 로 보임(LEFT JOIN)
 
         # roles 를 요청 바디에서 지정하면 frontmatter 의 roles 대신 그 값을 쓴다
         r2 = self.client.post("/api/admin/skills/import", json={"text": md, "roles": ["planner"], "confirm": True})
         row2 = next(s for s in r2.json()["skills"] if s["name"] == name)
         self.assertEqual(row2["roles"], ["planner"])
+
+    # ── 인터셉트 규칙 ──
+    def test_intercept_rule_crud_and_bad_regex_and_shared_protection(self):
+        name = "pytest-intercept"
+        put = lambda b: self.client.put(f"/api/admin/intercept-rules/{name}", json=b)  # noqa: E731
+        self.assertEqual(put({"tool_pattern": "^fs\\.", "confirm": False}).status_code, 400)
+        self.assertEqual(put({"tool_pattern": "(unclosed", "confirm": True}).status_code, 422)
+        self.assertEqual(put({"tool_pattern": "^fs\\.", "arg_pattern": "secret", "confirm": True}).status_code, 200)
+        rows = self.client.get("/api/admin/intercept-rules").json()
+        row = next(r for r in rows if r["name"] == name)
+        self.assertEqual(row["source"], "local")
+        self.assertTrue(row["enabled"])
+        # 공유 파일에 같은 이름이 있으면 웹에서 덮어쓰지 못한다
+        (self.home / "config" / "intercept_rules.json").write_text(
+            json.dumps({"rules": [{"name": "shared-guard", "tool_pattern": "^dangerous\\."}]}), encoding="utf-8")
+        self.assertEqual(put({"tool_pattern": "x", "confirm": True}, ).status_code, 200)  # 이름 다름, 영향 없음 확인용
+        self.assertEqual(self.client.put("/api/admin/intercept-rules/shared-guard",
+                                         json={"tool_pattern": "^harmless\\.", "confirm": True}).status_code, 400)
+        self.assertEqual(self.client.post("/api/admin/intercept-rules/shared-guard/delete",
+                                          json={"confirm": True}).status_code, 404)
+        self.assertEqual(self.client.post(f"/api/admin/intercept-rules/{name}/delete", json={}).status_code, 400)
+        self.assertEqual(self.client.post(f"/api/admin/intercept-rules/{name}/delete",
+                                          json={"confirm": True}).status_code, 200)
+
+    def test_intercept_test_match_reflects_saved_rules_live(self):
+        name = "pytest-intercept-match"
+        self.addCleanup(lambda: self.client.post(f"/api/admin/intercept-rules/{name}/delete", json={"confirm": True}))
+        before = self.client.post("/api/admin/intercept-rules/test-match",
+                                  json={"tool": "fs.read_file", "args": {"path": "/etc/shadow"}}).json()
+        self.assertFalse(before["matched"])
+        self.client.put(f"/api/admin/intercept-rules/{name}",
+                        json={"tool_pattern": "^fs\\.read_file$", "arg_pattern": "shadow", "confirm": True})
+        after = self.client.post("/api/admin/intercept-rules/test-match",
+                                 json={"tool": "fs.read_file", "args": {"path": "/etc/shadow"}}).json()
+        self.assertTrue(after["matched"])
+        self.assertEqual(after["rule"], name)
+        miss = self.client.post("/api/admin/intercept-rules/test-match",
+                                json={"tool": "fs.read_file", "args": {"path": "/etc/hosts"}}).json()
+        self.assertFalse(miss["matched"])
+        # policy.decide() 가 실제로 ALLOW_WITH_APPROVAL 로 바꾸는지까지 확인(화면의 '테스트'가 실제 동작과 같은지)
+        from diagnostic_workbench import config, policy
+        cfg = config.load(None)
+        rules = __import__("audit.config", fromlist=["load_intercept_rules"]).load_intercept_rules(cfg.home)
+        self.assertEqual(policy._intercepted(rules, "fs.read_file", {"path": "/etc/shadow"}), name)
 
 
 if __name__ == "__main__":

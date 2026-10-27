@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, Bot, ClipboardList, Sparkles, Cpu, Crosshair, FileText, Lock, OctagonAlert, Plug, Plus, Power, PowerOff, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Wrench } from "lucide-react";
+import { Bell, Bot, ClipboardList, ShieldAlert, Sparkles, Cpu, Crosshair, FileText, Lock, OctagonAlert, Plug, Plus, Power, PowerOff, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Wrench } from "lucide-react";
 
 import { AuthGate } from "@/components/AuthGate";
 import { Header } from "@/components/Header";
@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import { formatTime } from "@/lib/labels";
 import { AgentsSection } from "./AgentsSection";
+import { InterceptSection } from "./InterceptSection";
 import { McpAddCard } from "./McpAddCard";
 import { ApprovalsSection } from "./ApprovalsSection";
 import { NotificationsSection } from "./NotificationsSection";
@@ -29,7 +30,7 @@ import { errMsg, Field, ICON, NumField, ReadOnlyRow } from "./parts";
 import { SkillsSection } from "./SkillsSection";
 import { ToolsSection } from "./ToolsSection";
 
-type SectionKey = "scope" | "llm" | "agents" | "skills" | "mcp" | "tools" | "checklists" | "notifications" | "approvals" | "limits" | "kill-switch";
+type SectionKey = "scope" | "llm" | "agents" | "skills" | "mcp" | "tools" | "intercept" | "checklists" | "notifications" | "approvals" | "limits" | "kill-switch";
 // href 가 있는 항목은 구역이 아니라 다른 화면으로 가는 링크다(감사 로그).
 const SECTIONS: { key: SectionKey | "logs"; label: string; Icon: typeof Crosshair; href?: string }[] = [
   { key: "scope", label: "진단 대상", Icon: Crosshair },
@@ -38,6 +39,7 @@ const SECTIONS: { key: SectionKey | "logs"; label: string; Icon: typeof Crosshai
   { key: "skills", label: "스킬", Icon: Sparkles },
   { key: "mcp", label: "MCP", Icon: Plug },
   { key: "tools", label: "도구", Icon: Wrench },
+  { key: "intercept", label: "인터셉트", Icon: ShieldAlert },
   { key: "checklists", label: "체크리스트", Icon: ClipboardList },
   { key: "notifications", label: "알림", Icon: Bell },
   { key: "approvals", label: "승인", Icon: ShieldCheck },
@@ -748,6 +750,7 @@ function SettingsBody() {
           {section === "skills" && <SkillsSection />}
           {section === "mcp" && <McpSection part="mcp" />}
           {section === "tools" && <ToolsSection />}
+          {section === "intercept" && <InterceptSection />}
           {section === "checklists" && <McpSection part="checklists" />}
           {section === "notifications" && <NotificationsSection />}
           {section === "approvals" && <ApprovalsSection />}

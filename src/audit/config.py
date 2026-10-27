@@ -77,21 +77,29 @@ def load_llm_profiles(home: Path) -> dict[str, dict]:
 
 
 def load_intercept_rules(home: Path) -> list[dict]:
-    """config/intercept_rules.json(선택) -> [{"name", "tool_re", "arg_re"}]. 없으면 빈 목록(가로채기 없음).
+    """config/intercept_rules.json(공유, 선택) + intercept_rules.local.json(이 PC 전용, 웹 '인터셉트' 화면이 씀,
+    Git 제외) -> [{"name", "tool_re", "arg_re"}]. 같은 이름이면 이 PC 전용이 이긴다. enabled=false 인 규칙은
+    뺀다(기본 true). 둘 다 없으면 빈 목록(가로채기 없음).
 
     패턴은 여기서 미리 컴파일해 호출마다 다시 컴파일하지 않는다(policy.decide 가 자주 불림).
     """
-    path = home / "config" / "intercept_rules.json"
-    if not path.is_file():
-        return []
-    data = load_json(path, schemas.INTERCEPT_RULES)
+    merged: dict[str, dict] = {}
+    for name in ("intercept_rules.json", "intercept_rules.local.json"):
+        path = home / "config" / name
+        if not path.is_file():
+            continue
+        data = load_json(path, schemas.INTERCEPT_RULES)
+        for r in data["rules"]:
+            merged[r["name"]] = r
     rules = []
-    for r in data["rules"]:
+    for r in merged.values():
+        if not r.get("enabled", True):
+            continue
         try:
             tool_re = re.compile(r["tool_pattern"])
             arg_re = re.compile(r["arg_pattern"]) if r.get("arg_pattern") else None
         except re.error as e:
-            raise ConfigError(f"{path}: 규칙 '{r['name']}' 의 정규식이 잘못됨: {e}") from None
+            raise ConfigError(f"가로채기 규칙 '{r['name']}' 의 정규식이 잘못됨: {e}") from None
         rules.append({"name": r["name"], "tool_re": tool_re, "arg_re": arg_re})
     return rules
 
