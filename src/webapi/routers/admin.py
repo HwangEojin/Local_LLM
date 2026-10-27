@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import tempfile
@@ -16,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from audit import config as audit_config
@@ -310,6 +313,42 @@ def get_audit(conn=Depends(get_conn), user: str = Depends(current_user), event: 
     sql = ("SELECT a.id, a.ts, a.event, a.details, r.run_code FROM audit_events a LEFT JOIN runs r ON r.id = a.run_id "
            + ("WHERE " + " AND ".join(where) + " " if where else "") + "ORDER BY a.id DESC LIMIT %(limit)s")
     return conn.execute(sql, params).fetchall()
+
+
+@router.get("/audit/export")
+def export_audit(conn=Depends(get_conn), user: str = Depends(current_user), event: str | None = None,
+                 run: str | None = None, format: str = "csv", limit: int = 5000):
+    """감사 로그 내보내기. 새 진단 로직 없음 — get_audit 과 같은 필터로 audit_events 를 CSV/JSON 모양만 바꿔
+    돌려준다(적용 전/후 값이 담긴 details 는 JSON 문자열로 한 칸에 넣는다)."""
+    if format not in ("csv", "json"):
+        raise HTTPException(422, "format 은 csv 또는 json 이어야 합니다")
+    limit = max(1, min(limit, 20000))
+    where, params = [], {"limit": limit}
+    if event and event.strip():
+        where.append("a.event ILIKE %(event)s")
+        params["event"] = f"%{event.strip()}%"
+    if run and run.strip():
+        try:
+            params["run"] = wb_db.resolve_run(conn, run)["id"]
+        except AuditError as e:
+            raise HTTPException(404, str(e)) from None
+        where.append("a.run_id = %(run)s")
+    sql = ("SELECT a.id, a.ts, a.event, a.details, r.run_code FROM audit_events a LEFT JOIN runs r ON r.id = a.run_id "
+           + ("WHERE " + " AND ".join(where) + " " if where else "") + "ORDER BY a.id DESC LIMIT %(limit)s")
+    rows = conn.execute(sql, params).fetchall()
+    if format == "json":
+        body = json.dumps([{**r, "id": r["id"], "ts": str(r["ts"])} for r in rows], ensure_ascii=False,
+                          indent=2, default=str)
+        return Response(body, media_type="application/json",
+                        headers={"Content-Disposition": 'attachment; filename="audit_log.json"'})
+    buf = io.StringIO()
+    buf.write("﻿")
+    w = csv.writer(buf)
+    w.writerow(["id", "ts", "event", "run_code", "details"])
+    for r in rows:
+        w.writerow([r["id"], r["ts"], r["event"], r["run_code"] or "", json.dumps(r["details"], ensure_ascii=False, default=str)])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="audit_log.csv"'})
 
 
 # ── 에이전트(역할별 프롬프트) ──

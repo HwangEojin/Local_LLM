@@ -167,6 +167,26 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(runs.target_abbr("---"), "RUN")
         self.assertTrue(re.fullmatch(r"[A-Z0-9]+", runs.target_abbr("가나다 api")))
 
+    def test_audit_export_csv_and_json(self):
+        import csv
+        import io
+        conn = db.connect(config.load(None).dsn)
+        self.addCleanup(conn.close)
+        db.audit(conn, None, "pytest_export_marker", {"from": "test_audit_export_csv_and_json"})
+        conn.commit()
+        r = self.client.get("/api/admin/audit/export", params={"event": "pytest_export_marker", "format": "json"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("application/json", r.headers["content-type"])
+        rows = r.json()
+        self.assertTrue(rows)
+        self.assertTrue(all("pytest_export_marker" in row["event"] for row in rows))
+        r2 = self.client.get("/api/admin/audit/export")  # 기본 csv, 필터 없음
+        self.assertEqual(r2.status_code, 200)
+        self.assertIn("text/csv", r2.headers["content-type"])
+        parsed = list(csv.reader(io.StringIO(r2.text.lstrip("﻿"))))  # BOM: 엑셀이 한글 CSV 를 바로 읽게
+        self.assertEqual(parsed[0], ["id", "ts", "event", "run_code", "details"])
+        self.assertEqual(self.client.get("/api/admin/audit/export", params={"format": "xml"}).status_code, 422)
+
 
 if __name__ == "__main__":
     unittest.main()

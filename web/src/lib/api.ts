@@ -404,3 +404,10 @@ export type InterceptRule = {
   enabled: boolean;
   source: "shared" | "local";
 };
+
+export const auditExportUrl = (event: string, run: string, format: "csv" | "json") => {
+  const p = new URLSearchParams({ format });
+  if (event.trim()) p.set("event", event.trim());
+  if (run.trim()) p.set("run", run.trim());
+  return `${apiBase()}/api/admin/audit/export?${p.toString()}`;
+};
