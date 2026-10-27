@@ -393,3 +393,11 @@ export type DiscoveredTool = {
   suggested_scope: Record<string, "path" | "host" | "url">;
 };
 export type McpDiscovery = { ok: true; server: string; tools: DiscoveredTool[] } | { ok: false; error: string };
+
+export type InterceptRule = {
+  name: string;
+  tool_pattern: string;
+  arg_pattern?: string;
+  enabled: boolean;
+  source: "shared" | "local";
+};
