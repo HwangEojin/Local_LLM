@@ -2,13 +2,14 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, Download, Pause, Play, RefreshCw, Search } from "lucide-react";
 
 import { AuthGate } from "@/components/AuthGate";
 import { Header } from "@/components/Header";
 import { Banner, btnSecondary, Card, Empty, inputCls, SkeletonRows } from "@/components/ui";
-import { api, AuditEvent } from "@/lib/api";
+import { api, auditExportUrl, AuditEvent } from "@/lib/api";
 import { formatTime } from "@/lib/labels";
+import { usePolling } from "@/lib/usePolling";
 
 const PAGE = 100;
 const ICON = "h-4 w-4 shrink-0";
@@ -45,6 +46,7 @@ function AuditBody() {
   const [applied, setApplied] = useState({ event: "", run: "" });
   const [more, setMore] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
+  const [live, setLive] = useState(false);
 
   const query = useCallback(
     (before?: number) => {
@@ -67,6 +69,7 @@ function AuditBody() {
       .catch((e) => setError(e.message));
   }, [query]);
   useEffect(load, [load]);
+  usePolling(load, 4000, live); // 실시간: 맨 위부터 다시 불러오므로 "더 보기"로 쌓은 다음 페이지는 접힌다
 
   async function loadMore() {
     if (!items?.length) return;
@@ -87,11 +90,23 @@ function AuditBody() {
 
   return (
     <main className="mx-auto w-full max-w-6xl p-6">
-      <div className="mb-1 flex items-center justify-between">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-lg font-semibold">감사 로그</h1>
-        <button onClick={load} className={btnSecondary}>
-          <RefreshCw className={ICON} aria-hidden /> 새로고침
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setLive((v) => !v)} className={btnSecondary} aria-pressed={live}>
+            {live ? <Pause className={ICON} aria-hidden /> : <Play className={ICON} aria-hidden />}
+            {live ? "실시간 중지" : "실시간"}
+          </button>
+          <button onClick={load} className={btnSecondary}>
+            <RefreshCw className={ICON} aria-hidden /> 새로고침
+          </button>
+          <a href={auditExportUrl(applied.event, applied.run, "csv")} className={btnSecondary} download>
+            <Download className={ICON} aria-hidden /> CSV
+          </a>
+          <a href={auditExportUrl(applied.event, applied.run, "json")} className={btnSecondary} download>
+            <Download className={ICON} aria-hidden /> JSON
+          </a>
+        </div>
       </div>
       <p className="mb-5 text-sm text-muted">진단 생성, 승인, 판정, 설정 변경 같은 모든 기록입니다. 이 기록은 수정하거나 삭제할 수 없습니다.</p>
 
