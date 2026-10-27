@@ -246,6 +246,47 @@ class SettingsMenusTest(unittest.TestCase):
         self.assertEqual(self.client.post(f"/api/admin/skills/{name}/delete", json={"confirm": True}).status_code, 200)
         self.assertEqual(self.client.post(f"/api/admin/skills/{name}/delete", json={"confirm": True}).status_code, 404)
 
+    def test_skill_import_parses_frontmatter_and_tracks_usage(self):
+        name = "pytest-import-skill"
+        self.addCleanup(lambda: [self.conn.execute("DELETE FROM agent_skills WHERE name=%s", (name,)),
+                                 self.conn.execute("DELETE FROM skill_usage WHERE skill=%s", (name,)),
+                                 self.conn.commit()])
+        md = (
+            "---\n"
+            f"name: {name}\n"
+            "description: 테스트 가져오기\n"
+            "license: MIT\n"
+            "roles:\n"
+            "  - worker\n"
+            "  - reporter\n"
+            "---\n"
+            "IMPORT-MARKER 항상 증거 id 를 인용할 것\n"
+        )
+        self.assertEqual(self.client.post("/api/admin/skills/import", json={"text": md, "confirm": False}).status_code, 400)
+        self.assertEqual(self.client.post("/api/admin/skills/import", json={"text": "no frontmatter here", "confirm": True}).status_code, 422)
+        r = self.client.post("/api/admin/skills/import", json={"text": md, "confirm": True})
+        self.assertEqual(r.status_code, 200)
+        row = next(s for s in r.json()["skills"] if s["name"] == name)
+        self.assertEqual(row["license"], "MIT")
+        self.assertEqual(row["source"], "import")
+        self.assertEqual(sorted(row["roles"]), ["reporter", "worker"])
+        self.assertIn("IMPORT-MARKER", row["instructions"])
+
+        # 실제 LLM 호출 지점이 읽는 skills_for 를 run_id 와 함께 호출하면 skill_usage 에 기록된다(artex 의 skill 사용 집계 참고)
+        fake_run = self.conn.execute("SELECT id FROM runs LIMIT 1").fetchone()
+        if fake_run:
+            wb_prompts.skills_for(self.conn, "worker", fake_run["id"])
+            wb_prompts.skills_for(self.conn, "worker", fake_run["id"])  # 두 번째 호출은 같은 행의 calls 를 올림
+            usage = self.client.get(f"/api/admin/skills/{name}/usage").json()
+            self.assertEqual(len(usage["recent"]), 1)
+            self.assertEqual(usage["recent"][0]["calls"], 2)
+            self.assertEqual(usage["recent"][0]["role"], "worker")
+
+        # roles 를 요청 바디에서 지정하면 frontmatter 의 roles 대신 그 값을 쓴다
+        r2 = self.client.post("/api/admin/skills/import", json={"text": md, "roles": ["planner"], "confirm": True})
+        row2 = next(s for s in r2.json()["skills"] if s["name"] == name)
+        self.assertEqual(row2["roles"], ["planner"])
+
 
 if __name__ == "__main__":
     unittest.main()

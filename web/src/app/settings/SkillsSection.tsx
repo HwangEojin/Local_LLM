@@ -1,12 +1,21 @@
 // 스킬 구역: 역할 프롬프트 뒤에 덧붙는 운영자 지침 묶음. 스킬은 LLM 이 일하는 방식을 다듬는 문구일 뿐이라 도구·권한을
 // 늘리지 못하고(정책 검사는 서버가 매 호출 독립적으로 한다) 위의 규칙을 덮어쓰지 못한다고 프롬프트에도 명시돼 있다.
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Save, Trash2 } from "lucide-react";
+import { FileUp, Plus, Save, Trash2 } from "lucide-react";
 
-import { Banner, btnDanger, btnPrimary, Card, ConfirmDialog, inputCls, SkeletonRows, useToast } from "@/components/ui";
-import { api, Skill, SkillsResponse } from "@/lib/api";
+import { Banner, btnDanger, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, SkeletonRows, useToast } from "@/components/ui";
+import { api, Skill, SkillsResponse, SkillUsage } from "@/lib/api";
 import { AGENT_ROLE_LABEL, formatTime } from "@/lib/labels";
 import { errMsg, Field, ICON } from "./parts";
+
+const SKILL_MD_EXAMPLE = `---
+name: evidence-first
+description: 증거를 먼저 확보하고 나서 설명한다
+license: MIT
+roles:
+  - worker
+---
+항상 실제 증거(evidence id)를 먼저 인용한 뒤에 설명할 것. 추측은 "추정"이라고 밝힐 것.`;
 
 type Draft = { name: string; description: string; instructions: string; roles: string[]; enabled: boolean };
 const NAME_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
@@ -47,6 +56,107 @@ function SkillEditor({ draft, setDraft, roles, isNew }: { draft: Draft; setDraft
   );
 }
 
+function UsagePanel({ name }: { name: string }) {
+  const [usage, setUsage] = useState<SkillUsage | null>(null);
+  useEffect(() => {
+    api.get<SkillUsage>(`/api/admin/skills/${encodeURIComponent(name)}/usage`).then(setUsage).catch(() => setUsage({ recent: [], by_role: [] }));
+  }, [name]);
+  if (!usage) return <p className="text-xs text-faint">불러오는 중…</p>;
+  if (usage.recent.length === 0) return <p className="text-xs text-faint">아직 어떤 진단에도 쓰이지 않았습니다.</p>;
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex flex-wrap gap-3 text-muted">
+        {usage.by_role.map((r) => (
+          <span key={r.role}>{AGENT_ROLE_LABEL[r.role] ?? r.role}: 진단 {r.runs}건 · 호출 {r.calls}회</span>
+        ))}
+      </div>
+      <table className="w-full">
+        <thead className="text-left text-muted">
+          <tr>
+            <th className="py-1 font-medium">진단</th>
+            <th className="py-1 font-medium">역할</th>
+            <th className="py-1 font-medium">호출</th>
+            <th className="py-1 font-medium">최근 사용</th>
+          </tr>
+        </thead>
+        <tbody>
+          {usage.recent.map((u) => (
+            <tr key={`${u.run_id}-${u.role}`} className="border-t border-line">
+              <td className="py-1 font-mono">{u.run_code ?? "(삭제된 진단)"}</td>
+              <td className="py-1">{AGENT_ROLE_LABEL[u.role] ?? u.role}</td>
+              <td className="py-1 tabular">{u.calls}</td>
+              <td className="py-1">{formatTime(u.last_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ImportSkillCard({ roles, onImported }: { roles: string[]; onImported: (data: SkillsResponse) => void }) {
+  const toast = useToast();
+  const [text, setText] = useState("");
+  const [overrideRoles, setOverrideRoles] = useState<string[] | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await api.post<SkillsResponse>("/api/admin/skills/import", { text, roles: overrideRoles, confirm: true });
+      onImported(data);
+      setText("");
+      setOverrideRoles(null);
+      toast("ok", "SKILL.md 를 가져왔습니다");
+    } catch (e) {
+      setError(errMsg(e, "가져오기에 실패했습니다"));
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  }
+
+  const toggleRole = (r: string) =>
+    setOverrideRoles((cur) => {
+      const base = cur ?? [];
+      return base.includes(r) ? base.filter((x) => x !== r) : [...base, r];
+    });
+
+  return (
+    <Card className="space-y-3 p-4">
+      <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <FileUp className={ICON} aria-hidden /> SKILL.md 가져오기 <span className="text-xs font-normal text-faint">agentskills.io 형식 · ZIP 은 지원 안 함</span>
+      </h2>
+      {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+      <Field label="SKILL.md 내용" hint="--- 로 시작하는 frontmatter(name/description/license/roles)와 본문(지침)을 그대로 붙여 넣으세요">
+        <textarea rows={8} className={`${inputCls} font-mono text-xs`} value={text} placeholder={SKILL_MD_EXAMPLE} onChange={(e) => setText(e.target.value)} />
+      </Field>
+      <fieldset>
+        <legend className="mb-1 text-sm font-medium text-muted">붙일 역할 (비우면 SKILL.md 의 roles 를 씀)</legend>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+          {roles.map((r) => (
+            <label key={r} className="flex items-center gap-1.5">
+              <input type="checkbox" className="accent-[var(--accent)]" checked={!!overrideRoles?.includes(r)} onChange={() => toggleRole(r)} />
+              {AGENT_ROLE_LABEL[r] ?? r}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <button disabled={busy || !text.trim()} className={btnSecondary} onClick={() => setConfirming(true)}>
+        <FileUp className={ICON} aria-hidden /> 가져오기
+      </button>
+      {confirming && (
+        <ConfirmDialog title="SKILL.md 를 가져올까요?" confirmLabel="가져오기" busy={busy} onConfirm={run} onCancel={() => setConfirming(false)}>
+          같은 이름의 스킬이 있으면 덮어씁니다. scripts/ 같은 실행 파일은 가져오지 않습니다(텍스트 지침만).
+        </ConfirmDialog>
+      )}
+    </Card>
+  );
+}
+
 export function SkillsSection() {
   const toast = useToast();
   const [data, setData] = useState<SkillsResponse | null>(null);
@@ -56,6 +166,7 @@ export function SkillsSection() {
   const [del, setDel] = useState<string | null>(null);
   const [saving, setSaving] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showUsage, setShowUsage] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api.get<SkillsResponse>("/api/admin/skills").then(setData).catch((e) => setError(e.message));
@@ -103,6 +214,7 @@ export function SkillsSection() {
       <p className="text-xs text-faint">
         스킬은 선택한 역할의 시스템 프롬프트 뒤에 덧붙는 지침입니다(역할당 합계 약 6,000자까지, 이름순). 도구·권한을 추가하지 못하고 정책 검사는 그대로 적용됩니다. 저장 후 새로 하는 LLM 호출부터 적용됩니다.
       </p>
+      <ImportSkillCard roles={data.roles} onImported={(d) => { setData(d); toast("ok", "SKILL.md 를 가져왔습니다"); }} />
       {data.skills.map((s) => {
         const d = edits[s.name];
         const dirty = d && JSON.stringify(d) !== JSON.stringify(fromSkill(s));
@@ -112,6 +224,7 @@ export function SkillsSection() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-mono text-sm font-medium">{s.name}</span>
                 <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${s.enabled ? "bg-ok/15 text-ok" : "bg-raised text-muted"}`}>{s.enabled ? "사용" : "꺼짐"}</span>
+                {s.source === "import" && <span className="rounded-full bg-raised px-2 py-0.5 text-xs text-muted">가져옴{s.license ? ` · ${s.license}` : ""}</span>}
                 {s.roles.map((r) => (
                   <span key={r} className="rounded-full bg-raised px-2 py-0.5 text-xs text-muted">{AGENT_ROLE_LABEL[r] ?? r}</span>
                 ))}
@@ -136,7 +249,13 @@ export function SkillsSection() {
               <>
                 {s.description && <p className="text-xs text-muted">{s.description}</p>}
                 <p className="line-clamp-3 whitespace-pre-wrap text-xs">{s.instructions}</p>
-                <button className="text-xs text-accent hover:underline" onClick={() => setEdits((m) => ({ ...m, [s.name]: fromSkill(s) }))}>편집</button>
+                <div className="flex gap-3">
+                  <button className="text-xs text-accent hover:underline" onClick={() => setEdits((m) => ({ ...m, [s.name]: fromSkill(s) }))}>편집</button>
+                  <button className="text-xs text-accent hover:underline" onClick={() => setShowUsage(showUsage === s.name ? null : s.name)}>
+                    {showUsage === s.name ? "사용 기록 접기" : "사용 기록 보기"}
+                  </button>
+                </div>
+                {showUsage === s.name && <UsagePanel name={s.name} />}
               </>
             )}
           </Card>

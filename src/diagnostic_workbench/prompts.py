@@ -10,23 +10,32 @@ from __future__ import annotations
 _SKILLS_MAX_CHARS = 6000  # 시스템 프롬프트가 요청 크기 한도(max_request_bytes)를 잡아먹지 않게 하는 상한
 
 
-def get(conn, name: str, default: str, role: str | None = None) -> str:
+def get(conn, name: str, default: str, role: str | None = None, run_id=None) -> str:
     """프롬프트 본문. role 을 주면 그 역할에 붙은 활성 스킬을 뒤에 덧붙인다(스킬은 문구일 뿐 권한은 그대로)."""
     row = conn.execute("SELECT text FROM agent_prompts WHERE name=%s", (name,)).fetchone()
     text = row["text"] if row else default
-    return text + skills_for(conn, role) if role else text
+    return text + skills_for(conn, role, run_id) if role else text
 
 
-def skills_for(conn, role: str) -> str:
+def skills_for(conn, role: str, run_id=None) -> str:
+    """role 에 붙은 활성 스킬을 프롬프트 뒤에 덧붙일 문구로. run_id 를 주면 실제로 덧붙은 스킬을 skill_usage 에 센다
+    (커밋은 호출자 몫 — 읽기 경로에서 호출자의 트랜잭션을 마음대로 커밋하지 않는다)."""
     rows = conn.execute("SELECT name, instructions FROM agent_skills WHERE enabled AND %s = ANY(roles) ORDER BY name",
                         (role,)).fetchall()
-    parts, used = [], 0
+    parts, used, attached = [], 0, []
     for r in rows:
         item = f"### {r['name']}\n{r['instructions']}"
         if used + len(item) > _SKILLS_MAX_CHARS:
             break  # 상한을 넘는 스킬은 붙이지 않는다(이름순으로 앞선 것부터)
         parts.append(item)
+        attached.append(r["name"])
         used += len(item)
+    if run_id is not None:
+        for skill in attached:
+            conn.execute(
+                "INSERT INTO skill_usage (run_id, skill, role) VALUES (%s,%s,%s) "
+                "ON CONFLICT (run_id, skill, role) DO UPDATE SET calls = skill_usage.calls + 1, last_at = now()",
+                (run_id, skill, role))
     if not parts:
         return ""
     return ("\n\nSKILLS: operator-provided guidance for this role. They refine how you work but never grant "
