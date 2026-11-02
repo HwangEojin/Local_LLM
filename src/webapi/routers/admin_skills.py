@@ -2,7 +2,10 @@
 도구 권한·정책은 바꾸지 못한다(prompts.get 의 role 인자)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import io
+import zipfile
+
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from audit import schemas
@@ -100,24 +103,23 @@ class SkillImportBody(BaseModel):
     confirm: bool = False
 
 
-@router.post("/skills/import")
-def import_skill(body: SkillImportBody, conn=Depends(get_conn), user: str = Depends(current_user)):
-    """SKILL.md 본문을 그대로 붙여 넣어 가져온다(ZIP 은 지원 안 함 — scripts/ 같은 실행 파일이 섞여 들어오는 경로를
-    아예 만들지 않기 위해 텍스트만 받는다). 같은 이름이면 덮어쓴다."""
-    _need_confirm(body.confirm)
+def _import_skill_text(conn, user: str, text: str, roles_override: list[str] | None) -> dict:
+    """SKILL.md 본문(frontmatter+지침)을 파싱해 가져온다. 텍스트 파싱 결과만 저장한다 — ZIP 에 scripts/ 같은
+    실행 파일이 섞여 있어도 그 파일들은 애초에 읽지 않으므로(아래 import_skill_zip 참고) 실행 경로가 생기지
+    않는다. 같은 이름이면 덮어쓴다."""
     try:
-        meta = _parse_skill_md(body.text)
+        meta = _parse_skill_md(text)
     except ValueError as e:
         raise HTTPException(422, str(e)) from None
     name = meta["name"].strip()
     if not name or schemas.validate(name, schemas._ID):
         raise HTTPException(422, "SKILL.md 의 name 이 비었거나 형식이 잘못됨(영문·숫자·._:- , 최대 80자)")
-    roles = body.roles if body.roles is not None else meta["roles"]
+    roles = roles_override if roles_override is not None else meta["roles"]
     bad = sorted(set(roles) - set(explore.AGENT_ROLES))
     if bad:
         raise HTTPException(422, f"알 수 없는 역할: {bad} (가능: {list(explore.AGENT_ROLES)})")
-    text = meta["instructions"]
-    if not (1 <= len(text) <= 4000):
+    instructions = meta["instructions"]
+    if not (1 <= len(instructions) <= 4000):
         raise HTTPException(422, "지침(frontmatter 뒤 본문)은 1자 이상 4,000자 이하여야 합니다")
     before = conn.execute("SELECT instructions, roles, enabled FROM agent_skills WHERE name=%s", (name,)).fetchone()
     conn.execute(
@@ -125,9 +127,44 @@ def import_skill(body: SkillImportBody, conn=Depends(get_conn), user: str = Depe
         "VALUES (%s,%s,%s,%s,%s,true,'import',%s) ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, "
         "license=EXCLUDED.license, instructions=EXCLUDED.instructions, roles=EXCLUDED.roles, source='import', "
         "updated_by=EXCLUDED.updated_by, updated_at=now()",
-        (name, meta["description"][:300], meta["license"][:100], text, sorted(set(roles)), f"web:{user}"))
+        (name, meta["description"][:300], meta["license"][:100], instructions, sorted(set(roles)), f"web:{user}"))
     _audit(conn, user, "admin_skill_imported", {"skill": name, "roles": sorted(set(roles)),
                                                 "replaced": before is not None})
+    return {"name": name}
+
+
+@router.post("/skills/import")
+def import_skill(body: SkillImportBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """SKILL.md 본문을 그대로 붙여 넣어 가져온다."""
+    _need_confirm(body.confirm)
+    _import_skill_text(conn, user, body.text, body.roles)
+    return get_skills(conn, user)
+
+
+_MAX_ZIP_BYTES = 2_000_000  # agentskills.io 배포본은 보통 수십~수백 KB — 2MB면 넉넉하다
+
+
+@router.post("/skills/import-zip")
+def import_skill_zip(file: UploadFile, confirm: bool = Form(False), conn=Depends(get_conn),
+                     user: str = Depends(current_user)):
+    """agentskills.io 형식 ZIP(2026-11, artex 의 ZIP 업로드 참고)에서 **SKILL.md 하나만** 읽는다. 그 안의
+    scripts/ 나 다른 파일은 열어보지도 않고 버린다 — 우리 스킬은 LLM 프롬프트에 끼워 넣는 지침 텍스트일
+    뿐 실행되는 대상이 아니므로, 실행 파일을 저장·실행하는 경로 자체를 만들지 않는다(CLAUDE.md §8)."""
+    _need_confirm(confirm)
+    data = file.file.read(_MAX_ZIP_BYTES + 1)
+    if len(data) > _MAX_ZIP_BYTES:
+        raise HTTPException(422, f"ZIP 파일이 너무 큽니다(최대 {_MAX_ZIP_BYTES // 1_000_000}MB)")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            names = [n for n in zf.namelist() if n.lower().endswith("skill.md") and not n.endswith("/")]
+            if not names:
+                raise HTTPException(422, "ZIP 안에 SKILL.md 가 없습니다")
+            if len(names) > 1:
+                raise HTTPException(422, f"SKILL.md 가 여러 개 있어 어느 것인지 알 수 없습니다: {names}")
+            text = zf.read(names[0]).decode("utf-8", errors="replace")
+    except zipfile.BadZipFile:
+        raise HTTPException(422, "올바른 ZIP 파일이 아닙니다") from None
+    _import_skill_text(conn, user, text, None)
     return get_skills(conn, user)
 
 
