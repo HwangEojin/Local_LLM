@@ -132,7 +132,10 @@ class AdminApiTest(unittest.TestCase):
 
     # ---- MCP
     def test_mcp_toggle_only_changes_enabled(self):
-        name = next(m["name"] for m in self.client.get("/api/admin/mcp").json() if not m["enabled"])
+        # 이 PC 의 실제 config/mcp_servers.local.json(운영자가 직접 켜 둔 MCP 서버들)에 따라 전부 enabled=true
+        # 일 수도 있으므로, 환경에 기대지 않고 직접 하나를 꺼서 전제를 만든다.
+        name = next(iter(self.client.get("/api/admin/mcp").json()))["name"]
+        self.client.put(f"/api/admin/mcp/{name}", json={"enabled": False, "confirm": True})
         r = self.client.put(f"/api/admin/mcp/{name}", json={"enabled": True})
         self.assertEqual(r.status_code, 400)
         r = self.client.put(f"/api/admin/mcp/{name}", json={"enabled": True, "confirm": True})
