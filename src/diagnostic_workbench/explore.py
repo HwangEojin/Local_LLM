@@ -117,11 +117,15 @@ class _ModelLog:
     def count_model_calls(self, run_id) -> int:
         return self.conn.execute("SELECT count(*) AS n FROM model_calls WHERE run_id=%s", (run_id,)).fetchone()["n"]
 
-    def record_model_call(self, run_id, model, purpose, pt, ct, source, duration_ms, ok, error=None):
+    def record_model_call(self, run_id, model, purpose, pt, ct, source, duration_ms, ok, error=None,
+                          request_text=None, response_text=None):
+        # artex llmrec 참고(원문 호출 기록, 2026-11) — 비밀값은 저장 전에 가린다(CLAUDE.md §8).
+        req = mask_secrets(request_text)[:8000] if request_text else None
+        resp = mask_secrets(response_text)[:8000] if response_text else None
         self.conn.execute(
             "INSERT INTO model_calls (run_id, model, purpose, prompt_tokens, completion_tokens, token_source, "
-            "duration_ms, ok, error) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (run_id, model, purpose, pt, ct, source, duration_ms, bool(ok), error))
+            "duration_ms, ok, error, request_text, response_text) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (run_id, model, purpose, pt, ct, source, duration_ms, bool(ok), error, req, resp))
         self.conn.commit()
 
 

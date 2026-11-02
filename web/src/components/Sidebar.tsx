@@ -12,6 +12,7 @@ import {
   LogOut,
   OctagonAlert,
   Plus,
+  MessageSquareText,
   Radar,
   ScrollText,
   Settings,
@@ -87,6 +88,7 @@ const WORK_ITEMS: NavItem[] = [
   { href: "/runs", label: "실행", Icon: List, active: (p) => p === "/runs" || (p.startsWith("/runs/") && p !== "/runs/new") },
   { href: "/findings", label: "발견 사항", Icon: ShieldAlert, active: (p) => p === "/findings" },
   { href: "/traffic", label: "트래픽", Icon: Radar, active: (p) => p === "/traffic" },
+  { href: "/llm-records", label: "LLM 호출 기록", Icon: MessageSquareText, active: (p) => p === "/llm-records" },
   { href: "/commands", label: "명령 이력", Icon: Terminal, active: (p) => p === "/commands" },
 ];
 

@@ -92,3 +92,15 @@ A군(정책)과 B군(IA)은 서로 의존성이 없어 **병렬 진행 가능**.
 - `runs.autonomy` 의미 재정의 — **채택 안 함으로 확정**(위 상단 메모 참고).
 - A2 실패 귀속 저장 위치 — **해결**: `tool_invocations.outcome_class` 신규 컬럼(마이그레이션 0019)으로 결정, 구현 완료.
 - **Planner 자동 전략 전환 — 추가 구현(2026-11-02)**: PAST_FAILURES로 LLM에 신호만 주는 것만으로는 프롬프트를 무시하고 같은 조합을 또 제안할 수 있어, `worker.blocked_streak()`(같은 실행·자산·도구 조합의 최근 연속 blocked 횟수)를 추가하고 `explore.propose()`의 제안 승인 체인에 연결 — 연속 2회 이상 차단된 조합은 Python이 직접 거부(기존 REJECTED 탐색 노드 기록 경로 재사용, 새 로직 최소화). 테스트 4건 추가(`test_blocked_streak.py`).
+
+## E. MCP/스킬 artex 동일 적용 + 미확인 모듈 재조사(2026-11-02)
+
+재점검(별도 fork 조사)으로 artex `web/src/app/(main)/system/mcp/`·`system/skills/`의 실제 레이아웃·로직과, 이전에 "미확인"으로 남겼던 `llmpool/`·`llmrec/`·`selfupdate/`·`mcphttp/`를 확인했다.
+
+- **MCP stdio 지원 — artex와 동일하게 적용(사용자 확정)**: artex의 stdio(웹에서 받은 command를 이 PC에서 실행) 로직은 애초 CLAUDE.md §8과 충돌한다고 보고했으나, 사용자가 "그대로 옮기기"를 선택해 적용했다. `admin_mcp.py`에 `transport=stdio` 지원 추가, 단 **artex엔 없는 안전장치**로 `confirm_stdio` 별도 확인을 항상 요구하고 env는 raw 값이 아니라 호스트 환경변수 이름(`env_from`)으로만 받는다. 등록 이후의 실제 도구 '호출'은 stdio든 sse든 기존과 동일하게 `policy.decide()`를 통과한다 — 이번 변경은 '누가 서버를 등록할 수 있는지'만 바꿨다. 프론트(`McpAddCard.tsx`)에 전송 방식 선택 UI 추가. 테스트 2건 추가.
+- **스킬 ZIP 업로드 — artex와 동일하게 적용**: `admin_skills.py`에 `POST /api/admin/skills/import-zip` 추가. ZIP 안에서 **SKILL.md 하나만** 읽고 scripts/ 등 다른 파일은 열어보지도 않는다(우리 스킬은 LLM 프롬프트 지침일 뿐 실행 대상이 아니므로 애초에 실행 경로가 없음 — 이 설계는 유지). 프론트(`SkillsSection.tsx`)에 파일 업로드 입력 추가. 테스트 1건(scripts/run.sh가 무시되는지 포함) 추가.
+- **화면 디자인 — 레이아웃만 참고, 색상은 다크 유지(사용자 확정)**: artex는 카드그리드+Sheet 드로어(MCP), 파일트리+상세(스킬)에 라이트 테마다. 이번엔 기능(stdio, ZIP)만 이식하고 전체 레이아웃 재구성은 하지 않았다 — 시간·비용 대비 가치가 낮다고 판단해 범위에서 뺌(필요하면 별도 작업).
+- **`llmpool/`(클라우드 LLM 장애조치 체인)** — 미채택. 기존 세션 판단("크레딧 소진 대응용이라 제외")이 코드로 재확인됨, 로컬 Ollama 중심 구조라 불필요.
+- **`llmrec/`(LLM 호출 원문 기록) — 채택, 구현 완료**: `model_calls.request_text`/`response_text`(마이그레이션 0020) 추가, 저장 전 `mask_secrets`로 마스킹(explore.py의 `_ModelLog.record_model_call`, `audit/local_model.py`, `audit/claude_cli_model.py` 세 곳 모두 연결). `GET /api/llm-records` + `/llm-records` 전역 페이지(사이드바 "작업" 그룹에 추가). 이전 조사에서 찾은 "LLM 호출 기록 전역 화면 없음" 갭을 메움. 테스트 1건 추가.
+- **`selfupdate/`(바이너리 자가 업데이트)** — 미채택. Python 소스 체크아웃 배포라 전제 자체가 안 맞음.
+- **`mcphttp/`(SSE/HTTP MCP 전송 자체 구현)** — 미채택, 이미 더 나은 대안 보유. 우리는 공식 Python MCP SDK(`audit/mcp_client.py`)가 stdio+sse 전송을 이미 지원.

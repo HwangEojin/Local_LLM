@@ -98,12 +98,13 @@ class OllamaClient:
             if self.storage and self.storage.count_model_calls(self.run_id) >= self.cfg["max_calls_per_run"]:
                 raise LLMError("max_calls_per_run 한도에 도달함")
             t0 = time.monotonic()
+            request_text = json.dumps(messages, ensure_ascii=False)
             try:
                 resp = self._request("/api/chat", {"model": self.model, "messages": messages,
                                                    "stream": False, "format": schema,
                                                    "options": {"temperature": 0}})
             except LLMError as e:
-                self._record(purpose, {}, t0, False, str(e))
+                self._record(purpose, {}, t0, False, str(e), request_text)
                 raise
             try:
                 parsed = json.loads(resp["message"]["content"])
@@ -112,20 +113,22 @@ class OllamaClient:
                 errs = [f"모델 출력을 해석할 수 없음: {e}"]
             if errs:
                 last = "; ".join(errs)[:500]
-                self._record(purpose, resp, t0, False, f"출력 형식 오류: {last}")
+                self._record(purpose, resp, t0, False, f"출력 형식 오류: {last}", request_text)
                 continue
-            self._record(purpose, resp, t0, True)
+            self._record(purpose, resp, t0, True, request_text=request_text)
             return parsed
         raise LLMError(f"모델 출력이 {retries + 1}회 시도 후에도 스키마 검증에 실패함: {last}")
 
-    def _record(self, purpose, resp, t0, ok, error=None):
+    def _record(self, purpose, resp, t0, ok, error=None, request_text=None):
         if not self.storage:
             return
         pt, ct = resp.get("prompt_eval_count"), resp.get("eval_count")
         # API가 보고한 토큰만 저장한다. 수치를 임의로 추정하지 않는다.
         source = "reported" if pt is not None or ct is not None else "unavailable"
+        response_text = (resp.get("message") or {}).get("content")
         self.storage.record_model_call(self.run_id, self.model, purpose, pt, ct, source,
-                                       int((time.monotonic() - t0) * 1000), ok, error)
+                                       int((time.monotonic() - t0) * 1000), ok, error,
+                                       request_text=request_text, response_text=response_text)
 
 
 def build_analysis_messages(item: dict, target, evidence: dict, max_chars: int) -> list[dict]:

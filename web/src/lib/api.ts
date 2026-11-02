@@ -208,6 +208,22 @@ export type TrafficEntry = {
 // 전역 트래픽 화면(/traffic, UPGRADE_PLAN.md B2)용 — run_id/run_code 가 추가된다(다운로드 링크·표시용).
 export type TrafficEntryWithRun = TrafficEntry & { run_id: string; run_code: string };
 
+// 전역 LLM 호출 기록 화면(/llm-records, artex llmrec 참고, 2026-11)용.
+export type LlmRecord = {
+  id: number;
+  ts: string;
+  model: string;
+  purpose: string;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  duration_ms: number | null;
+  ok: boolean;
+  error: string | null;
+  request_text: string | null;
+  response_text: string | null;
+  run_code: string;
+};
+
 export type Question = {
   id: string;
   state: "OPEN" | "ANSWERED";
