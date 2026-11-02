@@ -13,7 +13,7 @@ import { formatBytes, formatTime } from "@/lib/labels";
 import { usePolling } from "@/lib/usePolling";
 
 const PAGE = 50;
-const th = "px-4 py-2 text-xs font-medium";
+const th = "px-3 py-1.5 text-xs font-medium";
 
 export default function TrafficPage() {
   const [items, setItems] = useState<TrafficEntryWithRun[] | null>(null);
@@ -77,15 +77,15 @@ export default function TrafficPage() {
             <tbody>
               {items.map((t) => (
                 <tr key={t.id} className="border-t border-line">
-                  <td className="whitespace-nowrap px-4 py-2 tabular text-xs text-faint">{formatTime(t.collected_at)}</td>
-                  <td className="px-4 py-2">
+                  <td className="whitespace-nowrap px-3 py-1.5 tabular text-xs text-faint">{formatTime(t.collected_at)}</td>
+                  <td className="px-3 py-1.5">
                     <Link href={`/runs/${t.run_code}`} className="font-mono text-xs text-accent hover:underline">{t.run_code}</Link>
                   </td>
-                  <td className="px-4 py-2 text-xs">{t.tool === "proxy.https" ? "HTTPS(복호화됨)" : "HTTP"}</td>
-                  <td className="px-4 py-2 font-mono text-xs">{t.args.method}</td>
-                  <td className="max-w-md truncate px-4 py-2 font-mono text-xs" title={t.args.url}>{t.args.url}</td>
-                  <td className="px-4 py-2 tabular text-xs text-faint">{t.size != null ? formatBytes(t.size) : "-"}</td>
-                  <td className="px-4 py-2 text-right">
+                  <td className="px-3 py-1.5 text-xs">{t.tool === "proxy.https" ? "HTTPS(복호화됨)" : "HTTP"}</td>
+                  <td className="px-3 py-1.5 font-mono text-xs">{t.args.method}</td>
+                  <td className="max-w-md truncate px-3 py-1.5 font-mono text-xs" title={t.args.url}>{t.args.url}</td>
+                  <td className="px-3 py-1.5 tabular text-xs text-faint">{t.size != null ? formatBytes(t.size) : "-"}</td>
+                  <td className="px-3 py-1.5 text-right">
                     {t.success && (
                       <a href={downloadUrl(t.run_id, t.id)} className="text-accent hover:underline" target="_blank" rel="noreferrer">
                         원본

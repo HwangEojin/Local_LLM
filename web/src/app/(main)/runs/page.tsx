@@ -117,7 +117,7 @@ function RunsTable() {
   }
 
   const sortable = (col: SortKey, label: string) => (
-    <th scope="col" aria-sort={ariaSort(col)} className="px-4 py-2 font-medium">
+    <th scope="col" aria-sort={ariaSort(col)} className="px-3 py-1.5 font-medium">
       <button onClick={() => toggleSort(col)} className="hover:text-ink">
         {label}
         {sortMark(col)}
@@ -223,7 +223,7 @@ function RunsTable() {
             <table className="w-full text-sm">
               <thead className="bg-raised text-left text-muted">
                 <tr>
-                  <th scope="col" className="w-10 px-4 py-2">
+                  <th scope="col" className="w-10 px-3 py-1.5">
                     <input
                       type="checkbox"
                       className="accent-[var(--accent)]"
@@ -232,23 +232,23 @@ function RunsTable() {
                       onChange={(e) => setSelected(e.target.checked ? runs.map((r) => r.run_code) : [])}
                     />
                   </th>
-                  <th scope="col" className="px-4 py-2 font-medium">
+                  <th scope="col" className="px-3 py-1.5 font-medium">
                     진단 ID
                   </th>
                   {sortable("status", "상태")}
                   {sortable("operator", "운영자")}
-                  <th scope="col" className="px-4 py-2 font-medium">
+                  <th scope="col" className="px-3 py-1.5 font-medium">
                     방식
                   </th>
-                  <th scope="col" className="px-4 py-2 font-medium">
+                  <th scope="col" className="px-3 py-1.5 font-medium">
                     자율성
                   </th>
-                  <th scope="col" className="px-4 py-2 text-right font-medium">
+                  <th scope="col" className="px-3 py-1.5 text-right font-medium">
                     발견 사항
                   </th>
                   {sortable("created_at", "생성 시각")}
                   {showDeleted && (
-                    <th scope="col" className="px-4 py-2 font-medium">
+                    <th scope="col" className="px-3 py-1.5 font-medium">
                       삭제 사유
                     </th>
                   )}
@@ -257,7 +257,7 @@ function RunsTable() {
               <tbody>
                 {runs.map((r) => (
                   <tr key={r.id} className={`border-t border-line hover:bg-raised/60 ${selected.includes(r.run_code) ? "bg-accent/5" : ""}`}>
-                    <td className="px-4 py-2">
+                    <td className="px-3 py-1.5">
                       <input
                         type="checkbox"
                         className="accent-[var(--accent)]"
@@ -266,20 +266,20 @@ function RunsTable() {
                         onChange={(e) => setSelected((s) => (e.target.checked ? [...s, r.run_code] : s.filter((x) => x !== r.run_code)))}
                       />
                     </td>
-                    <td className="px-4 py-2">
+                    <td className="px-3 py-1.5">
                       <Link href={`/runs/${r.run_code}`} className="font-mono text-xs text-accent hover:underline">
                         {r.run_code}
                       </Link>
                     </td>
-                    <td className="px-4 py-2">
+                    <td className="px-3 py-1.5">
                       <StatusBadge value={r.status} />
                     </td>
-                    <td className="px-4 py-2">{r.operator}</td>
-                    <td className="px-4 py-2 text-muted">{r.has_checklist ? "체크리스트" : "자율 탐색"}</td>
-                    <td className="px-4 py-2 text-muted">{AUTONOMY_LABEL[r.autonomy] ?? r.autonomy}</td>
-                    <td className="px-4 py-2 text-right">{r.findings_count}</td>
-                    <td className="px-4 py-2 text-muted">{formatTime(r.created_at)}</td>
-                    {showDeleted && <td className="px-4 py-2 text-muted">{r.delete_reason}</td>}
+                    <td className="px-3 py-1.5">{r.operator}</td>
+                    <td className="px-3 py-1.5 text-muted">{r.has_checklist ? "체크리스트" : "자율 탐색"}</td>
+                    <td className="px-3 py-1.5 text-muted">{AUTONOMY_LABEL[r.autonomy] ?? r.autonomy}</td>
+                    <td className="px-3 py-1.5 text-right">{r.findings_count}</td>
+                    <td className="px-3 py-1.5 text-muted">{formatTime(r.created_at)}</td>
+                    {showDeleted && <td className="px-3 py-1.5 text-muted">{r.delete_reason}</td>}
                   </tr>
                 ))}
               </tbody>

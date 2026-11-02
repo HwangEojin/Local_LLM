@@ -136,23 +136,23 @@ function AuditBody() {
             <table className="w-full text-sm">
               <thead className="bg-raised text-left text-muted">
                 <tr>
-                  <th scope="col" className="px-4 py-2 font-medium">시각</th>
-                  <th scope="col" className="px-4 py-2 font-medium">이벤트</th>
-                  <th scope="col" className="px-4 py-2 font-medium">진단</th>
-                  <th scope="col" className="px-4 py-2 font-medium">수행자</th>
-                  <th scope="col" className="px-4 py-2 font-medium"><span className="sr-only">상세</span></th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">시각</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">이벤트</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">진단</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium">수행자</th>
+                  <th scope="col" className="px-3 py-1.5 font-medium"><span className="sr-only">상세</span></th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((a) => (
                   <Fragment key={a.id}>
                     <tr className="border-t border-line hover:bg-raised/60">
-                      <td className="tabular whitespace-nowrap px-4 py-2 text-muted">{formatTime(a.ts)}</td>
-                      <td className="px-4 py-2">
+                      <td className="tabular whitespace-nowrap px-3 py-1.5 text-muted">{formatTime(a.ts)}</td>
+                      <td className="px-3 py-1.5">
                         <span className={isAdmin(a.event) ? "font-medium text-warn" : ""}>{EVENT_LABEL[a.event] ?? a.event}</span>
                         {EVENT_LABEL[a.event] && <span className="ml-2 font-mono text-xs text-faint">{a.event}</span>}
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="px-3 py-1.5">
                         {a.run_code ? (
                           <Link href={`/runs/${a.run_code}`} className="font-mono text-xs text-accent hover:underline">
                             {a.run_code}
@@ -161,8 +161,8 @@ function AuditBody() {
                           <span className="text-faint">-</span>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-muted">{actorOf(a.details)}</td>
-                      <td className="px-4 py-2 text-right">
+                      <td className="px-3 py-1.5 text-muted">{actorOf(a.details)}</td>
+                      <td className="px-3 py-1.5 text-right">
                         <button onClick={() => setOpen(open === a.id ? null : a.id)} aria-expanded={open === a.id} aria-label="상세 보기" className="rounded p-1 text-muted hover:bg-raised hover:text-ink">
                           <ChevronDown className={`${ICON} transition-transform ${open === a.id ? "rotate-180" : ""}`} aria-hidden />
                         </button>
