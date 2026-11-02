@@ -312,6 +312,40 @@ class SettingsMenusTest(unittest.TestCase):
         row2 = next(s for s in r2.json()["skills"] if s["name"] == name)
         self.assertEqual(row2["roles"], ["planner"])
 
+    def test_skill_import_zip_reads_only_skill_md_and_ignores_other_files(self):
+        import io
+        import zipfile
+        name = "pytest-import-zip-skill"
+        self.addCleanup(lambda: [self.conn.execute("DELETE FROM agent_skills WHERE name=%s", (name,)),
+                                 self.conn.commit()])
+        md = f"---\nname: {name}\ndescription: zip test\nroles:\n  - worker\n---\nZIP-MARKER 지침 본문\n"
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr(f"{name}/SKILL.md", md)
+            zf.writestr(f"{name}/scripts/run.sh", "#!/bin/sh\necho should never be read or executed\n")
+        buf.seek(0)
+        r = self.client.post("/api/admin/skills/import-zip", files={"file": ("skill.zip", buf, "application/zip")},
+                             data={"confirm": "true"})
+        self.assertEqual(r.status_code, 200, r.text)
+        row = next(s for s in r.json()["skills"] if s["name"] == name)
+        self.assertIn("ZIP-MARKER", row["instructions"])
+        self.assertEqual(row["source"], "import")
+
+        # SKILL.md 가 없는 ZIP 은 거부
+        buf2 = io.BytesIO()
+        with zipfile.ZipFile(buf2, "w") as zf:
+            zf.writestr("readme.txt", "no skill here")
+        buf2.seek(0)
+        r2 = self.client.post("/api/admin/skills/import-zip", files={"file": ("x.zip", buf2, "application/zip")},
+                              data={"confirm": "true"})
+        self.assertEqual(r2.status_code, 422)
+
+        # confirm 없으면 거부
+        buf.seek(0)
+        r3 = self.client.post("/api/admin/skills/import-zip", files={"file": ("skill.zip", buf, "application/zip")},
+                              data={"confirm": "false"})
+        self.assertEqual(r3.status_code, 400)
+
     # ── 인터셉트 규칙 ──
     def test_intercept_rule_crud_and_bad_regex_and_shared_protection(self):
         name = "pytest-intercept"

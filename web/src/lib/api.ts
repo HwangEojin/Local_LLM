@@ -38,11 +38,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+async function requestForm<T>(path: string, form: FormData): Promise<T> {
+  // multipart 는 브라우저가 경계(boundary)를 직접 넣은 Content-Type 을 쓰므로, request() 처럼
+  // application/json 을 강제하면 안 된다 — 별도 경로.
+  const res = await fetch(`${apiBase()}${path}`, { method: "POST", credentials: "include", body: form });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      const d = body.detail ?? detail;
+      detail = Array.isArray(d) ? d.map((x: { msg?: string }) => x.msg ?? JSON.stringify(x)).join("; ") : String(d);
+    } catch {
+      // 본문이 JSON 이 아니면 상태 텍스트만 쓴다
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return (await res.json()) as T;
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
   put: <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
+  postForm: <T>(path: string, form: FormData) => requestForm<T>(path, form),
 };
 
 export const downloadUrl = (runId: string, evidenceId: string) =>

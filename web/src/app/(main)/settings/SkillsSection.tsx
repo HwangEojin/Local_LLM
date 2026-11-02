@@ -97,6 +97,7 @@ function UsagePanel({ name }: { name: string }) {
 function ImportSkillCard({ roles, onImported }: { roles: string[]; onImported: (data: SkillsResponse) => void }) {
   const toast = useToast();
   const [text, setText] = useState("");
+  const [zip, setZip] = useState<File | null>(null);
   const [overrideRoles, setOverrideRoles] = useState<string[] | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -106,9 +107,18 @@ function ImportSkillCard({ roles, onImported }: { roles: string[]; onImported: (
     setBusy(true);
     setError(null);
     try {
-      const data = await api.post<SkillsResponse>("/api/admin/skills/import", { text, roles: overrideRoles, confirm: true });
+      let data: SkillsResponse;
+      if (zip) {
+        const form = new FormData();
+        form.append("file", zip);
+        form.append("confirm", "true");
+        data = await api.postForm<SkillsResponse>("/api/admin/skills/import-zip", form);
+      } else {
+        data = await api.post<SkillsResponse>("/api/admin/skills/import", { text, roles: overrideRoles, confirm: true });
+      }
       onImported(data);
       setText("");
+      setZip(null);
       setOverrideRoles(null);
       toast("ok", "SKILL.md 를 가져왔습니다");
     } catch (e) {
@@ -128,24 +138,36 @@ function ImportSkillCard({ roles, onImported }: { roles: string[]; onImported: (
   return (
     <Card className="space-y-3 p-4">
       <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <FileUp className={ICON} aria-hidden /> SKILL.md 가져오기 <span className="text-xs font-normal text-faint">agentskills.io 형식 · ZIP 은 지원 안 함</span>
+        <FileUp className={ICON} aria-hidden /> SKILL.md 가져오기 <span className="text-xs font-normal text-faint">agentskills.io 형식 · 텍스트 또는 ZIP</span>
       </h2>
       {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
-      <Field label="SKILL.md 내용" hint="--- 로 시작하는 frontmatter(name/description/license/roles)와 본문(지침)을 그대로 붙여 넣으세요">
-        <textarea rows={8} className={`${inputCls} font-mono text-xs`} value={text} placeholder={SKILL_MD_EXAMPLE} onChange={(e) => setText(e.target.value)} />
+      <Field label="ZIP 파일 (선택)" hint="ZIP 안의 SKILL.md 하나만 읽습니다 — scripts/ 등 다른 파일은 열어보지도 않고 버립니다">
+        <input
+          type="file"
+          accept=".zip"
+          className={`${inputCls} py-1.5`}
+          onChange={(e) => { setZip(e.target.files?.[0] ?? null); if (e.target.files?.[0]) setText(""); }}
+        />
       </Field>
-      <fieldset>
-        <legend className="mb-1 text-sm font-medium text-muted">붙일 역할 (비우면 SKILL.md 의 roles 를 씀)</legend>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-          {roles.map((r) => (
-            <label key={r} className="flex items-center gap-1.5">
-              <input type="checkbox" className="accent-[var(--accent)]" checked={!!overrideRoles?.includes(r)} onChange={() => toggleRole(r)} />
-              {AGENT_ROLE_LABEL[r] ?? r}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      <button disabled={busy || !text.trim()} className={btnSecondary} onClick={() => setConfirming(true)}>
+      {!zip && (
+        <>
+          <Field label="또는 SKILL.md 내용 붙여넣기" hint="--- 로 시작하는 frontmatter(name/description/license/roles)와 본문(지침)을 그대로 붙여 넣으세요">
+            <textarea rows={8} className={`${inputCls} font-mono text-xs`} value={text} placeholder={SKILL_MD_EXAMPLE} onChange={(e) => setText(e.target.value)} />
+          </Field>
+          <fieldset>
+            <legend className="mb-1 text-sm font-medium text-muted">붙일 역할 (비우면 SKILL.md 의 roles 를 씀)</legend>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+              {roles.map((r) => (
+                <label key={r} className="flex items-center gap-1.5">
+                  <input type="checkbox" className="accent-[var(--accent)]" checked={!!overrideRoles?.includes(r)} onChange={() => toggleRole(r)} />
+                  {AGENT_ROLE_LABEL[r] ?? r}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        </>
+      )}
+      <button disabled={busy || (!zip && !text.trim())} className={btnSecondary} onClick={() => setConfirming(true)}>
         <FileUp className={ICON} aria-hidden /> 가져오기
       </button>
       {confirming && (
