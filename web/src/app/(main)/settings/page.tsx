@@ -535,7 +535,7 @@ function McpSection({ part }: { part: "mcp" | "checklists" }) {
                     {s.enabled ? <PowerOff className={ICON} aria-hidden /> : <Power className={ICON} aria-hidden />}
                     {s.enabled ? "비활성화" : "활성화"}
                   </button>
-                  {s.source === "local" && s.transport === "sse" && (
+                  {s.source === "local" && (
                     <button disabled={busy} onClick={() => setRemoving(s)} className={btnDanger} title="이 PC 전용 서버 삭제">
                       <Trash2 className={ICON} aria-hidden /> 삭제
                     </button>
