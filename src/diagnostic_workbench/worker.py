@@ -128,6 +128,25 @@ def classify_outcome(status: str, text: str) -> str | None:
     return "ok" if status == "SUCCEEDED" else "error"
 
 
+BLOCKED_STREAK_LIMIT = 2  # 이 횟수만큼 연속 blocked 면 같은 (자산, 도구) 제안을 더 받지 않는다(explore.propose 가 씀)
+
+
+def blocked_streak(conn, run_id, asset_id, tool: str) -> int:
+    """이 (실행, 자산, 도구) 조합의 가장 최근 분류부터 거슬러 올라가며 연속된 'blocked' 횟수를 센다(최대 5건
+    조회). CLAUDE.md §6 "동일한 실패를 무한 반복하지 않는다" — Planner 가 이 값을 보고 같은 조합을 계속
+    제안하지 않도록 explore.propose() 에서 쓴다. 사람이 승인해 실제로 실행된 호출만 센다(SKIPPED 제외 —
+    classify_outcome 이 이미 None 으로 분류해 둠)."""
+    rows = conn.execute(
+        "SELECT outcome_class FROM tool_invocations WHERE run_id=%s AND asset_id=%s AND tool=%s "
+        "AND outcome_class IS NOT NULL ORDER BY started_at DESC LIMIT 5", (run_id, asset_id, tool)).fetchall()
+    streak = 0
+    for r in rows:
+        if r["outcome_class"] != "blocked":
+            break
+        streak += 1
+    return streak
+
+
 def record_invocation(ctx, it, worker_run_id, step, tool, d: policy.Decision, status, *, started=None,
                       error=None, evidence_id=None, tool_version="", outcome_text=""):
     outcome_class = classify_outcome(status, outcome_text or error or "")
