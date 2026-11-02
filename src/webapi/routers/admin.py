@@ -79,7 +79,6 @@ def _file(cfg, name: str) -> Path:
 class ScopeBody(BaseModel):
     scope: dict
     confirm: bool = False
-    confirm_dangerous: bool = False  # 'dangerous' 위험도를 새로 허용할 때만 필요
 
 
 @router.get("/scope")
@@ -100,10 +99,7 @@ def put_scope(body: ScopeBody, cfg=Depends(get_cfg), conn=Depends(get_conn), use
     try:
         old = audit_config.load_scope(cfg.home)
     except ConfigError:
-        old = {"allowed_risks": [], "targets": []}
-    if "dangerous" in body.scope["allowed_risks"] and "dangerous" not in old.get("allowed_risks", []):
-        if not body.confirm_dangerous:
-            raise HTTPException(400, "'dangerous' 위험도를 새로 허용하려면 별도 확인(confirm_dangerous)이 필요합니다")
+        old = {"targets": []}
     _write_json(cfg, _file(cfg, "scope.json"), body.scope)
     _audit(conn, user, "admin_scope_changed", {"before": old, "after": body.scope})
     return body.scope

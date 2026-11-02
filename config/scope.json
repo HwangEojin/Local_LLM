@@ -2,10 +2,6 @@
   "engagement_id": "DEMO-BASELINE-2026-10",
   "approved_by": "황어진 (대상 앱 소유자 본인, 자체 테스트용 데모)",
   "valid_until": "2026-12-31",
-  "allowed_risks": [
-    "read",
-    "write"
-  ],
   "targets": [
     {
       "target_id": "baseline-demo",

@@ -81,8 +81,8 @@ SYSTEM = (
     "continuing the chain — avoid that. "
     "Use only the listed TOOLS and target_ids, with args that satisfy each tool's schema, and set risk to that "
     "tool's exact listed risk tier (read or write — tools not listed, including anything dangerous, are "
-    "off-limits). A write step still runs: the host may require human approval first depending on the run's "
-    "autonomy setting, so propose a write step only when a read step cannot answer the same question. Every "
+    "off-limits). A write step still runs: the host may require human approval first if it matches an intercept "
+    "rule the operator configured, so propose a write step only when a read step cannot answer the same question. Every "
     "proposal must cite evidence ids from the input (RESULTS, FACTS or LATEST_FACT) in based_on_evidence_ids. Do "
     "not repeat anything under ALREADY_TRIED. For a FAIL or INCONCLUSIVE result, a useful step is usually one "
     "that shows how far the issue extends on the same target (for example listing the target or reading a "
@@ -227,7 +227,7 @@ def _context(ctx) -> tuple[str, set[str]]:
         "UNION ALL "  # 거부된 제안도 보여준다 — 그래야 같은 걸 다음 라운드에 또 제안하지 않는다(CLAUDE.md §6)
         "SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='intent' AND state='REJECTED'",
         (run_id, run_id)).fetchall()
-    offered_risks = {"read"} | ({"write"} if "write" in ctx.policy.allowed_risks else set())  # dangerous 는 항상 뺀다
+    offered_risks = {"read", "write"}  # dangerous 는 항상 뺀다(위험도 체계 자체는 승인 게이트가 아니지만, 이 분류는 유지)
     present_types = {t.type for t in ctx.targets.values()}  # 이 실행의 대상 유형(path/host/url)
     tools = {name: {"risk": spec.risk, "args_schema": spec.args_schema, "scope_checked_args": spec.scope_args}
              for name, spec in ctx.registry.items() if spec.risk in offered_risks
@@ -265,8 +265,11 @@ def _context(ctx) -> tuple[str, set[str]]:
         "FACTS (most recent first, includes LATEST_FACT): " + dump(fact_entries),
         "RESULTS (체크리스트 원래 근거 — FACTS/LATEST_FACT 가 없을 때만 기본으로 인용): " + dump(results),
         "ALREADY_TRIED: " + dump([t["payload"] for t in tried]),
-        "PAST_FAILURES (other runs, reference only): " + dump(
-            [{"tool": p["tool"], "args": p["args"], "error": p["error"]} for p in past]),
+        # outcome_class='blocked' 는 대상이 거부한 흔적(WAF/레이트리밋/캡차 등)이 보였던 호출이다(CLAUDE.md §6,
+        # 2026-11 — 같은 도구·인자를 그대로 반복해도 또 막힐 뿐이라는 신호).
+        "PAST_FAILURES (other runs, reference only; outcome='blocked' means the target likely rejected it — "
+        "don't just repeat the same tool/args): " + dump(
+            [{"tool": p["tool"], "args": p["args"], "error": p["error"], "outcome": p["outcome_class"]} for p in past]),
     ])
     latest = (latest_fact["evidence_ids"][0], latest_fact_target) if latest_fact else (None, None)
     return text, known, latest
@@ -370,7 +373,9 @@ def propose(ctx) -> int:
             # ALLOW_WITH_APPROVAL 도 큐에 올린다 — 체크리스트 작업과 같은 방식으로 BLOCKED 상태로 대기하다가
             # 운영자가 'approve' 를 기록하면 체인이 이어진다. 범위를 벗어나는 경우(DENY/NEEDS_SCOPE_CONFIRMATION)만 뺀다.
             d = policy.decide(ctx, p["tool"], p["args"], asset_id)
-            why = None if d.decision in (policy.ALLOW, policy.ALLOW_WITH_APPROVAL) else f"정책 {d.decision}: {d.reason}"
+            # LLM 에게 보일 사유만 프레이밍한다(CLAUDE.md §8, 2026-11) — 원본 d.reason 은 audit_events 에 그대로 남음.
+            why = None if d.decision in (policy.ALLOW, policy.ALLOW_WITH_APPROVAL) \
+                else policy.frame_block_message(f"정책 {d.decision}: {d.reason}")
         key = "explore:" + hashlib.sha256(json.dumps([p["target_id"], p["tool"], p["args"]], sort_keys=True,
                                                      ensure_ascii=False).encode()).hexdigest()[:40]
         if why is None and conn.execute("SELECT 1 FROM backlog_items WHERE run_id=%s AND idempotency_key=%s",

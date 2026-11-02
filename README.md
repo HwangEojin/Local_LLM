@@ -24,7 +24,7 @@ py -3.13 -m venv .venv
 | 파일 | 내용 |
 |---|---|
 | `.env` | `WORKBENCH_PG_DSN`, `PGPASSWORD`(`.env.example` 복사). 다른 앱과 DB 를 같이 쓰면 전용 스키마: DSN 끝에 `?options=-csearch_path%3Dworkbench` |
-| `config/scope.json` | 승인된 범위: `engagement_id`, `approved_by`, `valid_until`, `allowed_risks`, `targets`(`path`/`host`/`url`, 필요 시 `platform`). 만료되면 모든 실행이 거부된다 |
+| `config/scope.json` | 승인된 범위: `engagement_id`, `approved_by`, `valid_until`, `targets`(`path`/`host`/`url`, 필요 시 `platform`). 만료되면 모든 실행이 거부된다 |
 | `config/settings.json` | Ollama 주소·모델·한도, 증적·보고서·체크리스트·템플릿 경로, 도구 호출 한도. 루프백이 아닌 모델 주소는 `external_api.enabled=false` 면 거부. `WORKBENCH_LLM_PROVIDER=claude_cli`(임시 테스트 전용) 설정 시 설치된 `claude` CLI(구독 로그인, API 과금 아님)를 대신 호출 — 도구 접근은 막고 실제 도구 실행은 그대로 Python 정책 계층만 거친다 |
 | `config/mcp_servers.json` | MCP 서버와 허용 도구(`risk`, `scope_args`, `args_schema`). 이 PC 의 경로는 `mcp_servers.local.json` 에 같은 서버 이름으로 적는다 |
 | `config/workbench.json` (선택) | 제외 대상 `exclude`, 예산 `budget`, `lease_s`, `min_call_interval_ms`, `nmap_path`, `testssl_path`(`workbench.example.json` 참고) |
@@ -67,7 +67,7 @@ $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 ```
 
 - `--checklist` 는 선택이다. 생략하면(`--llm` 필요) 체크리스트 없이 목표(goal)와 대상 자산만으로 최초 탐색이 시작된다.
-- `read` 도구는 범위 안이면 실행, `write`/`dangerous` 는 `scope.json` 의 `allowed_risks` 안에서만 허용된다. 그 안에서 승인 요구 여부는 `--autonomy`(기본 `approval`: 매번 승인 / `full`: 범위 내 자동 실행)로 정해지고, 실행 중 바꿀 수 없다.
+- 도구 호출 위험도 체계는 없다(2026-11 삭제) — 범위(scope) 안이면 바로 허용되고, 승인 요구 여부는 `config/intercept_rules.json`에 등록한 규칙(ask)에 매치하는지로만 정해진다. 매치하면 `--autonomy`(기본 `approval`/`full`)와 무관하게 항상 사람 승인이 필요하다 — 운영자가 '이건 항상 사람이 보게 한다'고 등록한 규칙을 자율 모드로 건너뛸 수 없다. `--autonomy`는 실행 생성 시 고정되고 실행 중 바꿀 수 없다.
 - 자율 탐색의 탐색 횟수·도구 호출 수에는 하드 리밋이 없다 — 벽시계 타임아웃과 "유효한 후속 작업 없음"만으로 끝난다. 체크리스트 작업의 예산(`--max-tasks`)은 그대로 강제된다.
 - 전체 중지: `data/STOP` 파일을 만들면 신규 호출이 거부되고 진행 중인 호출도 짧은 폴링 간격(0.2초) 안에 취소된다.
 

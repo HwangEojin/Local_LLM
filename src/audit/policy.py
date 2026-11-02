@@ -55,7 +55,6 @@ class Policy:
         self.home = Path(home)
         if (today or date.today()) > date.fromisoformat(scope["valid_until"]):
             raise ConfigError(f"scope 가 {scope['valid_until']} 에 만료됨")
-        self.allowed_risks = set(scope["allowed_risks"])
         self.targets: dict[str, Target] = {}
         for t in scope["targets"]:
             if t["target_id"] in self.targets:
@@ -111,13 +110,12 @@ class Policy:
         return value
 
     # ---- 도구 호출
-    def authorize(self, spec: ToolSpec | None, tool_name: str, args: dict, target: Target,
-                  approver=None, dry_run: bool = False) -> dict:
-        """검증된 인자를 반환하거나 PolicyDenied를 발생시킨다. 승인 여부는 여기서 결정하며 계획이 결정하지 않는다."""
+    def authorize(self, spec: ToolSpec | None, tool_name: str, args: dict, target: Target) -> dict:
+        """범위 내로 정규화된 인자를 반환하거나 PolicyDenied를 발생시킨다. 승인 요구 여부(위험도 게이트 삭제,
+        CLAUDE.md §8, 2026-11)는 여기서 결정하지 않는다 — diagnostic_workbench.policy.decide() 가 인터셉트
+        규칙(ask/deny)으로만 정한다."""
         if spec is None:
             raise PolicyDenied(f"도구 '{tool_name}' 은(는) 등록/허용되지 않음")
-        if spec.risk not in self.allowed_risks:
-            raise PolicyDenied(f"도구 '{spec.name}' 의 위험도 '{spec.risk}' 는 scope 에서 허용되지 않음")
         if not isinstance(args, dict):
             raise PolicyDenied("도구 인자는 객체여야 함")
         try:
@@ -132,17 +130,4 @@ class Policy:
                 if not isinstance(clean[arg], str):
                     raise PolicyDenied(f"범위 검사 인자 '{arg}' 는 문자열이어야 함")
                 clean[arg] = getattr(self, f"check_{kind}")(clean[arg], target)
-        if spec.risk != "read" and not dry_run:
-            if approver is None or approver(spec, clean) is not True:
-                raise PolicyDenied(f"'{spec.name}' ({spec.risk}) 은(는) 승인이 필요하나 승인되지 않음")
         return clean
-
-
-def interactive_approver(spec: ToolSpec, args: dict) -> bool:
-    """TTY에서 사람에게 묻는다. 그 외에는 모두 거부한다(fail-closed)."""
-    import sys
-    if not sys.stdin.isatty():
-        return False
-    ans = input(f"[승인 요청] {spec.risk.upper()} 도구 '{spec.name}' 인자={mask_secrets(str(args))} "
-                f"— 실행을 승인합니까? [y/N] ")
-    return ans.strip().lower() == "y"

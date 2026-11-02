@@ -9,7 +9,8 @@ from audit.models import ConfigError
 from . import db
 
 _COLS = ("ti.id, ti.run_id, ti.backlog_item_id, ti.step_no, ti.tool, ti.tool_version, ti.args, "
-         "ti.policy_decision, ti.policy_reason, ti.status, ti.error, ti.evidence_id, ti.started_at, ti.ended_at, "
+         "ti.policy_decision, ti.policy_reason, ti.status, ti.error, ti.outcome_class, ti.evidence_id, "
+         "ti.started_at, ti.ended_at, "
          "a.kind AS asset_kind, a.value AS asset_value, b.kind AS task_kind, b.reason AS task_reason, "
          "e.media_type AS evidence_media_type, e.size AS evidence_size, e.success AS evidence_success")
 _FROM = ("FROM tool_invocations ti LEFT JOIN assets a ON a.id = ti.asset_id "

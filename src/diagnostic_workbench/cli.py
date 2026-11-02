@@ -300,8 +300,9 @@ def cmd_run(args):
               + (f"  LLM={run['llm_profile_name'] or run['llm_provider']}" if run["llm_provider"] != "ollama"
                  or run["llm_profile_name"] else ""))
         if run["autonomy"] == "full":
-            print("  주의: 위험도 'write/dangerous' 도구가 범위 내에서 사람 승인 없이 자동 실행됩니다. "
-                  "실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
+            print("  참고: 도구 호출 위험도 체계는 삭제됐습니다(CLAUDE.md §8). 인터셉트 규칙에 걸리지 않는 "
+                  "도구는 자율 모드와 무관하게 이미 승인 없이 실행되고, 인터셉트 규칙에 걸리면 자율 모드와 "
+                  "무관하게 항상 사람 승인이 필요합니다. 실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
         if run["llm_agent_models"]:
             print("  에이전트별 모델: " + ", ".join(f"{k}={v}" for k, v in run["llm_agent_models"].items()))
         print(f"미리 보기: run plan {run['id']}   시작: run start {run['id']}")

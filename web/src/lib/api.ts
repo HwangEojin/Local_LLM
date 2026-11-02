@@ -210,7 +210,6 @@ export type Scope = {
   engagement_id: string;
   approved_by: string;
   valid_until: string;
-  allowed_risks: string[];
   targets: Target[];
 };
 
@@ -326,15 +325,13 @@ export type AgentRoleInfo = { role: string; prompts: AgentPrompt[] };
 
 export type ToolInfo = {
   name: string;
-  risk: string; // 실제 적용 위험도(오버라이드 반영)
-  base_risk: string; // 원래 등록된 위험도
+  risk: string; // 분류용 메타데이터일 뿐, 승인 게이트 아님(CLAUDE.md §8, 2026-11)
   disabled: boolean;
   args_schema: Record<string, unknown>;
   scope_args: Record<string, string>;
   source: "mcp" | "builtin";
-  allowed_by_scope: boolean;
 };
-export type ToolCatalog = { allowed_risks: string[]; tools: ToolInfo[] };
+export type ToolCatalog = { tools: ToolInfo[] };
 
 export type ApprovalsOverview = {
   ttl_h: number;
