@@ -5,9 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Check, Copy, CopyPlus, Download, Pause, Play, RotateCcw, RotateCw, Square, Trash2, Undo2, X } from "lucide-react";
 
-import { AuthGate } from "@/components/AuthGate";
 import { FindingPanel, EvidenceViewer } from "@/components/FindingPanel";
-import { Header } from "@/components/Header";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   Banner,
@@ -1111,10 +1109,5 @@ function RunDetailBody({ runId }: { runId: string }) {
 
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
-  return (
-    <AuthGate>
-      <Header />
-      <RunDetailBody runId={params.id} />
-    </AuthGate>
-  );
+  return <RunDetailBody runId={params.id} />;
 }

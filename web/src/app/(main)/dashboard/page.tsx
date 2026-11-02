@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
-import { AuthGate } from "@/components/AuthGate";
-import { Header } from "@/components/Header";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Banner, Card, Empty, SkeletonRows } from "@/components/ui";
 import { api, DashboardData } from "@/lib/api";
@@ -101,10 +99,5 @@ function DashboardBody() {
 }
 
 export default function DashboardPage() {
-  return (
-    <AuthGate>
-      <Header />
-      <DashboardBody />
-    </AuthGate>
-  );
+  return <DashboardBody />;
 }

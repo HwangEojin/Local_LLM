@@ -4,8 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, Plus, RotateCcw, Trash2 } from "lucide-react";
 
-import { AuthGate } from "@/components/AuthGate";
-import { Header } from "@/components/Header";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Banner, btnDanger, btnGhost, btnPrimary, btnSecondary, Card, ConfirmDialog, Empty, inputCls, SkeletonRows, useToast } from "@/components/ui";
 import { api, ApiError, BulkDeleteResult, RUN_STATUSES, RunList } from "@/lib/api";
@@ -359,10 +357,5 @@ function RunsTable() {
 }
 
 export default function RunsPage() {
-  return (
-    <AuthGate>
-      <Header />
-      <RunsTable />
-    </AuthGate>
-  );
+  return <RunsTable />;
 }

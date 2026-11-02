@@ -6,9 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 
-import { AuthGate } from "@/components/AuthGate";
 import { EvidenceViewer } from "@/components/FindingPanel";
-import { Header } from "@/components/Header";
 import { Banner, Card, Empty, inputCls, SkeletonRows } from "@/components/ui";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ActivityEntry, api } from "@/lib/api";
@@ -162,10 +160,5 @@ function CommandsBody() {
 }
 
 export default function CommandsPage() {
-  return (
-    <AuthGate>
-      <Header />
-      <CommandsBody />
-    </AuthGate>
-  );
+  return <CommandsBody />;
 }
