@@ -1,0 +1,33 @@
+{
+  "rules": [
+    {
+      "name": "sensitive-file-access",
+      "tool_pattern": "^fs\\.(read_file|list_dir)$",
+      "arg_pattern": "(?i)(passwd|shadow|\\.env|secret|\\.ssh)"
+    },
+    {
+      "name": "ask-write-nmap-tls",
+      "tool_pattern": "^(nmap\\.(scan|ssl_scan)|tls\\.inspect)$"
+    },
+    {
+      "name": "ask-write-burp",
+      "tool_pattern": "^mcp:burp/send_http1_request$"
+    },
+    {
+      "name": "ask-dangerous-frida",
+      "tool_pattern": "^mcp:frida/(attach_to_process|create_interactive_session|create_simple_hook|execute_in_session|kill_process|resume_process|spawn_process)$"
+    },
+    {
+      "name": "ask-write-ghidra",
+      "tool_pattern": "^mcp:ghidra/(rename_data|rename_function|rename_function_by_address|rename_variable|set_decompiler_comment|set_disassembly_comment|set_function_prototype|set_local_variable_type)$"
+    },
+    {
+      "name": "ask-write-jadx",
+      "tool_pattern": "^mcp:jadx/(clear_cache|rename_class|rename_field|rename_method|rename_package|rename_variable)$"
+    },
+    {
+      "name": "ask-write-playwright-actions",
+      "tool_pattern": "^mcp:playwright/browser_(click|drag|drop|emulate_media|evaluate|file_upload|fill_form|handle_dialog|hover|press_key|resize|run_code_unsafe|select_option|type)$"
+    }
+  ]
+}
