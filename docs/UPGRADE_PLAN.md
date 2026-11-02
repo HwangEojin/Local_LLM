@@ -104,3 +104,62 @@ A군(정책)과 B군(IA)은 서로 의존성이 없어 **병렬 진행 가능**.
 - **`llmrec/`(LLM 호출 원문 기록) — 채택, 구현 완료**: `model_calls.request_text`/`response_text`(마이그레이션 0020) 추가, 저장 전 `mask_secrets`로 마스킹(explore.py의 `_ModelLog.record_model_call`, `audit/local_model.py`, `audit/claude_cli_model.py` 세 곳 모두 연결). `GET /api/llm-records` + `/llm-records` 전역 페이지(사이드바 "작업" 그룹에 추가). 이전 조사에서 찾은 "LLM 호출 기록 전역 화면 없음" 갭을 메움. 테스트 1건 추가.
 - **`selfupdate/`(바이너리 자가 업데이트)** — 미채택. Python 소스 체크아웃 배포라 전제 자체가 안 맞음.
 - **`mcphttp/`(SSE/HTTP MCP 전송 자체 구현)** — 미채택, 이미 더 나은 대안 보유. 우리는 공식 Python MCP SDK(`audit/mcp_client.py`)가 stdio+sse 전송을 이미 지원.
+
+---
+
+## F. 에이전트/MCP/스킬 — artex와 "코드~UI 완전 동일" 계획(2026-11-02 작성, 미구현)
+
+사용자가 세 화면을 코드 레벨부터 웹 UI 디자인까지 완벽하게 똑같이 만들라고 요청. MCP·스킬은 핵심 로직(stdio, ZIP)을 이미 이식했으므로(§E) 여기선 **남은 것**(UI 레이아웃 재현)과 **에이전트**(이번에 처음 조사)를 다룬다. 에이전트 쪽은 안전한 추가 기능과 CLAUDE.md 구조와 충돌하는 기능이 섞여 있어 구분해서 적는다.
+
+### F1. MCP 화면 — 레이아웃을 artex와 동일하게(기능은 이미 동일)
+
+현재: `settings` 페이지 안에 `McpAddCard.tsx`(등록 폼) + 목록(세로 나열 리스트). artex: 카드 그리드(`grid-cols-1 sm:2 lg:4`, 맨 앞 점선 "+추가" 카드) → 카드 클릭 시 우측 Sheet 드로어, 드로어 안 Tabs("설정"/"도구(N)").
+
+구현 단계:
+1. `web/src/components/ui.tsx`에 `Sheet`(우측 드로어, `ConfirmDialog`와 같은 포지셔닝 패턴 재사용) 컴포넌트 추가 — 없으면 새로 작성, 다크테마 토큰 사용.
+2. `settings` MCP 섹션을 카드 그리드로 교체: 각 카드 = 아이콘+이름+transport 뱃지+Switch(켜기/끄기)+삭제, 하단에 도구 개수.
+3. 카드 클릭 → Sheet 열기, 탭 2개("설정": 현재 `McpAddCard.tsx` 폼을 편집 모드로 재사용, "도구": 등록된 도구 이름+위험도+scope_args 읽기전용 표로 보여줌 — 새 백엔드 불필요, `GET /api/admin/tools`로 이미 조회 가능).
+4. "에이전트별 가시성" 체크박스(artex 고유 멀티에이전트 개념)는 F3 에이전트 자유생성이 구현될 때만 의미가 생김 — 그 전까지는 이식 보류.
+
+새 백엔드 불필요(API는 §E에서 이미 stdio까지 맞춤). 프론트 전용 작업.
+
+### F2. 스킬 화면 — 레이아웃을 artex와 동일하게(기능은 이미 동일)
+
+현재: `settings` 페이지 안에 `SkillsSection.tsx`(가져오기 폼 + 세로 카드 목록). artex: 좌측 264px 파일트리 + 우측 상세/편집 패널, 상단 "누락된 스킬" 배지.
+
+구현 단계:
+1. 좌측 트리: 스킬 이름 목록(우리는 단일 파일 개념이라 artex의 다중 파일 트리와 달리 평평한 목록이면 충분 — "파일트리처럼 보이는 단일 목록"으로 레이아웃만 맞춤).
+2. 우측 패널: 현재 `SkillEditor`를 그대로 옮기되 레이아웃만 2단 분할로 변경.
+3. "누락된 스킬" 배지: 우리 스킬은 역할에 자동 첨부되는 구조라(이름으로 호출 안 함) artex의 "호출됐는데 없음" 개념 자체가 성립 안 함 — **이식 안 함**(기능이 없는 게 아니라 개념이 안 맞음, §E에서 이미 결론).
+
+새 백엔드 불필요. 프론트 전용 작업.
+
+### F3. 에이전트 화면 — 가장 큼, 안전/위험 기능 분리 필요
+
+**우리 현재**: `admin_agents.py`(역할별 프롬프트 GET/PUT/reset) + `AgentsSection.tsx`(역할 5개 고정: planner/worker/analyst/goals/reporter, 프롬프트 텍스트영역만). 모델 지정은 `/runs/new`에 따로 있음.
+
+**artex**: 카드 그리드로 에이전트 **무제한 생성**(builtin+custom), 카드 클릭 시 Sheet 드로어에 탭 6개 — 설정+프롬프트(LLM 프로파일·max_turns·run_seconds·web_search·**interactive_shell** 토글, 프롬프트 버전관리+diff), wrapup 프롬프트, MCP 가시성, Skill 가시성, Tool 바인딩, **Triggers**(interval/on_finding/on_goal_met/on_task_timeout/on_tool_call/on_task_create 조건으로 **운영자 개입 없이 새 작업을 자동 기동**).
+
+#### F3a. 충돌 없음 — 그대로 구현 가능
+
+| 기능 | 구현 위치 | 비고 |
+|---|---|---|
+| LLM 프로파일 개별 바인딩 | `admin_agents.py`에 `llm_profile` 필드 추가, `agent_prompts` 테이블에 컬럼 추가(새 마이그레이션) | 이미 `/runs/new`에 같은 개념(역할별 모델) 있음 — 재사용/통합 검토 |
+| 프롬프트 버전관리 + diff | 새 테이블(`agent_prompt_versions`, 기존 `agent_prompts` 갱신 시 이전 값 보존) | `finding_review_history`와 같은 append-only 이력 패턴 재사용 |
+| max_turns / run_seconds | `agent_prompts`에 컬럼 추가, 실제 강제는 `worker.py`/`explore.py`의 해당 루프에 적용 | 체크리스트 쪽 budget과 유사 패턴 |
+| web_search 토글 | 현재 web_search 기능 자체가 없음 — 토글 UI만으로는 의미 없음, **토글이 실제로 켜는 기능이 있어야 함**(범위 밖, 별도 과제) |
+| MCP/Skill/Tool 가시성 바인딩 UI | `agent_prompts`에 역할별 허용 MCP/Skill/Tool 목록 컬럼 추가, `prompts.skills_for()`/도구 레지스트리 필터링에 반영 | 실행 권한은 여전히 policy.decide()가 결정 — UI는 "제안 후보"만 좁힘 |
+| 에이전트 "생성"(제한적) | 5개 고정 역할은 유지하되, 역할별로 **이름 있는 프로파일을 여러 개** 만들 수 있게(예: worker-aggressive, worker-cautious) — artex처럼 완전 자유 역할 생성은 CLAUDE.md §6(Planner=제안, Python=검증을 역할 단위로 서술) 재설계가 필요해 절충안 |
+
+#### F3b. 충돌 있음 — 설계 결정 먼저 필요(구현 보류 권장)
+
+| 기능 | 충돌 | 결정 필요 사항 |
+|---|---|---|
+| **Triggers(자동 스케줄러)** | CLAUDE.md §5(단일 폐쇄 루프, 정의된 종료조건)·§8(예산·Kill Switch가 "그 루프 안"을 전제)과 정면 충돌. 트리거가 루프 밖에서 독립적으로 새 작업을 만들면 예산/종료조건/Kill Switch 보장이 트리거 경로엔 안 걸릴 위험 | 이식하려면 "UI 복제"가 아니라 트리거가 발행하는 모든 작업도 기존 backlog_items/policy.decide() 경로를 반드시 통과하도록 **아키텍처 확장 설계**부터 필요(Planner에 트리거발 작업을 흡수하는 입구를 만들고, 거기도 예산·Kill Switch가 걸리게). 별도 설계 문서로 분리 권장 |
+| **interactive_shell(영속 PTY)** | CLAUDE.md §8-7 "LLM 출력 문자열을 검증 없이 셸로 실행하지 않음"과 충돌 소지. artex 서버(Go)의 실제 정책 검사 여부는 **미확인**(이번 조사에서 Go 라우트까지는 못 봄) | 이식 전에 artex `server/`의 셸 실행 핸들러를 먼저 확인해 정책 검사가 있는지 보고, 없으면 우리 쪽은 최소한 policy.decide() 동급 검사를 셸 명령에도 적용하는 설계가 선행돼야 함 |
+
+### F4. 권장 순서
+
+1. F1(MCP 레이아웃), F2(스킬 레이아웃) — 충돌 없음, 바로 진행 가능
+2. F3a(에이전트 안전 기능) — 충돌 없음, 바로 진행 가능하나 새 테이블 2개(버전이력, 바인딩) 필요해 설계량이 F1/F2보다 큼
+3. F3b(Triggers, interactive_shell) — **사용자 결정 대기**. "그대로 이식" 선택 시에도 UI만 먼저 만들고 실제 자동 기동/셸 실행은 별도 설계 단계를 거칠 것을 권장(이번 세션의 MCP stdio 때처럼 안전장치를 한 겹 두는 방식과 동일한 원칙)
