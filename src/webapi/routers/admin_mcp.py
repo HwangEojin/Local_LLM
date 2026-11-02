@@ -24,7 +24,7 @@ from audit import schemas
 from audit.policy import is_loopback_url
 
 from ..deps import current_user, get_cfg, get_conn
-from .admin import _audit, _file, _mcp_rows, _need_confirm, _write_json
+from .admin import _audit, _file, _need_confirm, _write_json
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -32,6 +32,42 @@ _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 _SCOPE_HINTS = (("url", re.compile(r"url|uri|href|link|endpoint", re.I)),
                 ("host", re.compile(r"host|domain|address|\bip\b|target", re.I)),
                 ("path", re.compile(r"path|file|dir|folder", re.I)))
+
+
+# ── MCP 서버 켜기/끄기 ──(이전엔 admin.py에 있던 기본 토글, B4 로 여기 합침: 발견/등록과 같은 파일에서 전부 다룬다)
+def _mcp_rows(cfg) -> list[dict]:
+    local = _file(cfg, "mcp_servers.local.json")
+    local_names = set(audit_config.load_json(local, schemas.MCP_SERVERS)["servers"]) if local.exists() else set()
+    return [{"name": n, "enabled": s["enabled"], "description": s.get("description", ""),
+             "transport": s["transport"], "timeout_s": s["timeout_s"], "tools": sorted(s["allowed_tools"]),
+             "source": "local" if n in local_names else "shared"}
+            for n, s in audit_config.load_mcp_servers(cfg.home).items()]
+
+
+@router.get("/mcp")
+def get_mcp(cfg=Depends(get_cfg), user: str = Depends(current_user)):
+    return _mcp_rows(cfg)
+
+
+class McpToggleBody(BaseModel):
+    enabled: bool
+    confirm: bool = False
+
+
+@router.put("/mcp/{name}")
+def put_mcp(name: str, body: McpToggleBody, cfg=Depends(get_cfg), conn=Depends(get_conn), user: str = Depends(current_user)):
+    """활성/비활성만 바꾼다(command·url·허용 도구는 건드리지 않음). 이 PC 전용 파일(.local.json, Git 제외)에 기록."""
+    _need_confirm(body.confirm)
+    servers = audit_config.load_mcp_servers(cfg.home)
+    if name not in servers:
+        raise HTTPException(404, f"MCP 서버 '{name}' 이(가) 없음")
+    local = _file(cfg, "mcp_servers.local.json")
+    doc = audit_config.load_json(local, schemas.MCP_SERVERS) if local.exists() else {"servers": {}}
+    before = servers[name]["enabled"]
+    doc["servers"][name] = {**servers[name], "enabled": body.enabled}
+    _write_json(cfg, local, doc)
+    _audit(conn, user, "admin_mcp_toggled", {"server": name, "before": before, "after": body.enabled})
+    return _mcp_rows(get_cfg())
 
 
 def _check_url(cfg, url: str) -> str:
