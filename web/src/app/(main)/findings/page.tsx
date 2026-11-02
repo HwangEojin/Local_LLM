@@ -15,7 +15,7 @@ import { describe, formatTime, SEVERITY_ORDER } from "@/lib/labels";
 import { usePolling } from "@/lib/usePolling";
 
 const PAGE = 50;
-const th = "px-4 py-2 text-xs font-medium";
+const th = "px-3 py-1.5 text-xs font-medium";
 const chip = (on: boolean) =>
   `rounded-full border px-2.5 py-1 text-xs transition-colors ${on ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:text-ink"}`;
 
@@ -123,16 +123,16 @@ export default function FindingsPage() {
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedId(f.id); } }}
                   className={`cursor-pointer border-t border-line transition-colors hover:bg-raised/60 ${selected?.id === f.id ? "bg-raised" : ""}`}
                 >
-                  <td className="px-4 py-2 font-medium">{f.title}</td>
-                  <td className="px-4 py-2">
+                  <td className="px-3 py-1.5 font-medium">{f.title}</td>
+                  <td className="px-3 py-1.5">
                     <Link href={`/runs/${f.run_code}`} onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-accent hover:underline">
                       {f.run_code}
                     </Link>
                   </td>
-                  <td className="px-4 py-2"><StatusBadge value={f.severity} /></td>
-                  <td className="px-4 py-2"><StatusBadge value={f.status} /></td>
-                  <td className="px-4 py-2 text-muted">{f.reviewed_by ?? "검토 전"}</td>
-                  <td className="px-4 py-2 text-muted">{formatTime(f.created_at)}</td>
+                  <td className="px-3 py-1.5"><StatusBadge value={f.severity} /></td>
+                  <td className="px-3 py-1.5"><StatusBadge value={f.status} /></td>
+                  <td className="px-3 py-1.5 text-muted">{f.reviewed_by ?? "검토 전"}</td>
+                  <td className="px-3 py-1.5 text-muted">{formatTime(f.created_at)}</td>
                 </tr>
               ))}
             </tbody>
