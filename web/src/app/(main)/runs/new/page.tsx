@@ -5,8 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Play, Settings } from "lucide-react";
 
-import { AuthGate } from "@/components/AuthGate";
-import { Header } from "@/components/Header";
 import { Banner, btnPrimary, btnSecondary, Card, inputCls, SkeletonRows } from "@/components/ui";
 import { api, testLlm, ApiError, Environment, RunDetail, WorkbenchSettings } from "@/lib/api";
 import { AGENT_ROLE_LABEL, AUTONOMY_LABEL, DOCTOR_LABEL } from "@/lib/labels";
@@ -413,10 +411,5 @@ function NewRunForm() {
 }
 
 export default function NewRunPage() {
-  return (
-    <AuthGate>
-      <Header />
-      <NewRunForm />
-    </AuthGate>
-  );
+  return <NewRunForm />;
 }

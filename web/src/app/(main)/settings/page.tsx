@@ -4,8 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bell, Bot, ClipboardList, ShieldAlert, Sparkles, Cpu, Crosshair, FileText, Lock, OctagonAlert, Plug, Plus, Power, PowerOff, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Wrench } from "lucide-react";
 
-import { AuthGate } from "@/components/AuthGate";
-import { Header } from "@/components/Header";
 import { Banner, btnDanger, btnGhost, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, SkeletonRows, useToast } from "@/components/ui";
 import {
   api,
@@ -732,10 +730,5 @@ function SettingsBody() {
 }
 
 export default function SettingsPage() {
-  return (
-    <AuthGate>
-      <Header />
-      <SettingsBody />
-    </AuthGate>
-  );
+  return <SettingsBody />;
 }

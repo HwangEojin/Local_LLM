@@ -4,8 +4,6 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, Download, Pause, Play, RefreshCw, Search } from "lucide-react";
 
-import { AuthGate } from "@/components/AuthGate";
-import { Header } from "@/components/Header";
 import { Banner, btnSecondary, Card, Empty, inputCls, SkeletonRows } from "@/components/ui";
 import { api, auditExportUrl, AuditEvent } from "@/lib/api";
 import { formatTime } from "@/lib/labels";
@@ -196,10 +194,5 @@ function AuditBody() {
 }
 
 export default function AuditPage() {
-  return (
-    <AuthGate>
-      <Header />
-      <AuditBody />
-    </AuthGate>
-  );
+  return <AuditBody />;
 }
