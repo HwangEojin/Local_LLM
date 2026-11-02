@@ -11,8 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import deps
 from .routers import admin as admin_router
-from .routers import admin_extra as admin_extra_router
+from .routers import admin_agents as admin_agents_router
+from .routers import admin_intercept as admin_intercept_router
 from .routers import admin_mcp as admin_mcp_router
+from .routers import admin_notify as admin_notify_router
+from .routers import admin_skills as admin_skills_router
+from .routers import admin_tools as admin_tools_router
 from .routers import commands as commands_router
 from .routers import auth as auth_router
 from .routers import dashboard as dashboard_router
@@ -35,8 +39,12 @@ app.include_router(runs_router.router)
 app.include_router(findings_router.router)
 app.include_router(global_views_router.router)
 app.include_router(admin_router.router)
-app.include_router(admin_extra_router.router)
+app.include_router(admin_agents_router.router)
+app.include_router(admin_intercept_router.router)
 app.include_router(admin_mcp_router.router)
+app.include_router(admin_notify_router.router)
+app.include_router(admin_skills_router.router)
+app.include_router(admin_tools_router.router)
 app.include_router(commands_router.router)
 app.include_router(dashboard_router.router)
 

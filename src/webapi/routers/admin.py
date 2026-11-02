@@ -26,7 +26,7 @@ from audit import schemas
 from audit.checklist_engine import Checklists
 from audit.models import AuditError, ConfigError
 from audit.policy import Policy
-from diagnostic_workbench import config as wb_config, db as wb_db, prompts as wb_prompts, runs as wb_runs
+from diagnostic_workbench import config as wb_config, db as wb_db
 
 from .. import deps
 from ..deps import current_user, get_cfg, get_conn
@@ -244,42 +244,6 @@ def release_kill_switch(body: KillBody, cfg=Depends(get_cfg), conn=Depends(get_c
     return _kill_state(cfg)
 
 
-# ── MCP 서버 ──
-def _mcp_rows(cfg) -> list[dict]:
-    local = _file(cfg, "mcp_servers.local.json")
-    local_names = set(audit_config.load_json(local, schemas.MCP_SERVERS)["servers"]) if local.exists() else set()
-    return [{"name": n, "enabled": s["enabled"], "description": s.get("description", ""),
-             "transport": s["transport"], "timeout_s": s["timeout_s"], "tools": sorted(s["allowed_tools"]),
-             "source": "local" if n in local_names else "shared"}
-            for n, s in audit_config.load_mcp_servers(cfg.home).items()]
-
-
-@router.get("/mcp")
-def get_mcp(cfg=Depends(get_cfg), user: str = Depends(current_user)):
-    return _mcp_rows(cfg)
-
-
-class McpBody(BaseModel):
-    enabled: bool
-    confirm: bool = False
-
-
-@router.put("/mcp/{name}")
-def put_mcp(name: str, body: McpBody, cfg=Depends(get_cfg), conn=Depends(get_conn), user: str = Depends(current_user)):
-    """활성/비활성만 바꾼다(command·url·허용 도구는 건드리지 않음). 이 PC 전용 파일(.local.json, Git 제외)에 기록."""
-    _need_confirm(body.confirm)
-    servers = audit_config.load_mcp_servers(cfg.home)
-    if name not in servers:
-        raise HTTPException(404, f"MCP 서버 '{name}' 이(가) 없음")
-    local = _file(cfg, "mcp_servers.local.json")
-    doc = audit_config.load_json(local, schemas.MCP_SERVERS) if local.exists() else {"servers": {}}
-    before = servers[name]["enabled"]
-    doc["servers"][name] = {**servers[name], "enabled": body.enabled}
-    _write_json(cfg, local, doc)
-    _audit(conn, user, "admin_mcp_toggled", {"server": name, "before": before, "after": body.enabled})
-    return _mcp_rows(deps.get_cfg())
-
-
 # ── 체크리스트(조회 전용) ──
 @router.get("/checklists")
 def get_checklists(cfg=Depends(get_cfg), user: str = Depends(current_user)):
@@ -345,66 +309,6 @@ def export_audit(conn=Depends(get_conn), user: str = Depends(current_user), even
         w.writerow([r["id"], r["ts"], r["event"], r["run_code"] or "", json.dumps(r["details"], ensure_ascii=False, default=str)])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="audit_log.csv"'})
-
-
-# ── 에이전트(역할별 프롬프트) ──
-# 프롬프트는 LLM 이 받는 '문구'일 뿐이다 — 도구 실행 권한·정책 검사는 프롬프트와 무관하게 policy.decide() 가 정한다.
-class PromptBody(BaseModel):
-    text: str
-    confirm: bool = False
-
-
-class ConfirmBody(BaseModel):
-    confirm: bool = False
-
-
-def _prompt_default(name: str) -> str:
-    for role in wb_prompts.catalog():
-        for p in role["prompts"]:
-            if p["name"] == name:
-                return p["default"]
-    raise HTTPException(404, f"편집할 수 없는 프롬프트: {name}")
-
-
-@router.get("/agents")
-def get_agents(conn=Depends(get_conn), user: str = Depends(current_user)):
-    overrides = {r["name"]: r for r in wb_prompts.list_all(conn)}
-    out = []
-    for role in wb_prompts.catalog():
-        prompts = []
-        for p in role["prompts"]:
-            o = overrides.get(p["name"])
-            prompts.append({**p, "text": o["text"] if o else p["default"], "overridden": bool(o),
-                            "updated_by": o["updated_by"] if o else None,
-                            "updated_at": o["updated_at"] if o else None})
-        out.append({"role": role["role"], "prompts": prompts})
-    return out
-
-
-@router.put("/agents/prompts/{name}")
-def put_prompt(name: str, body: PromptBody, conn=Depends(get_conn), user: str = Depends(current_user)):
-    _need_confirm(body.confirm)
-    default = _prompt_default(name)
-    text = body.text.strip()
-    if not (20 <= len(text) <= 12000):
-        raise HTTPException(422, "프롬프트는 20자 이상 12,000자 이하여야 합니다")
-    before = wb_prompts.get(conn, name, default)
-    if text == default.strip():  # 기본값과 같으면 오버라이드를 남기지 않는다
-        wb_prompts.reset(conn, name)
-    else:
-        wb_prompts.set(conn, name, text, operator=f"web:{user}")
-    _audit(conn, user, "admin_prompt_changed", {"name": name, "before": before, "after": text})
-    return {"name": name, "overridden": text != default.strip()}
-
-
-@router.post("/agents/prompts/{name}/reset")
-def reset_prompt(name: str, body: ConfirmBody, conn=Depends(get_conn), user: str = Depends(current_user)):
-    _need_confirm(body.confirm)
-    default = _prompt_default(name)
-    before = wb_prompts.get(conn, name, default)
-    wb_prompts.reset(conn, name)
-    _audit(conn, user, "admin_prompt_reset", {"name": name, "before": before})
-    return {"name": name, "overridden": False}
 
 
 # ── 승인(전체 진단의 승인 대기·최근 결정) ──
