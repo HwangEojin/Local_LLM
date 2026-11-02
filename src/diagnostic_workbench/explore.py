@@ -369,6 +369,11 @@ def propose(ctx) -> int:
             # 같은 대상을 다루면서 방금 나온 사실을 인용하지 않으면 체인을 잇지 않고 새 가지를 친 것으로 본다.
             # 다른 대상(target_id)으로 가지를 치는 제안에는 이 요구를 적용하지 않는다(정당한 병렬 탐색).
             why = "같은 대상을 다루면서 최신 사실(LATEST_FACT)의 증적을 인용하지 않음 — 체인을 이어가지 않음"
+        elif worker.blocked_streak(conn, run_id, asset_id, p["tool"]) >= worker.BLOCKED_STREAK_LIMIT:
+            # CLAUDE.md §6 "동일한 실패를 무한 반복하지 않는다" — PAST_FAILURES 로 LLM 에게 신호를 주는 것만으로는
+            # (프롬프트를 무시하고) 같은 조합을 또 제안할 수 있어, Python 쪽에서도 강제로 막는다.
+            why = policy.frame_block_message(f"도구 '{p['tool']}' 이(가) 이 자산에서 최근 연속 "
+                                             f"{worker.BLOCKED_STREAK_LIMIT}회 이상 차단됨(outcome=blocked)")
         else:
             # ALLOW_WITH_APPROVAL 도 큐에 올린다 — 체크리스트 작업과 같은 방식으로 BLOCKED 상태로 대기하다가
             # 운영자가 'approve' 를 기록하면 체인이 이어진다. 범위를 벗어나는 경우(DENY/NEEDS_SCOPE_CONFIRMATION)만 뺀다.
