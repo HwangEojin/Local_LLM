@@ -130,6 +130,37 @@ class McpRegisterTest(unittest.TestCase):
         self.assertNotIn("fake-test", [r["name"] for r in self.client.post("/api/admin/mcp/fake-test/delete", json={"confirm": True}).json()])
         self.assertEqual(self.client.post("/api/admin/mcp/burp/delete", json={"confirm": True}).status_code, 404)  # 이 PC 전용이 아님
 
+    # ── stdio(명령 실행) 등록, 2026-11: artex 처럼 웹에서도 지원하되 confirm_stdio 를 항상 요구한다 ──
+    def _stdio_body(self, **kw):
+        import sys
+        return {"transport": "stdio", "command": sys.executable,
+                "args": [str(Path(__file__).with_name("_fake_mcp_server_stdio.py"))], "confirm": True, **kw}
+
+    def test_stdio_discover_requires_confirm_stdio(self):
+        body = self._stdio_body()
+        del body["confirm"]
+        out = self.client.post("/api/admin/mcp/discover", json=body)
+        self.assertEqual(out.status_code, 400)
+
+    def test_stdio_discover_and_register(self):
+        body = self._stdio_body(confirm_stdio=True)
+        out = self.client.post("/api/admin/mcp/discover", json=body).json()
+        self.assertTrue(out["ok"], out)
+        self.assertEqual({t["name"] for t in out["tools"]}, {"fetch_page"})
+
+        sel = [{"name": "fetch_page", "risk": "write", "scope_args": {"url": "url"}}]
+        reg_body = {**self._stdio_body(confirm_stdio=False), "tools": sel}
+        self.assertEqual(self.client.post("/api/admin/mcp/fake-stdio/register", json=reg_body).status_code, 400)
+
+        reg_body = {**self._stdio_body(confirm_stdio=True), "tools": sel}
+        rows = self.client.post("/api/admin/mcp/fake-stdio/register", json=reg_body).json()
+        row = next(r for r in rows if r["name"] == "fake-stdio")
+        self.assertEqual(row["transport"], "stdio")
+        self.assertEqual(row["tools"], ["fetch_page"])
+        spec = wb_runs.registry(self.deps.get_cfg())["mcp:fake-stdio/fetch_page"]
+        self.assertEqual(spec.risk, "write")
+        self.client.post("/api/admin/mcp/fake-stdio/delete", json={"confirm": True})
+
 
 if __name__ == "__main__":
     unittest.main()

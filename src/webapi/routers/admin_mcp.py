@@ -2,8 +2,11 @@
 우리 정책 모델에 맞게 옮긴 것).
 
 artex 와 다른 점(CLAUDE.md §7/§8 때문에):
-- 원격(sse) 서버만 추가할 수 있다. stdio 는 웹에서 받은 command 를 이 PC 에서 실행하게 되므로 웹에서 받지 않는다(파일로만).
-- 주소는 루프백만(external_api.enabled 가 켜져 있을 때만 그 밖). 웹에서는 외부 허용 여부를 바꿀 수 없다.
+- stdio(명령 실행) 서버도 등록할 수 있지만(2026-11, artex 와 동일하게 지원), 별도 확인(`confirm_stdio`)이 항상 필요하고
+  env 는 raw 값이 아니라 `env_from`(호스트 환경변수 이름)으로만 받는다(비밀 값을 JSON 파일에 평문으로 안 둠). 등록은
+  이 로그인한 운영자만 할 수 있는 관리 API(단일 운영자 로컬 도구)라 artex 의 제한을 완화했지만, 실제 도구 '호출'은
+  stdio 든 sse 든 똑같이 policy.decide() 를 통과해야 한다 — 이 변경은 '누가 서버를 등록할 수 있는지'만 바꾼다.
+- sse 주소는 루프백만(external_api.enabled 가 켜져 있을 때만 그 밖). 웹에서는 외부 허용 여부를 바꿀 수 없다.
 - 도구는 '발견'만 하고 자동 등록하지 않는다. 운영자가 고른 도구만, 위험도(기본 write)와 범위 검사 인자(scope_args)를 붙여
   등록한다. 모든 도구 호출은 그대로 policy.decide() 와 scope_args 검사를 거친다.
 - 인자 스키마는 서버가 알려 준 것을 저장 시점에 다시 받아 쓴다(브라우저가 보낸 값을 믿지 않는다). 우리 스키마 검증기가
@@ -40,7 +43,9 @@ def _mcp_rows(cfg) -> list[dict]:
     local_names = set(audit_config.load_json(local, schemas.MCP_SERVERS)["servers"]) if local.exists() else set()
     return [{"name": n, "enabled": s["enabled"], "description": s.get("description", ""),
              "transport": s["transport"], "timeout_s": s["timeout_s"], "tools": sorted(s["allowed_tools"]),
-             "source": "local" if n in local_names else "shared"}
+             "source": "local" if n in local_names else "shared",
+             "target": (s["command"] + " " + " ".join(s.get("args", []))) if s["transport"] == "stdio"
+             else s.get("url", "")}
             for n, s in audit_config.load_mcp_servers(cfg.home).items()]
 
 
@@ -114,9 +119,8 @@ def _suggest_scope(schema: dict) -> dict[str, str]:
     return out
 
 
-def _discover(cfg, url: str, timeout_s: int) -> dict:
+def _discover(srv: dict) -> dict:
     from audit import mcp_client  # mcp 패키지를 쓰는 무거운 import 라 호출 때 가져온다
-    srv = {"transport": "sse", "url": url, "timeout_s": max(5, min(int(timeout_s), 120))}
     info = mcp_client.list_tools(srv)
     tools = []
     for t in info["tools"]:
@@ -128,17 +132,42 @@ def _discover(cfg, url: str, timeout_s: int) -> dict:
     return {"server": info["server"], "tools": tools}
 
 
+def _build_srv(cfg, transport: str, url: str, command: str, args: list[str], env_from: dict[str, str],
+              timeout_s: int, confirm_stdio: bool) -> dict:
+    """transport 에 맞는 mcp_client 용 srv dict 를 만든다. stdio 는 이 PC 에서 명령을 실행하게 되므로
+    항상 별도 확인(confirm_stdio)을 요구한다 — artex 처럼 그 확인 없이 등록되지 않게 막는다."""
+    timeout_s = max(5, min(int(timeout_s), 120))
+    if transport == "stdio":
+        if not confirm_stdio:
+            raise HTTPException(400, "stdio(명령 실행) 서버는 이 PC 에서 그 명령을 실행하게 됩니다. "
+                                     "별도 확인(confirm_stdio)이 필요합니다")
+        command = command.strip()
+        if not command:
+            raise HTTPException(422, "command 가 비어 있습니다")
+        return {"transport": "stdio", "command": command, "args": [a for a in args if a.strip()],
+                "env_from": env_from, "timeout_s": timeout_s}
+    if transport == "sse":
+        return {"transport": "sse", "url": _check_url(cfg, url), "timeout_s": timeout_s}
+    raise HTTPException(422, "transport 는 stdio 또는 sse 여야 합니다")
+
+
 class DiscoverBody(BaseModel):
-    url: str
+    transport: str = "sse"
+    url: str = ""
+    command: str = ""
+    args: list[str] = []
+    env_from: dict[str, str] = {}
     timeout_s: int = 30
+    confirm_stdio: bool = False
 
 
 @router.post("/mcp/discover")
 def discover_mcp(body: DiscoverBody, cfg=Depends(get_cfg), user: str = Depends(current_user)):
     """연결 테스트 겸 도구 발견. 아무것도 저장하지 않는다. 연결 실패는 200 으로 사유를 돌려준다(화면에 그대로 보여 주려고)."""
-    url = _check_url(cfg, body.url)
+    srv = _build_srv(cfg, body.transport, body.url, body.command, body.args, body.env_from, body.timeout_s,
+                     body.confirm_stdio)
     try:
-        return {"ok": True, **_discover(cfg, url, body.timeout_s)}
+        return {"ok": True, **_discover(srv)}
     except Exception as e:  # 연결 거부·시간 초과·프로토콜 오류 등 어떤 실패든 사유로 보여 준다
         return {"ok": False, "error": f"{type(e).__name__}: {e}"[:500]}
 
@@ -150,13 +179,19 @@ class ToolSel(BaseModel):
 
 
 class RegisterBody(BaseModel):
-    url: str
+    transport: str = "sse"
+    url: str = ""
+    command: str = ""
+    args: list[str] = []
+    env_from: dict[str, str] = {}
     description: str = ""
     timeout_s: int = 60
     enabled: bool = True
+    persistent: bool = False
     tools: list[ToolSel]
     confirm: bool = False
     confirm_unscoped_read: bool = False
+    confirm_stdio: bool = False
 
 
 @router.post("/mcp/{name}/register")
@@ -170,9 +205,10 @@ def register_mcp(name: str, body: RegisterBody, cfg=Depends(get_cfg), conn=Depen
         raise HTTPException(400, f"'{name}' 은(는) 공유 파일(mcp_servers.json)에 있는 서버라 웹에서 덮어쓸 수 없습니다")
     if not body.tools:
         raise HTTPException(422, "등록할 도구를 하나 이상 고르세요")
-    url = _check_url(cfg, body.url)
+    srv = _build_srv(cfg, body.transport, body.url, body.command, body.args, body.env_from, body.timeout_s,
+                     body.confirm_stdio)
     try:
-        found = {t["name"]: t for t in _discover(cfg, url, body.timeout_s)["tools"]}  # 브라우저가 보낸 스키마는 쓰지 않는다
+        found = {t["name"]: t for t in _discover(srv)["tools"]}  # 브라우저가 보낸 스키마는 쓰지 않는다
     except Exception as e:
         raise HTTPException(502, f"MCP 서버에 연결하지 못했습니다: {type(e).__name__}: {e}"[:300]) from None
     allowed, unscoped_reads = {}, []
@@ -200,15 +236,23 @@ def register_mcp(name: str, body: RegisterBody, cfg=Depends(get_cfg), conn=Depen
     local = _file(cfg, "mcp_servers.local.json")
     doc = audit_config.load_json(local, schemas.MCP_SERVERS) if local.exists() else {"servers": {}}
     before = doc["servers"].get(name)
-    doc["servers"][name] = {"enabled": body.enabled, "transport": "sse", "url": url,
-                            "timeout_s": max(5, min(body.timeout_s, 600)), "description": body.description.strip()[:300],
-                            "allowed_tools": allowed}
+    entry = {"enabled": body.enabled, "transport": srv["transport"],
+             "timeout_s": max(5, min(body.timeout_s, 600)), "description": body.description.strip()[:300],
+             "allowed_tools": allowed}
+    if srv["transport"] == "stdio":
+        entry.update(command=srv["command"], args=srv["args"], env_from=srv["env_from"], persistent=body.persistent)
+        identity = srv["command"] + " " + " ".join(srv["args"])
+    else:
+        entry["url"] = srv["url"]
+        identity = urlsplit(srv["url"]).netloc
+    doc["servers"][name] = entry
     errs = schemas.validate(doc, schemas.MCP_SERVERS)
     if errs:
         raise HTTPException(422, "검증 실패: " + "; ".join(errs[:5]))
     _write_json(cfg, local, doc)
     _audit(conn, user, "admin_mcp_registered", {
-        "server": name, "host": urlsplit(url).netloc, "enabled": body.enabled, "updated": before is not None,
+        "server": name, "transport": srv["transport"], "target": identity, "enabled": body.enabled,
+        "updated": before is not None,
         "tools": {n: {"risk": v["risk"], "scope_args": v.get("scope_args", {})} for n, v in allowed.items()}})
     return _mcp_rows(get_cfg())
 

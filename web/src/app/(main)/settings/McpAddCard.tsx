@@ -1,6 +1,7 @@
 // MCP 서버 추가: 연결 테스트·도구 발견 → 운영자가 고른 도구만 위험도·범위 검사 인자와 함께 등록.
-// 원격(sse) 서버만 웹에서 추가한다(stdio 명령 등록은 이 PC 에서 임의 명령을 실행하게 만들어 파일로만). 도구는 자동 등록하지 않으며
-// 등록된 도구도 매 호출 서버의 정책 검사(위험도·scope_args·승인)를 그대로 통과해야 한다.
+// 원격(sse)과 stdio(명령 실행) 둘 다 지원한다(2026-11, artex 참고) — stdio 는 이 PC 에서 그 명령을 실행하게
+// 되므로 별도 확인(confirm_stdio)이 항상 필요하다. 도구는 자동 등록하지 않으며 등록된 도구도 매 호출 서버의
+// 정책 검사(위험도·scope_args·승인)를 그대로 통과해야 한다.
 import { useState } from "react";
 import { Plug, Plus, Search } from "lucide-react";
 
@@ -9,6 +10,7 @@ import { api, DiscoveredTool, McpDiscovery, McpServer } from "@/lib/api";
 import { errMsg, Field, ICON } from "./parts";
 
 type Pick = { on: boolean; risk: string; scope: Record<string, string> };
+type Transport = "sse" | "stdio";
 const RISKS = ["read", "write", "dangerous"];
 const NAME_RE = /^[A-Za-z0-9_.-]{1,40}$/;
 
@@ -17,7 +19,10 @@ const stringProps = (t: DiscoveredTool) =>
 
 export function McpAddCard({ onAdded }: { onAdded: (servers: McpServer[]) => void }) {
   const [name, setName] = useState("");
+  const [transport, setTransport] = useState<Transport>("sse");
   const [url, setUrl] = useState("http://127.0.0.1:");
+  const [command, setCommand] = useState("");
+  const [args, setArgs] = useState(""); // 공백으로 구분해 입력받고 서버에는 배열로 보낸다
   const [timeout, setTimeoutS] = useState(60);
   const [desc, setDesc] = useState("");
   const [found, setFound] = useState<{ server: string; tools: DiscoveredTool[] } | null>(null);
@@ -26,12 +31,17 @@ export function McpAddCard({ onAdded }: { onAdded: (servers: McpServer[]) => voi
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
+  const target = () =>
+    transport === "stdio"
+      ? { transport, command: command.trim(), args: args.trim() ? args.trim().split(/\s+/) : [], confirm_stdio: true }
+      : { transport, url: url.trim() };
+
   async function discover() {
     setBusy(true);
     setError(null);
     setFound(null);
     try {
-      const r = await api.post<McpDiscovery>("/api/admin/mcp/discover", { url: url.trim(), timeout_s: 30 });
+      const r = await api.post<McpDiscovery>("/api/admin/mcp/discover", { ...target(), timeout_s: 30 });
       if (!r.ok) {
         setError(`연결하지 못했습니다: ${r.error}`);
         return;
@@ -54,7 +64,7 @@ export function McpAddCard({ onAdded }: { onAdded: (servers: McpServer[]) => voi
     setError(null);
     try {
       const servers = await api.post<McpServer[]>(`/api/admin/mcp/${encodeURIComponent(name)}/register`, {
-        url: url.trim(),
+        ...target(),
         description: desc,
         timeout_s: timeout,
         enabled: true,
@@ -81,23 +91,50 @@ export function McpAddCard({ onAdded }: { onAdded: (servers: McpServer[]) => voi
       return { ...p, [n]: { ...p[n], scope: kind ? { ...rest, [arg]: kind } : rest } };
     });
 
+  const canDiscover = transport === "sse" ? /^https?:\/\/.+/.test(url.trim()) : command.trim().length > 0;
+
   return (
     <Card className="space-y-3 p-4">
       <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <Plug className={ICON} aria-hidden /> MCP 서버 추가 <span className="text-xs font-normal text-faint">원격(sse) · 로컬 주소만</span>
+        <Plug className={ICON} aria-hidden /> MCP 서버 추가
       </h2>
       {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+      <div className="flex gap-1.5" role="radiogroup" aria-label="전송 방식">
+        {(["sse", "stdio"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="radio"
+            aria-checked={transport === t}
+            onClick={() => { setTransport(t); setFound(null); }}
+            className={`rounded-full border px-3 py-1 text-xs ${transport === t ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:text-ink"}`}
+          >
+            {t === "sse" ? "원격(SSE)" : "명령 실행(stdio)"}
+          </button>
+        ))}
+      </div>
       <div className="grid gap-4 md:grid-cols-3">
         <Field label="이름" hint="영문·숫자·._- (최대 40자), 도구는 mcp:이름/도구 로 등록됩니다">
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="my-scanner" />
         </Field>
-        <div className="md:col-span-2">
-          <Field label="서버 주소 (SSE)" hint="예: http://127.0.0.1:9876/sse — 로컬 주소만 웹에서 추가할 수 있습니다">
-            <input className={inputCls} value={url} onChange={(e) => setUrl(e.target.value)} />
-          </Field>
-        </div>
+        {transport === "sse" ? (
+          <div className="md:col-span-2">
+            <Field label="서버 주소 (SSE)" hint="예: http://127.0.0.1:9876/sse — 로컬 주소만 웹에서 추가할 수 있습니다">
+              <input className={inputCls} value={url} onChange={(e) => setUrl(e.target.value)} />
+            </Field>
+          </div>
+        ) : (
+          <>
+            <Field label="실행 파일" hint="이 PC 에서 그대로 실행됩니다(confirm_stdio 필요)">
+              <input className={inputCls} value={command} onChange={(e) => setCommand(e.target.value)} placeholder="python" />
+            </Field>
+            <Field label="인자 (공백으로 구분)">
+              <input className={inputCls} value={args} onChange={(e) => setArgs(e.target.value)} placeholder="bridge_mcp.py --port 8091" />
+            </Field>
+          </>
+        )}
       </div>
-      <button className={btnSecondary} disabled={busy || !/^https?:\/\/.+/.test(url.trim())} onClick={discover}>
+      <button className={btnSecondary} disabled={busy || !canDiscover} onClick={discover}>
         <Search className={ICON} aria-hidden /> {busy && !found ? "연결 중…" : "연결 테스트 · 도구 발견"}
       </button>
 
@@ -153,13 +190,18 @@ export function McpAddCard({ onAdded }: { onAdded: (servers: McpServer[]) => voi
         </div>
       )}
       <p className="text-xs text-faint">
-        stdio(명령 실행) 서버는 이 PC에서 명령을 실행하게 되므로 웹에서 추가할 수 없습니다 — config/mcp_servers.local.json 을 직접 수정하세요.
+stdio(명령 실행) 서버는 등록 즉시 이 PC에서 그 명령이 실행됩니다 — 신뢰할 수 있는 실행 파일만 등록하세요.
         등록은 이 PC 전용 파일에 저장되고 감사 로그에 기록됩니다. 도구 스키마는 서버가 알려 준 값을 저장 시점에 다시 받아 씁니다.
       </p>
 
       {confirming && (
-        <ConfirmDialog title={`${name} 서버의 도구 ${chosen.length}개를 등록할까요?`} confirmLabel="등록" danger={unscopedReads.length > 0} busy={busy} onConfirm={register} onCancel={() => setConfirming(false)}>
+        <ConfirmDialog title={`${name} 서버의 도구 ${chosen.length}개를 등록할까요?`} confirmLabel="등록" danger={unscopedReads.length > 0 || transport === "stdio"} busy={busy} onConfirm={register} onCancel={() => setConfirming(false)}>
           등록한 도구는 새 진단에서 호출 후보가 되며, 호출은 여전히 범위·위험도·승인 검사를 통과해야 합니다.
+          {transport === "stdio" && (
+            <span className="mt-2 block text-danger">
+              stdio 서버이므로 등록 즉시 이 PC에서 &lsquo;{command.trim()} {args.trim()}&rsquo; 명령이 실행됩니다.
+            </span>
+          )}
           {unscopedReads.length > 0 && (
             <span className="mt-2 block text-danger">
               범위 검사 인자 없이 read 로 등록하는 도구: {unscopedReads.map((t) => t.name).join(", ")} — 대상 범위 확인 없이, 승인 없이 실행됩니다.
