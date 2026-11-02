@@ -59,6 +59,16 @@ class GlobalViewsApiTest(unittest.TestCase):
             self.assertIn("run_code", out["items"][0])
             self.assertIn(out["items"][0]["tool"], ("proxy.http", "proxy.https"))
 
+    def test_llm_records_list_shape_and_pagination(self):
+        out = self.client.get("/api/llm-records", params={"limit": 2}).json()
+        self.assertIn("items", out)
+        self.assertIn("total", out)
+        self.assertLessEqual(len(out["items"]), 2)
+        if out["items"]:
+            self.assertIn("run_code", out["items"][0])
+            self.assertIn("model", out["items"][0])
+            self.assertIn("request_text", out["items"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

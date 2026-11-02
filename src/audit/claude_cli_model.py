@@ -63,10 +63,11 @@ class ClaudeCliClient:
             if self.storage and self.storage.count_model_calls(self.run_id) >= self.max_calls_per_run:
                 raise LLMError("max_calls_per_run 한도에 도달함")
             t0 = time.monotonic()
+            request_text = (f"[system]\n{system}\n\n" if system else "") + f"[user]\n{prompt}"
             try:
                 text = self._invoke(prompt, system)
             except LLMError as e:
-                self._record(purpose, None, t0, False, str(e))
+                self._record(purpose, None, t0, False, str(e), request_text)
                 raise
             try:
                 parsed = json.loads(_strip_fences(text))
@@ -75,9 +76,9 @@ class ClaudeCliClient:
                 errs = [f"모델 출력을 해석할 수 없음: {e}"]
             if errs:
                 last = "; ".join(errs)[:500]
-                self._record(purpose, None, t0, False, f"출력 형식 오류: {last}")
+                self._record(purpose, None, t0, False, f"출력 형식 오류: {last}", request_text, text)
                 continue
-            self._record(purpose, None, t0, True)
+            self._record(purpose, None, t0, True, request_text=request_text, response_text=text)
             return parsed
         raise LLMError(f"모델 출력이 {retries + 1}회 시도 후에도 스키마 검증에 실패함: {last}")
 
@@ -102,11 +103,12 @@ class ClaudeCliClient:
             raise LLMError(f"claude CLI 오류: {resp.get('result')}")
         return resp.get("result", "")
 
-    def _record(self, purpose, resp, t0, ok, error=None):
+    def _record(self, purpose, resp, t0, ok, error=None, request_text=None, response_text=None):
         if not self.storage:
             return
         self.storage.record_model_call(self.run_id, self.model, purpose, None, None, "unavailable",
-                                       int((time.monotonic() - t0) * 1000), ok, error)
+                                       int((time.monotonic() - t0) * 1000), ok, error,
+                                       request_text=request_text, response_text=response_text)
 
 
 def _strip_fences(text: str) -> str:
