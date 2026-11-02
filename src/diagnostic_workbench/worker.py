@@ -109,15 +109,39 @@ def calls(it: dict) -> list[tuple[str, str, dict]]:
     return [(r["id"], r["tool"], render_args(r["args"], it["target"])) for r in body["evidence_requirements"]]
 
 
+#  ponytail: 상태 코드 403/429 는 숫자만으로는 포트 번호·바이트 수 등과 구별할 수 없어(예: "429/tcp open",
+#  "received 403 bytes") 일부러 뺀다 — forbidden/too many requests 같은 문구가 늘 같이 오므로 신호는 그대로 잡힌다.
+_BLOCKED_PATTERN = re.compile(
+    r"(?i)\b(forbidden|waf|blocked|rate.?limit(?:ed)?|too many requests|captcha|access denied)\b|차단됨|거부됨|제한됨")
+
+
+def classify_outcome(status: str, text: str) -> str | None:
+    """실패 귀속(Observer/G5 패턴, artex guard.go 의 postToolUse 참고, CLAUDE.md §6/§8, 2026-11).
+
+    성공/실패 2분법 대신 ok/blocked/error 로 나눈다 — 'blocked'(WAF·레이트리밋·캡차 등 대상측 차단 흔적이
+    출력에 보임)는 같은 도구를 그대로 반복해도 또 막힐 뿐이라는 신호라, 일반 'error'(그 외 실행 실패)와
+    구분해 Planner/운영자가 다른 도구·인자로 전환할 근거로 쓴다. SKIPPED(정책 거부)는 분류하지 않는다(None)."""
+    if status == "SKIPPED":
+        return None
+    if _BLOCKED_PATTERN.search(text or ""):
+        return "blocked"
+    return "ok" if status == "SUCCEEDED" else "error"
+
+
 def record_invocation(ctx, it, worker_run_id, step, tool, d: policy.Decision, status, *, started=None,
-                      error=None, evidence_id=None, tool_version=""):
+                      error=None, evidence_id=None, tool_version="", outcome_text=""):
+    outcome_class = classify_outcome(status, outcome_text or error or "")
     ctx.conn.execute(
         "INSERT INTO tool_invocations (run_id, worker_run_id, backlog_item_id, asset_id, step_no, tool, "
-        "tool_version, args, policy_decision, policy_reason, status, error, evidence_id, started_at, ended_at) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,clock_timestamp())",
+        "tool_version, args, policy_decision, policy_reason, status, error, evidence_id, outcome_class, "
+        "started_at, ended_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,clock_timestamp())",
         (ctx.run["id"], worker_run_id, it["id"], it["asset_id"], step, tool, tool_version, db.masked(d.args),
-         d.decision, d.reason, status, mask_secrets(error) if error else None, evidence_id,
+         d.decision, d.reason, status, mask_secrets(error) if error else None, evidence_id, outcome_class,
          started or datetime.now(timezone.utc)))
+    if outcome_class == "blocked":
+        db.audit(ctx.conn, ctx.run["id"], "tool_outcome_blocked", {"backlog_item": str(it["id"]), "tool": tool,
+                                                                    "step": step})
 
 
 def set_verdict(conn, rci_id, verdict, reason, *, actor, decided_by, evidence_ids=(), rule_outcome=None,
@@ -253,11 +277,12 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
     if budget_key and d.decision == policy.ALLOW and _tool_calls_used(ctx, it["kind"]) >= ctx.run["budget"][budget_key]:
         d = policy.Decision(policy.DENY, f"실행 예산 {budget_key} 에 도달함", d.args)
     if d.decision != policy.ALLOW:
-        record_invocation(ctx, it, worker_run_id, step, tool, d, "SKIPPED", error=d.reason)
+        record_invocation(ctx, it, worker_run_id, step, tool, d, "SKIPPED", error=d.reason)  # 운영자용, 원본 사유
         db.audit(ctx.conn, ctx.run["id"], "policy_denied", {"backlog_item": str(it["id"]), "tool": tool,
                                                              "decision": d.decision, "reason": d.reason})
+        # evidence.error 는 다음 라운드 LLM 프롬프트(past/트레이스)에 노출될 수 있어 프레이밍을 씌운다(CLAUDE.md §8, 2026-11).
         eid = evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args,
-                             error=f"정책 거부({d.decision}): {d.reason}", **common)
+                             error=policy.frame_block_message(f"정책 거부({d.decision}): {d.reason}"), **common)
         ctx.conn.commit()
         return eid, None
     spec, err = ctx.registry[tool], None
@@ -299,7 +324,7 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
                 evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, media_type=mime, ext=ext, derived_from=eid,
                                output=ToolOutput(raw, out.tool_version), **{**common, "requirement_id": f"{req_id}:image"})
         record_invocation(ctx, it, worker_run_id, step, tool, d, "SUCCEEDED", started=started, evidence_id=eid,
-                          tool_version=out.tool_version)
+                          tool_version=out.tool_version, outcome_text=out.data[:4000].decode("utf-8", "replace"))
         _observe_assets(ctx, it, tool, d.args, out, eid)
         ctx.conn.commit()
         return eid, out

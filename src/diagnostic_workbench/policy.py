@@ -1,7 +1,9 @@
 """정책 판정 계층(LLM 외부). 모든 도구 호출은 decide() 의 명시적 결과를 받아야 한다.
 
-범위·인자·위험도 검사는 기존 audit.policy.Policy 를 그대로 쓰고, 여기서는 제외 대상, 전체 중지 스위치,
-DB 에 기록된 승인(실행·대상·도구·정확한 인자에 묶임)을 더해 네 가지 결과로 정리한다. 판단할 수 없으면 거부한다.
+범위·인자 검사는 기존 audit.policy.Policy 를 그대로 쓰고, 여기서는 제외 대상, 전체 중지 스위치, 인터셉트
+규칙(ask), DB 에 기록된 승인(실행·대상·도구·정확한 인자에 묶임)을 더해 네 가지 결과로 정리한다. 판단할 수
+없으면 거부한다. 도구 호출 위험도 체계(CLAUDE.md §8, 2026-11 삭제)는 더 이상 승인 게이트가 아니다 — 승인
+요구 여부는 인터셉트 규칙 매치 여부로만 정한다.
 """
 from __future__ import annotations
 
@@ -23,6 +25,17 @@ class Decision:
     decision: str
     reason: str
     args: dict  # 정책이 정규화한 인자(ALLOW 일 때만 실행에 사용)
+
+
+def frame_block_message(reason: str) -> str:
+    """정책 거부/승인대기 사유를 LLM 에게 보여줄 때만 씌우는 프레이밍(artex guard.go 의 systemBlockMessage 참고,
+    CLAUDE.md §8, 2026-11 적용). 차단이 '이 워크벤치의 정책 통제'이고 대상(target)의 방어 기전이 아님을
+    LLM 에게 명시해, 우회를 시도하지 말고 다른 가설·도구로 전환하도록 유도한다.
+
+    원본 reason 은 감사 로그/DB/운영자 화면에 그대로 남긴다 — 이 함수는 LLM 입력으로 쓰일 문자열에만 적용한다.
+    """
+    return (f"[워크벤치 정책 통제 — 대상의 방어가 아님] {reason}. 이 작업은 허용되지 않음. "
+            "다른 방법으로 우회를 시도하지 말고 다른 가설이나 도구로 전환할 것.")
 
 
 def args_hash(args: dict) -> str:
@@ -68,7 +81,7 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
         return Decision(DENY, f"도구 '{tool}' 은(는) 이 실행의 허용 도구 목록에 없음", raw)
     spec = ctx.registry.get(tool)
     try:
-        clean = ctx.policy.authorize(spec, tool, args, target, dry_run=True)
+        clean = ctx.policy.authorize(spec, tool, args, target)
     except PolicyDenied as e:
         return Decision(DENY, str(e), raw)
     for value in [target.value] + [clean[a] for a in spec.scope_args if a in clean]:
@@ -85,20 +98,16 @@ def decide(ctx, tool: str, args, asset_id) -> Decision:
             if hit:
                 return Decision(DENY, f"'{host}' 이(가) 제외 주소 '{hit}' 로 해석됨", clean)
     hit = _intercepted(cfg.intercept_rules, tool, clean)
-    if hit:  # 인터셉트 규칙에 걸리면 위험도·자율 모드와 무관하게 사람이 직접 보고 승인하게 한다
-        return Decision(ALLOW_WITH_APPROVAL, f"가로채기 규칙 '{hit}' 에 걸림 — 사람 승인 필요", clean)
-    if spec.risk == "read":
-        return Decision(ALLOW, "읽기 전용 도구, 범위 내", clean)
-    autonomy = ctx.run.get("autonomy", "approval")  # approval(기본) | full — 실행 생성 시 고정(2026-10-19: 이분법으로 단순화)
-    auto_ok = autonomy == "full"
-    if auto_ok:  # 승인을 건너뛰어도 그 사실을 감사 기록에 남긴다(범위·제외·중지 스위치 검사는 이미 위에서 통과함)
-        return Decision(ALLOW, f"자율 모드 '{autonomy}' 로 위험도 '{spec.risk}' 도구를 승인 없이 허용함", clean)
+    if hit is None:  # 인터셉트 규칙 미매치 — 위험도 게이트 없음(CLAUDE.md §8, 2026-11), 범위 내면 바로 허용
+        return Decision(ALLOW, "인터셉트 규칙 미매치, 범위 내", clean)
+    # 인터셉트 규칙에 걸리면 자율 모드(full 포함)와 무관하게 사람 승인을 강제한다 — 운영자가 '이건 항상
+    # 사람이 보게 한다'고 등록한 규칙을 자율 모드로 건너뛸 수 있으면 그 규칙이 통제로서 의미가 없어진다.
     row = ctx.conn.execute(
         "SELECT decision, approver FROM approvals WHERE run_id=%s AND asset_id=%s AND tool=%s AND args_sha256=%s "
         "AND expires_at > now() ORDER BY decided_at DESC LIMIT 1",
         (ctx.run["id"], asset_id, tool, args_hash(clean))).fetchone()
     if row is None:
-        return Decision(ALLOW_WITH_APPROVAL, f"위험도 '{spec.risk}' 도구는 유효한 승인이 필요함(자율 모드 '{autonomy}')", clean)
+        return Decision(ALLOW_WITH_APPROVAL, f"가로채기 규칙 '{hit}' 에 걸림 — 사람 승인 필요", clean)
     if row["decision"] != "APPROVED":
         return Decision(DENY, f"승인자 {row['approver']} 이(가) 거부함", clean)
     return Decision(ALLOW, f"승인됨 (승인자 {row['approver']})", clean)

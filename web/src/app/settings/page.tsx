@@ -48,12 +48,6 @@ const SECTIONS: { key: SectionKey | "logs"; label: string; Icon: typeof Crosshai
   { key: "kill-switch", label: "중지 스위치", Icon: OctagonAlert },
 ];
 
-const RISKS: { key: string; label: string; hint: string }[] = [
-  { key: "read", label: "읽기", hint: "조회만 하는 도구" },
-  { key: "write", label: "쓰기", hint: "대상 상태를 바꿀 수 있는 도구(승인 정책 적용)" },
-  { key: "dangerous", label: "위험", hint: "서비스 장애·데이터 손상 가능성이 있는 도구" },
-];
-
 const emptyTarget = (): Target => ({ target_id: "", type: "url", value: "", platform: "", description: "", code: "" });
 
 // ── 진단 대상 ──
@@ -82,7 +76,6 @@ function ScopeSection() {
 
   const set = (patch: Partial<Scope>) => setDraft({ ...draft, ...patch });
   const setTarget = (i: number, patch: Partial<Target>) => set({ targets: draft.targets.map((t, j) => (j === i ? { ...t, ...patch } : t)) });
-  const newDangerous = draft.allowed_risks.includes("dangerous") && !saved?.allowed_risks.includes("dangerous");
 
   // 빈 선택 필드는 키 자체를 빼서 서버 스키마(문자열 최소 길이·패턴)에 걸리지 않게 한다.
   const clean = (): Scope => ({
@@ -101,7 +94,7 @@ function ScopeSection() {
     setError(null);
     try {
       const body = clean();
-      const res = await api.put<Scope>("/api/admin/scope", { scope: body, confirm: true, confirm_dangerous: body.allowed_risks.includes("dangerous") });
+      const res = await api.put<Scope>("/api/admin/scope", { scope: body, confirm: true });
       setSaved(res);
       setDraft(res);
       toast("ok", "진단 대상을 저장했습니다");
@@ -129,28 +122,6 @@ function ScopeSection() {
             <input type="date" className={inputCls} value={draft.valid_until} onChange={(e) => set({ valid_until: e.target.value })} />
           </Field>
         </div>
-        <fieldset>
-          <legend className="mb-1.5 text-sm font-medium text-muted">허용 위험도</legend>
-          <div className="flex flex-wrap gap-2">
-            {RISKS.map((r) => {
-              const on = draft.allowed_risks.includes(r.key);
-              return (
-                <label key={r.key} className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm ${on ? "border-accent bg-accent/10" : "border-line hover:bg-raised"}`}>
-                  <input
-                    type="checkbox"
-                    className="mt-1 accent-[var(--accent)]"
-                    checked={on}
-                    onChange={(e) => set({ allowed_risks: e.target.checked ? [...draft.allowed_risks, r.key] : draft.allowed_risks.filter((x) => x !== r.key) })}
-                  />
-                  <span>
-                    {r.label}
-                    <span className="block text-xs text-faint">{r.hint}</span>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </fieldset>
       </Card>
 
       <Card className="p-4">
@@ -228,12 +199,11 @@ function ScopeSection() {
       </div>
 
       {confirming && (
-        <ConfirmDialog title="진단 대상을 저장할까요?" confirmLabel="저장" danger={newDangerous} busy={busy} onConfirm={save} onCancel={() => setConfirming(false)}>
+        <ConfirmDialog title="진단 대상을 저장할까요?" confirmLabel="저장" busy={busy} onConfirm={save} onCancel={() => setConfirming(false)}>
           <p>진단할 수 있는 범위를 바꾸는 중요한 설정입니다. 변경 전/후 값이 감사 로그에 기록됩니다.</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
             <li>이미 만든 진단은 생성 시점의 범위 사본을 쓰지만, 삭제·변경된 대상은 실행 중에도 제외됩니다.</li>
             <li>저장 전 서버가 만료일·중복 ID·경로·URL 형식을 검증합니다.</li>
-            {newDangerous && <li className="font-medium text-danger">‘위험’ 위험도를 새로 허용합니다. 서비스 장애나 데이터 손상 가능성이 있는 작업이 승인 대상에 포함됩니다.</li>}
           </ul>
         </ConfirmDialog>
       )}

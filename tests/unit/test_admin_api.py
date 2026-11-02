@@ -84,11 +84,8 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 422)
         self.assertEqual(self._scope(), s)  # 거부된 변경은 파일을 바꾸지 않는다
 
-    def test_scope_dangerous_needs_extra_confirm_and_change_is_audited(self):
+    def test_scope_change_is_audited(self):
         s = self._scope()
-        risky = {**s, "allowed_risks": ["read", "dangerous"]}
-        r = self.client.put("/api/admin/scope", json={"scope": risky, "confirm": True})
-        self.assertEqual(r.status_code, 400)
         ok = {**s, "targets": [{**s["targets"][0], "code": "TST"}]}
         r = self.client.put("/api/admin/scope", json={"scope": ok, "confirm": True})
         self.assertEqual(r.status_code, 200, r.text)

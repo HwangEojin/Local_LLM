@@ -215,7 +215,7 @@
     },
     "frida": {
       "enabled": false,
-      "description": "[템플릿] 이 PC 에 맞는 command/args 를 config/mcp_servers.local.json 에 같은 서버 이름으로 작성하고 enabled 를 true 로 둔다 (그 파일은 Git 에 올라가지 않는다). Frida MCP(stdio). 장치/프로세스 조회는 read, attach/spawn/hook/실행/종료는 dangerous(scope 의 allowed_risks 에 dangerous 가 있고 호출마다 사람이 승인해야 실행). 세션 id 를 호출 간에 쓰므로 persistent 연결을 쓴다. 대상 프로세스/기기는 scope 로 검증할 수 없다(운영자 책임).",
+      "description": "[템플릿] 이 PC 에 맞는 command/args 를 config/mcp_servers.local.json 에 같은 서버 이름으로 작성하고 enabled 를 true 로 둔다 (그 파일은 Git 에 올라가지 않는다). Frida MCP(stdio). 장치/프로세스 조회는 read, attach/spawn/hook/실행/종료는 dangerous(인터셉트 규칙으로 호출마다 사람 승인을 걸어야 실행). 세션 id 를 호출 간에 쓰므로 persistent 연결을 쓴다. 대상 프로세스/기기는 scope 로 검증할 수 없다(운영자 책임).",
       "transport": "stdio",
       "command": "frida-mcp",
       "args": [],

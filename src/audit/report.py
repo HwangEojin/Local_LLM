@@ -100,8 +100,7 @@ def write_docx(m: dict, path: Path, template: Path | None):
         ["종료", run["updated_at"]], ["상태", run["status"]]])
 
     doc.add_heading("2. 대상 및 범위", 1)
-    doc.add_paragraph(f"승인자: {_m(m['scope'].get('approved_by'))} / 유효기간: "
-                      f"{m['scope'].get('valid_until')} / 허용 위험도: {m['scope'].get('allowed_risks')}")
+    doc.add_paragraph(f"승인자: {_m(m['scope'].get('approved_by'))} / 유효기간: {m['scope'].get('valid_until')}")
     _table(doc, ["대상ID", "유형", "값"], [[t["target_id"], t["type"], t["value"]]
                                        for t in m["scope"].get("targets", [])
                                        if t["target_id"] in m["plan"]["targets"]])

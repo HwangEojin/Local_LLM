@@ -138,13 +138,11 @@ SETTINGS = {
 
 SCOPE = {
     "type": "object", "additionalProperties": False,
-    "required": ["engagement_id", "approved_by", "valid_until", "allowed_risks", "targets"],
+    "required": ["engagement_id", "approved_by", "valid_until", "targets"],
     "properties": {
         "engagement_id": _ID,
         "approved_by": _STR,
         "valid_until": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
-        "allowed_risks": {"type": "array", "minItems": 1,
-                          "items": {"enum": ["read", "write", "dangerous"]}},
         "targets": {
             "type": "array", "minItems": 1,
             "items": {
@@ -270,13 +268,16 @@ RULE_OVERLAYS = {
     "properties": {"overlays": {"type": "array", "items": RULE_OVERLAY}},
 }
 
-# 도구 오버라이드(웹에서 바꾸는 이 PC 전용 설정, config/tools.local.json): 도구를 끄거나 위험도를 바꾼다.
+# 도구 오버라이드(웹에서 바꾸는 이 PC 전용 설정, config/tools.local.json): 도구를 끈다.
 # 도구를 새로 등록하거나 실행 파일·인자 스키마를 바꾸는 필드는 없다.
+# "risk" 는 위험도 체계 삭제(CLAUDE.md §8, 2026-11) 이전의 레거시 필드 — 더는 쓰지 않지만, 이 필드가 남은
+# 기존 이 PC 전용 tools.local.json 파일이 업그레이드 후 스키마 검증 실패로 전체 레지스트리 구성을 막지
+# 않도록 속성 자체는 계속 허용하고 값은 무시한다(tool_overrides() 가 더 이상 읽지 않음).
 TOOL_OVERRIDES = {
     "type": "object", "additionalProperties": False,
     "properties": {
         "disabled": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        "risk": {"type": "object", "additionalProperties": {"enum": ["read", "write", "dangerous"]}},
+        "risk": {"type": "object"},
     },
 }
 

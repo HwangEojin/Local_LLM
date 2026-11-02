@@ -97,8 +97,7 @@ class SettingsMenusTest(unittest.TestCase):
         out = self.client.get("/api/admin/tools").json()
         self.assertTrue(out["tools"])
         t = out["tools"][0]
-        self.assertTrue({"name", "risk", "args_schema", "source", "allowed_by_scope"} <= set(t))
-        self.assertTrue(all(x["allowed_by_scope"] == (x["risk"] in out["allowed_risks"]) for x in out["tools"]))
+        self.assertTrue({"name", "risk", "args_schema", "source"} <= set(t))
 
     def test_approvals_overview_shape(self):
         out = self.client.get("/api/admin/approvals").json()
@@ -146,16 +145,23 @@ class SettingsMenusTest(unittest.TestCase):
         self.assertEqual(self._tput({"disabled": False, "confirm": True}).status_code, 200)
         self.assertIn("fs.read_file", wb_runs.registry(self.deps.get_cfg()))
 
-    def test_tool_risk_raise_is_free_but_lowering_needs_extra_confirm(self):
+    def test_legacy_tools_local_json_with_risk_key_still_loads(self):
+        # 위험도 체계 삭제(CLAUDE.md §8, 2026-11) 이전에 웹에서 저장된 tools.local.json 은 "risk" 키를
+        # 가지고 있을 수 있다 — 이 PC 전용(Git 제외) 파일이라 업그레이드로 자동 정리되지 않으므로, 스키마가
+        # 그 키를 거부해 레지스트리 구성 전체가 깨지면 안 된다.
+        import json
         from diagnostic_workbench import runs as wb_runs
-        base = self._tool()["base_risk"]
-        self.assertEqual(base, "read")
+        p = self.deps.get_cfg().home / "config" / "tools.local.json"
+        p.write_text(json.dumps({"disabled": [], "risk": {"nmap.scan": "write"}}), encoding="utf-8")
+        self.addCleanup(p.unlink, missing_ok=True)
+        self.assertIn("fs.read_file", wb_runs.registry(self.deps.get_cfg()))
+
+    def test_tool_risk_is_not_editable(self):
+        # 위험도 체계 삭제(CLAUDE.md §8, 2026-11) — risk 는 분류용 메타데이터일 뿐, ToolBody 에 그 필드가 없어
+        # 요청에 "risk" 를 보내도(알 수 없는 필드라 조용히 무시됨) 등록된 도구의 risk 는 그대로다.
+        self.assertEqual(self._tool()["risk"], "read")
         self.assertEqual(self._tput({"risk": "write", "confirm": True}).status_code, 200)
-        self.assertEqual(wb_runs.registry(self.deps.get_cfg())["fs.read_file"].risk, "write")
-        self.assertEqual(self._tput({"risk": "read", "confirm": True}).status_code, 400)  # 낮추기는 추가 확인 필요
-        self.assertEqual(self._tput({"risk": "read", "confirm": True, "confirm_lower_risk": True}).status_code, 200)
-        self.assertEqual(wb_runs.registry(self.deps.get_cfg())["fs.read_file"].risk, "read")
-        self.assertEqual(self._tput({"risk": "root", "confirm": True}).status_code, 422)
+        self.assertEqual(self._tool()["risk"], "read")
 
     # ── 알림 ──
     def test_notifications_mask_urls_and_require_external_confirm(self):

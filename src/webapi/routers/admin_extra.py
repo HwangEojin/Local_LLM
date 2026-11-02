@@ -1,7 +1,7 @@
 """웹 '도구' 편집, '알림', '스킬' API (admin.py 와 같은 원칙: 사람이 쓰는 경로, 모든 변경은 감사 이벤트).
 
-- 도구: 끄기와 위험도 변경만. 새 도구 등록·실행 파일·인자 스키마 변경은 없다. 위험도를 '낮추는' 것은 승인·범위
-  통제를 약하게 만드는 일이라 별도 확인(confirm_lower_risk)이 있어야 한다. 결과는 config/tools.local.json(Git 제외).
+- 도구: 끄기/켜기만. 새 도구 등록·실행 파일·인자 스키마 변경은 없다. 위험도 체계는 삭제됨(CLAUDE.md §8, 2026-11 업그레이드) —
+  승인 요구 여부는 인터셉트 규칙(ask)으로만 정한다. 결과는 config/tools.local.json(Git 제외).
 - 알림: 웹훅 주소는 데이터가 밖으로 나가는 통로다. 주소는 응답에 마스킹해서 내보내고(웹훅 주소 자체가 비밀),
   루프백/사설 주소가 아닌 곳을 켜거나 새로 등록하려면 별도 확인(confirm_external)이 있어야 한다.
   결과는 config/notify.local.json(Git 제외). 공유 파일(notify.json)의 채널은 끄고 켜기만 덮어쓴다.
@@ -29,22 +29,17 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # ── 도구 편집 ──
 class ToolBody(BaseModel):
     disabled: bool | None = None
-    risk: str | None = None  # 원하는 '실제' 위험도. 기본 위험도와 같으면 오버라이드를 지운다
     confirm: bool = False
-    confirm_lower_risk: bool = False
 
 
 def _tool_rows(cfg) -> dict:
     base = wb_runs.registry(cfg, apply_overrides=False)
     ov = wb_runs.tool_overrides(cfg)
-    allowed = set(audit_config.load_scope(cfg.home).get("allowed_risks", []))
-    rows = []
-    for n, t in sorted(base.items()):
-        risk = ov["risk"].get(n, t.risk)
-        rows.append({"name": n, "risk": risk, "base_risk": t.risk, "disabled": n in ov["disabled"],
-                     "args_schema": t.args_schema, "scope_args": t.scope_args,
-                     "source": "mcp" if n.startswith("mcp:") else "builtin", "allowed_by_scope": risk in allowed})
-    return {"allowed_risks": sorted(allowed), "tools": rows}
+    rows = [{"name": n, "risk": t.risk, "disabled": n in ov["disabled"],
+             "args_schema": t.args_schema, "scope_args": t.scope_args,
+             "source": "mcp" if n.startswith("mcp:") else "builtin"}
+            for n, t in sorted(base.items())]
+    return {"tools": rows}
 
 
 @router.get("/tools")
@@ -59,19 +54,9 @@ def put_tool(name: str, body: ToolBody, cfg=Depends(get_cfg), conn=Depends(get_c
     if name not in base:
         raise HTTPException(404, f"등록되지 않은 도구: {name}")
     old = wb_runs.tool_overrides(cfg)
-    new = {"disabled": list(old["disabled"]), "risk": dict(old["risk"])}
+    new = {"disabled": list(old["disabled"])}
     if body.disabled is not None:
         new["disabled"] = [n for n in new["disabled"] if n != name] + ([name] if body.disabled else [])
-    if body.risk is not None:
-        if body.risk not in wb_runs.RISK_ORDER:
-            raise HTTPException(422, f"위험도는 {list(wb_runs.RISK_ORDER)} 중 하나여야 합니다")
-        current = old["risk"].get(name, base[name].risk)
-        if wb_runs.RISK_ORDER[body.risk] < wb_runs.RISK_ORDER[current] and not body.confirm_lower_risk:
-            raise HTTPException(400, "위험도를 낮추면 승인·범위 통제가 약해집니다. 별도 확인(confirm_lower_risk)이 필요합니다")
-        if body.risk == base[name].risk:
-            new["risk"].pop(name, None)
-        else:
-            new["risk"][name] = body.risk
     errs = schemas.validate(new, schemas.TOOL_OVERRIDES)
     if errs:
         raise HTTPException(422, "검증 실패: " + "; ".join(errs[:5]))
