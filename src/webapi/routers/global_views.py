@@ -35,6 +35,31 @@ def list_all_findings(q: str = "", status: str | None = None, severity: str | No
     return {"items": rows, "total": total, "limit": limit, "offset": offset}
 
 
+@router.get("/api/llm-records")
+def list_llm_records(run: str = "", purpose: str = "", limit: int = 50, offset: int = 0,
+                     conn=Depends(get_conn), user: str = Depends(current_user)):
+    """LLM 호출 원문 기록(artex llmrec 참고, migrations/0020) 을 전체 진단 범위로 모은 목록. 새 진단 로직
+    없음 — model_calls 를 runs 와 조인해 조회만 한다. request_text/response_text 는 저장 시점에 이미
+    마스킹됐다(explore.py 의 _ModelLog.record_model_call)."""
+    limit, offset = max(1, min(limit, 200)), max(0, offset)
+    where, params = ["r.deleted_at IS NULL"], []
+    if run.strip():
+        where.append("r.run_code ILIKE %s")
+        params.append(f"%{run.strip()}%")
+    if purpose.strip():
+        where.append("mc.purpose = %s")
+        params.append(purpose.strip())
+    sql_where = " AND ".join(where)
+    total = conn.execute(f"SELECT count(*) AS n FROM model_calls mc JOIN runs r ON r.id = mc.run_id "
+                         f"WHERE {sql_where}", params).fetchone()["n"]
+    rows = conn.execute(
+        "SELECT mc.id, mc.ts, mc.model, mc.purpose, mc.prompt_tokens, mc.completion_tokens, mc.duration_ms, "
+        "mc.ok, mc.error, mc.request_text, mc.response_text, r.run_code "
+        f"FROM model_calls mc JOIN runs r ON r.id = mc.run_id WHERE {sql_where} "
+        "ORDER BY mc.ts DESC LIMIT %s OFFSET %s", params + [limit, offset]).fetchall()
+    return {"items": rows, "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("/api/traffic")
 def list_all_traffic(run: str = "", limit: int = 100, offset: int = 0, conn=Depends(get_conn),
                      user: str = Depends(current_user)):
