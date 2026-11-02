@@ -86,8 +86,9 @@
 
 A군(정책)과 B군(IA)은 서로 의존성이 없어 **병렬 진행 가능**.
 
-## D. 리스크 / 확인 필요
+## D. 리스크 / 확인 필요 — 전부 해소됨(2026-11-02)
 
-- **위험도 게이트 삭제의 실질 효과**: 지금까지 "write/dangerous 도구는 매번 사람 승인"이 기본값이었는데, 삭제 후에는 **인터셉트 규칙에 안 걸리면 바로 실행**된다. 운영 중인 `config/intercept_rules.local.json`에 write성 도구를 충분히 커버하는 규칙이 없다면 사실상 완전 자율 실행이 됨 — 적용 전에 intercept 규칙셋 점검 필요.
-- `runs.autonomy` 의미 재정의(위 A1의 "유지" 항목, *가정* 표시)는 사용자 확인 전 임시 설계. 자율모드 토글 자체를 없앨지 여부는 미확정.
-- A2 실패 귀속 저장 위치(기존 컬럼 재사용 vs 신규 컬럼)는 `tool_calls`/`backlog_items` 스키마를 실제로 열어본 뒤 결정 — 이번 계획서에는 포함 안 함(구현 착수 시 1차 조사 필요).
+- **위험도 게이트 삭제의 실질 효과 — 해결**: 점검 결과 `config/intercept_rules.json`(공유, Git 추적)이 비어 있었다(예시 파일만 있고 실제 파일은 없었음) — write/dangerous 도구 39개가 전부 승인 없이 바로 실행되는 상태였다. 등록된 레지스트리를 전수 조사해 write/dangerous 도구를 전부 커버하는 규칙 7개를 추가(`config/intercept_rules.json`), 회귀 테스트(`test_intercept_rules_cover_nonread_tools.py`)로 "새 write/dangerous 도구가 등록됐는데 규칙이 없으면" 테스트가 실패하도록 고정.
+- `runs.autonomy` 의미 재정의 — **채택 안 함으로 확정**(위 상단 메모 참고).
+- A2 실패 귀속 저장 위치 — **해결**: `tool_invocations.outcome_class` 신규 컬럼(마이그레이션 0019)으로 결정, 구현 완료.
+- **Planner 자동 전략 전환 — 추가 구현(2026-11-02)**: PAST_FAILURES로 LLM에 신호만 주는 것만으로는 프롬프트를 무시하고 같은 조합을 또 제안할 수 있어, `worker.blocked_streak()`(같은 실행·자산·도구 조합의 최근 연속 blocked 횟수)를 추가하고 `explore.propose()`의 제안 승인 체인에 연결 — 연속 2회 이상 차단된 조합은 Python이 직접 거부(기존 REJECTED 탐색 노드 기록 경로 재사용, 새 로직 최소화). 테스트 4건 추가(`test_blocked_streak.py`).
