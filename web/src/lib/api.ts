@@ -263,6 +263,7 @@ export type McpServer = {
   timeout_s: number;
   tools: string[];
   source: "shared" | "local";
+  target: string; // stdio: "command args…" / sse: 호스트:포트
 };
 
 export type ChecklistEntry = { checklist_id: string; version: string; status: string; sha256: string | null };
