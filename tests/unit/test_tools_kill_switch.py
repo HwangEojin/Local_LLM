@@ -1,6 +1,7 @@
 """Kill Switch 가 진행 중인 서브프로세스도 즉시 종료하는지 확인한다(CLAUDE.md §8 Kill Switch 동작,
 2026-10-19 — 신규 디스패치만 막던 기존 동작을 고쳤다).
 """
+import sys
 import tempfile
 import threading
 import time
@@ -9,6 +10,10 @@ from pathlib import Path
 
 from audit.models import ToolError
 from diagnostic_workbench.tools import _run_cancelable
+
+# ponytail: "python3" 는 Windows 에 보통 없다(py launcher/python.exe 만 있음) — 테스트를 실제로 실행 중인
+# 인터프리터를 그대로 쓴다. 서브프로세스 실행·취소 메커니즘 검증이 목적이라 어떤 파이썬이든 상관없다.
+_PY = sys.executable
 
 
 class RunCancelableTest(unittest.TestCase):
@@ -20,7 +25,7 @@ class RunCancelableTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_normal_completion_returns_output(self):
-        p = _run_cancelable(["python3", "-c", "print('hi')"], 5, self.stop_file)
+        p = _run_cancelable([_PY, "-c", "print('hi')"], 5, self.stop_file)
         self.assertEqual(p.returncode, 0)
         self.assertIn(b"hi", p.stdout)
 
@@ -33,7 +38,7 @@ class RunCancelableTest(unittest.TestCase):
 
         threading.Thread(target=trigger, daemon=True).start()
         with self.assertRaises(ToolError) as cm:
-            _run_cancelable(["python3", "-c", "import time; time.sleep(30)"], 30, self.stop_file)
+            _run_cancelable([_PY, "-c", "import time; time.sleep(30)"], 30, self.stop_file)
         elapsed = time.monotonic() - start
         self.assertIn("전체 중지 스위치", str(cm.exception))
         self.assertLess(elapsed, 5)  # 30초를 다 기다리지 않고 거의 즉시(폴링 간격 수준) 종료돼야 함
@@ -41,7 +46,7 @@ class RunCancelableTest(unittest.TestCase):
     def test_real_timeout_still_raised(self):
         import subprocess
         with self.assertRaises(subprocess.TimeoutExpired):
-            _run_cancelable(["python3", "-c", "import time; time.sleep(5)"], 0.3, self.stop_file)
+            _run_cancelable([_PY, "-c", "import time; time.sleep(5)"], 0.3, self.stop_file)
 
 
 if __name__ == "__main__":
