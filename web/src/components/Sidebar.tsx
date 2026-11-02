@@ -12,8 +12,10 @@ import {
   LogOut,
   OctagonAlert,
   Plus,
+  Radar,
   ScrollText,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   SunMoon,
   Terminal,
@@ -83,6 +85,8 @@ type NavItem = { href: string; label: string; Icon: typeof List; active: (path: 
 const WORK_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "대시보드", Icon: LayoutDashboard, active: (p) => p === "/dashboard" },
   { href: "/runs", label: "실행", Icon: List, active: (p) => p === "/runs" || (p.startsWith("/runs/") && p !== "/runs/new") },
+  { href: "/findings", label: "발견 사항", Icon: ShieldAlert, active: (p) => p === "/findings" },
+  { href: "/traffic", label: "트래픽", Icon: Radar, active: (p) => p === "/traffic" },
   { href: "/commands", label: "명령 이력", Icon: Terminal, active: (p) => p === "/commands" },
 ];
 

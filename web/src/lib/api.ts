@@ -89,6 +89,9 @@ export type Finding = {
   created_at: string;
 };
 
+// 전역 발견 사항 화면(/findings, UPGRADE_PLAN.md B2)용 — run_code 만 추가된다.
+export type FindingWithRun = Finding & { run_code: string };
+
 export type FindingDetail = {
   finding: Finding;
   evidence: {
@@ -182,6 +185,9 @@ export type TrafficEntry = {
   size: number | null;
   media_type: string | null;
 };
+
+// 전역 트래픽 화면(/traffic, UPGRADE_PLAN.md B2)용 — run_id/run_code 가 추가된다(다운로드 링크·표시용).
+export type TrafficEntryWithRun = TrafficEntry & { run_id: string; run_code: string };
 
 export type Question = {
   id: string;

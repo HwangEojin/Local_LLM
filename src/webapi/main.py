@@ -18,6 +18,7 @@ from .routers import auth as auth_router
 from .routers import dashboard as dashboard_router
 from .routers import environment as environment_router
 from .routers import findings as findings_router
+from .routers import global_views as global_views_router
 from .routers import runs as runs_router
 
 deps.get_cfg()  # .env 를 지금 읽어 둔다 — auth.py 는 환경 변수를 직접 읽으므로 로그인 전에 필요함
@@ -32,6 +33,7 @@ app.include_router(auth_router.router)
 app.include_router(environment_router.router)
 app.include_router(runs_router.router)
 app.include_router(findings_router.router)
+app.include_router(global_views_router.router)
 app.include_router(admin_router.router)
 app.include_router(admin_extra_router.router)
 app.include_router(admin_mcp_router.router)
