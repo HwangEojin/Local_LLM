@@ -201,6 +201,8 @@ export type DashboardData = {
   by_severity: { severity: string; n: number }[];
   totals: { runs: number; evidence: number; findings: number; assets: number };
   recent_runs: { id: string; run_code: string; status: string; operator: string; created_at: string; findings_count: number }[];
+  token_daily: { day: string; tokens: number; calls: number }[];
+  token_totals: { calls: number; tokens: number | null; failed: number };
 };
 
 export type Target = {
