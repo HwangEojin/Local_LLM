@@ -67,7 +67,7 @@
 
 1. **사이드바 재편 — 구현 완료(2026-11-02)**: `Header.tsx` 상단 탭 → 좌측 사이드바(`src/components/Sidebar.tsx`), `(main)` 라우트 그룹(`src/app/(main)/`, URL 불변) 도입, "작업"(대시보드/실행/명령이력) · "시스템"(설정/감사로그) 2분할. `AuthGate`/`KillSwitchBanner` 도 레이아웃으로 올려 각 page.tsx 중복 제거. **자산/발견사항/트래픽·증거는 B2(작업 화면 분리)에서 독립 페이지가 생길 때, LLM/MCP/에이전트/인터셉트/알림/스킬/도구는 B4(라우터 재편)에서 설정 내부 섹션이 독립 URL을 받을 때 사이드바에 추가** — 지금은 실제로 존재하는 라우트만 링크한다. `Header.tsx`는 삭제, 사용처 없음 확인(grep). 브라우저로 7개 라우트(대시보드/실행/실행 상세/새 진단/명령이력/감사로그/설정) 전부 직접 접속해 사이드바·active 상태·콘솔 에러 없음 확인.
 2. **작업 화면 분리 — 구현 완료(2026-11-02)**: `GET /api/findings`/`GET /api/traffic`(신규 `src/webapi/routers/global_views.py`, findings/evidence 를 runs 와 조인해 조회만 함, 새 진단 로직 없음) + 프론트 `/findings`·`/traffic` 페이지(사이드바 "작업" 그룹에 추가). 상세·검토·재검증 쓰기 동작은 각 행의 `run_id`로 기존 run-scope 엔드포인트(`FindingPanel`)를 그대로 재사용 — 새 쓰기 경로 없음. `runs/[id]`의 기존 탭은 그대로 둠(실행 범위로 보고 싶을 때 여전히 유용). 백엔드 테스트 3건 추가, 브라우저로 두 페이지 모두 실데이터 렌더링·상세 패널 열림 확인.
-3. **대시보드 강화**: 토큰 사용량 차트 + 활동 피드 + 검토대기(NEEDS_REVIEW) 패널 추가
+3. **대시보드 강화 — 구현 완료(2026-11-02)**: 기존 `model_calls` 테이블(이미 explore.py 가 호출마다 기록)을 `/api/dashboard`에서 집계(`token_daily`/`token_totals`)해 막대 차트로, `/api/admin/audit`를 재사용해 최근 활동 피드, `/api/findings?status=NEEDS_REVIEW`(B2)를 재사용해 검토 대기 패널 추가. 새 테이블·새 쓰기 경로 없음. 백엔드 테스트 1건 추가, 브라우저로 실데이터(토큰 18,186/27건, 활동 8건) 렌더링 확인.
 4. **백엔드 라우터 재편**: `admin.py`/`admin_extra.py`를 agents/mcp/notify/skills/tools로 분리해 프론트 IA와 매칭
 5. **디자인 톤**: 다크테마 유지, artex의 밀도 높은 테이블 패턴만 부분 채용
 

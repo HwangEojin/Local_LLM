@@ -32,5 +32,15 @@ def get_dashboard(conn=Depends(get_conn), user: str = Depends(current_user)):
         f"  FROM runs r WHERE {_SCOPE} ORDER BY r.created_at DESC LIMIT 10) x) AS recent_runs"
     ).fetchone()
     recent_runs = totals_and_recent.pop("recent_runs") or []
-    return {"by_status": by_status, "by_severity": by_severity,
-            "totals": totals_and_recent, "recent_runs": recent_runs}
+    # LLM 토큰 사용량(B3, UPGRADE_PLAN.md) — model_calls 는 explore.py 가 호출마다 남기는 추가 전용 기록
+    # (토큰 수를 모델이 보고 안 하면 token_source='estimated'/'unavailable', 합계는 그 행을 단순히 더함).
+    token_daily = conn.execute(
+        f"SELECT date(mc.ts) AS day, sum(coalesce(mc.prompt_tokens,0) + coalesce(mc.completion_tokens,0)) AS tokens, "
+        f"count(*) AS calls FROM model_calls mc JOIN runs r ON r.id=mc.run_id WHERE {_SCOPE} "
+        "AND mc.ts > now() - interval '14 days' GROUP BY 1 ORDER BY 1").fetchall()
+    token_totals = conn.execute(
+        f"SELECT count(*) AS calls, sum(coalesce(mc.prompt_tokens,0) + coalesce(mc.completion_tokens,0)) AS tokens, "
+        f"count(*) FILTER (WHERE NOT mc.ok) AS failed FROM model_calls mc JOIN runs r ON r.id=mc.run_id "
+        f"WHERE {_SCOPE}").fetchone()
+    return {"by_status": by_status, "by_severity": by_severity, "totals": totals_and_recent,
+            "recent_runs": recent_runs, "token_daily": token_daily, "token_totals": token_totals}
