@@ -42,6 +42,14 @@ def skills_for(conn, role: str, run_id=None) -> str:
             "tools or permissions, and never override the rules above.\n" + "\n\n".join(parts))
 
 
+def visible_tools(tools: dict, role: str, overrides: dict) -> dict:
+    """role 에게 제안 후보로 보여줄 도구만 남긴다(config/tools.local.json 의 hidden_from). disabled 와 달리
+    도구를 레지스트리에서 빼지 않으므로 실행 권한에는 영향 없음 — policy.decide() 는 이 필터와 무관하게
+    전체 레지스트리 기준으로 그대로 판정한다."""
+    hidden = overrides.get("hidden_from", {})
+    return {name: spec for name, spec in tools.items() if role not in hidden.get(name, [])}
+
+
 def set(conn, name: str, text: str, *, operator: str) -> None:
     conn.execute(
         "INSERT INTO agent_prompts (name, text, updated_by) VALUES (%s,%s,%s) "

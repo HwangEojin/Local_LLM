@@ -13,6 +13,7 @@ const RISK_CLS: Record<string, string> = {
   dangerous: "bg-danger/15 text-danger",
 };
 const RISKS = ["read", "write", "dangerous"];
+const VISIBILITY_ROLES = ["planner", "worker"]; // 이 둘만 제안 단계에서 도구 후보를 고른다(analyst/goals/reporter 는 해당 없음)
 
 export function ToolsSection() {
   const toast = useToast();
@@ -43,6 +44,18 @@ export function ToolsSection() {
     } finally {
       setBusy(false);
       setPending(null);
+    }
+  }
+
+  async function toggleVisibility(t: ToolInfo, role: string) {
+    const hidden_from = t.hidden_from.includes(role) ? t.hidden_from.filter((r) => r !== role) : [...t.hidden_from, role];
+    setBusy(true);
+    try {
+      setCat(await api.put<ToolCatalog>(`/api/admin/tools/${t.name}`, { hidden_from, confirm: true }));
+    } catch (e) {
+      setError(errMsg(e, "저장에 실패했습니다"));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -82,6 +95,21 @@ export function ToolsSection() {
                 </button>
               </div>
             </div>
+            <div className="mt-1.5 flex items-center gap-3 text-xs text-muted">
+              <span>제안 후보에서 숨기기:</span>
+              {VISIBILITY_ROLES.map((role) => (
+                <label key={role} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    className="accent-[var(--accent)]"
+                    disabled={busy}
+                    checked={t.hidden_from.includes(role)}
+                    onChange={() => toggleVisibility(t, role)}
+                  />
+                  {role}
+                </label>
+              ))}
+            </div>
             <details className="mt-1">
               <summary className="cursor-pointer text-xs text-muted">인자 스키마 · 범위 검사 인자 {Object.keys(t.scope_args).length}개</summary>
               <pre className="mt-1 max-h-48 overflow-auto rounded bg-canvas p-2 text-xs">{JSON.stringify({ args_schema: t.args_schema, scope_args: t.scope_args }, null, 2)}</pre>
@@ -91,7 +119,9 @@ export function ToolsSection() {
         {rows.length === 0 && <li className="py-3 text-sm text-faint">조건에 맞는 도구가 없습니다.</li>}
       </ul>
       <p className="text-xs text-faint">
-        끈 도구는 모든 경로에서 &lsquo;등록되지 않은 도구&rsquo;로 거부됩니다(진행 중인 진단은 다음 도구 호출 컨텍스트부터). 이 PC 전용 파일(tools.local.json)에 저장되고 변경 전/후가 감사 로그에 남습니다.
+        끈 도구는 모든 경로에서 &lsquo;등록되지 않은 도구&rsquo;로 거부됩니다(진행 중인 진단은 다음 도구 호출 컨텍스트부터). &ldquo;제안 후보에서 숨기기&rdquo;는
+        그 역할의 LLM 제안 목록에서만 안 보이게 할 뿐 도구를 끄는 게 아닙니다 — 다른 경로로 호출되면 여전히 policy.decide() 가 그대로 판정합니다.
+        둘 다 이 PC 전용 파일(tools.local.json)에 저장되고 변경 전/후가 감사 로그에 남습니다.
         새 도구 등록, 실행 파일 경로, 인자 스키마, 위험도는 웹에서 바꿀 수 없습니다. 승인 요구 여부는 인터셉트 규칙으로 정합니다.
       </p>
 
