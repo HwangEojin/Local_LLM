@@ -24,6 +24,11 @@ class ConfirmBody(BaseModel):
     confirm: bool = False
 
 
+class RoleDefaultBody(BaseModel):
+    llm_profile: str | None = None  # 비우면(None) 그 역할의 기본값 지정을 지운다
+    confirm: bool = False
+
+
 def _prompt_default(name: str) -> str:
     for role in wb_prompts.catalog():
         for p in role["prompts"]:
@@ -71,6 +76,24 @@ def reset_prompt(name: str, body: ConfirmBody, conn=Depends(get_conn), user: str
     wb_prompts.reset(conn, name, operator=f"web:{user}", default=default)
     _audit(conn, user, "admin_prompt_reset", {"name": name, "before": before})
     return {"name": name, "overridden": False}
+
+
+@router.get("/agents/role-defaults")
+def get_role_defaults(conn=Depends(get_conn), user: str = Depends(current_user)):
+    return wb_prompts.role_defaults(conn)
+
+
+@router.put("/agents/role-defaults/{role}")
+def put_role_default(role: str, body: RoleDefaultBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    if role not in {r["role"] for r in wb_prompts.catalog()}:
+        raise HTTPException(404, f"알 수 없는 역할: {role}")
+    if body.llm_profile:
+        wb_prompts.set_role_default(conn, role, body.llm_profile, operator=f"web:{user}")
+    else:
+        wb_prompts.clear_role_default(conn, role)
+    _audit(conn, user, "admin_role_default_changed", {"role": role, "llm_profile": body.llm_profile})
+    return {"role": role, "llm_profile": body.llm_profile}
 
 
 @router.get("/agents/prompts/{name}/versions")

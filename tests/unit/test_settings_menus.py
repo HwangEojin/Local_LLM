@@ -110,6 +110,17 @@ class SettingsMenusTest(unittest.TestCase):
         bad = self.client.post("/api/admin/agents/prompts/worker_agent_system/versions/999999999/restore", json={"confirm": True})
         self.assertEqual(bad.status_code, 404)
 
+    def test_role_default_model_set_clear_and_unknown_role(self):
+        self.addCleanup(lambda: self.client.put("/api/admin/agents/role-defaults/worker", json={"llm_profile": None, "confirm": True}))
+        self.assertEqual(self.client.put("/api/admin/agents/role-defaults/worker", json={"llm_profile": "x", "confirm": False}).status_code, 400)
+        self.assertEqual(self.client.put("/api/admin/agents/role-defaults/no-such-role", json={"llm_profile": "x", "confirm": True}).status_code, 404)
+
+        self.client.put("/api/admin/agents/role-defaults/worker", json={"llm_profile": "fast", "confirm": True})
+        self.assertEqual(self.client.get("/api/admin/agents/role-defaults").json()["worker"], "fast")
+
+        self.client.put("/api/admin/agents/role-defaults/worker", json={"llm_profile": None, "confirm": True})
+        self.assertNotIn("worker", self.client.get("/api/admin/agents/role-defaults").json())
+
     def test_tools_catalog(self):
         out = self.client.get("/api/admin/tools").json()
         self.assertTrue(out["tools"])
