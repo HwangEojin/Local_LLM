@@ -93,6 +93,23 @@ class SettingsMenusTest(unittest.TestCase):
         default = next(p["default"] for c in wb_prompts.catalog() for p in c["prompts"] if p["name"] == "worker_agent_system")
         self.assertFalse(self._put("worker_agent_system", default).json()["overridden"])
 
+    def test_prompt_versions_record_save_reset_and_restore(self):
+        first = "첫 버전 — " + "a" * 30
+        second = "둘째 버전 — " + "b" * 30
+        self._put("worker_agent_system", first)
+        self._put("worker_agent_system", second)
+        versions = self.client.get("/api/admin/agents/prompts/worker_agent_system/versions").json()
+        self.assertGreaterEqual(len(versions), 2)
+        self.assertEqual(versions[0]["text"], second)  # 최신 버전부터
+        first_id = next(v["id"] for v in versions if v["text"] == first)
+
+        restore = self.client.post(f"/api/admin/agents/prompts/worker_agent_system/versions/{first_id}/restore", json={"confirm": True})
+        self.assertEqual(restore.status_code, 200)
+        self.assertEqual(wb_prompts.get(self.conn, "worker_agent_system", "기본"), first)
+
+        bad = self.client.post("/api/admin/agents/prompts/worker_agent_system/versions/999999999/restore", json={"confirm": True})
+        self.assertEqual(bad.status_code, 404)
+
     def test_tools_catalog(self):
         out = self.client.get("/api/admin/tools").json()
         self.assertTrue(out["tools"])

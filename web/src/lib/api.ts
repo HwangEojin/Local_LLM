@@ -366,6 +366,7 @@ export type AgentPrompt = {
   updated_at: string | null;
 };
 export type AgentRoleInfo = { role: string; prompts: AgentPrompt[] };
+export type AgentPromptVersion = { id: number; text: string; updated_by: string; created_at: string };
 
 export type ToolInfo = {
   name: string;
