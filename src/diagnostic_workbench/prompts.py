@@ -78,6 +78,22 @@ def list_all(conn) -> list:
     return conn.execute("SELECT * FROM agent_prompts ORDER BY name").fetchall()
 
 
+def role_defaults(conn) -> dict[str, str]:
+    """역할별 기본 LLM 프로파일(/runs/new 의 "에이전트별 모델" 칸을 미리 채우는 값일 뿐, 실행 중 진단에는 영향 없음)."""
+    return {r["role"]: r["llm_profile"] for r in conn.execute("SELECT role, llm_profile FROM agent_role_defaults").fetchall()}
+
+
+def set_role_default(conn, role: str, llm_profile: str, *, operator: str) -> None:
+    conn.execute(
+        "INSERT INTO agent_role_defaults (role, llm_profile, updated_by) VALUES (%s,%s,%s) "
+        "ON CONFLICT (role) DO UPDATE SET llm_profile=EXCLUDED.llm_profile, updated_by=EXCLUDED.updated_by, updated_at=now()",
+        (role, llm_profile, operator))
+
+
+def clear_role_default(conn, role: str) -> None:
+    conn.execute("DELETE FROM agent_role_defaults WHERE role=%s", (role,))
+
+
 def catalog() -> list[dict]:
     """웹 '에이전트' 화면용: 역할별로 편집 가능한 프롬프트와 코드 기본값. 기본값이 각 모듈에 있어 순환 import 를
     피하려고 호출 시점에 가져온다. analyst(체크리스트 분석)의 프롬프트는 audit.local_model 에 고정돼 있어

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { History, RotateCcw, Save } from "lucide-react";
 
 import { Banner, btnGhost, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, Sheet, SkeletonRows, useToast } from "@/components/ui";
-import { AgentPrompt, AgentPromptVersion, AgentRoleInfo, api } from "@/lib/api";
+import { AgentPrompt, AgentPromptVersion, AgentRoleDefaults, AgentRoleInfo, api, LlmProfileRef } from "@/lib/api";
 import { AGENT_ROLE_LABEL, formatTime } from "@/lib/labels";
 import { errMsg, ICON } from "./parts";
 
@@ -133,6 +133,69 @@ function PromptEditor({ prompt, onChanged }: { prompt: AgentPrompt; onChanged: (
   );
 }
 
+function RoleDefaultModels({ roles }: { roles: string[] }) {
+  const toast = useToast();
+  const [profiles, setProfiles] = useState<LlmProfileRef[]>([]);
+  const [defaults, setDefaults] = useState<AgentRoleDefaults | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.get<{ profiles: LlmProfileRef[] }>("/api/environment/ollama-models").then((r) => setProfiles(r.profiles ?? [])).catch(() => {});
+    api.get<AgentRoleDefaults>("/api/admin/agents/role-defaults").then(setDefaults).catch((e) => setError(e.message));
+  }, []);
+
+  async function change(role: string, llm_profile: string) {
+    setBusy(role);
+    try {
+      await api.put(`/api/admin/agents/role-defaults/${role}`, { llm_profile: llm_profile || null, confirm: true });
+      setDefaults((d) => ({ ...d, [role]: llm_profile }));
+      toast("ok", "기본 모델을 저장했습니다");
+    } catch (e) {
+      setError(errMsg(e, "저장에 실패했습니다"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!defaults) return <SkeletonRows rows={2} />;
+  return (
+    <Card className="space-y-2 p-4">
+      <h2 className="text-sm font-semibold">역할별 기본 모델</h2>
+      <p className="text-xs text-muted">
+        새 진단을 만들 때 &ldquo;에이전트별 모델&rdquo; 칸을 이 값으로 미리 채웁니다. 진단을 시작한 뒤에는 그 진단에 박힌 모델을 그대로
+        쓰므로(바꿀 수 없음), 여기서 바꿔도 이미 실행 중인 진단에는 영향이 없습니다.
+      </p>
+      {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+      {profiles.length === 0 ? (
+        <p className="text-xs text-faint">등록된 LLM 프로파일이 없습니다(config/llm_profiles.json).</p>
+      ) : (
+        <div className="space-y-1.5 text-sm">
+          {roles.map((role) => (
+            <div key={role} className="flex items-center justify-between gap-3">
+              <label htmlFor={`rd-${role}`}>
+                {AGENT_ROLE_LABEL[role] ?? role} <span className="ml-1 font-mono text-xs text-faint">{role}</span>
+              </label>
+              <select
+                id={`rd-${role}`}
+                disabled={busy === role}
+                className={`${inputCls} max-w-[16rem]`}
+                value={defaults[role] ?? ""}
+                onChange={(e) => change(role, e.target.value)}
+              >
+                <option value="">(지정 안 함)</option>
+                {profiles.map((p) => (
+                  <option key={p.name} value={p.name}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function AgentsSection() {
   const [roles, setRoles] = useState<AgentRoleInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -146,8 +209,9 @@ export function AgentsSection() {
   return (
     <div className="space-y-4">
       <p className="text-xs text-faint">
-        역할마다 쓸 모델은 새 진단을 만들 때 지정합니다(지정하지 않으면 그 진단의 기본 모델). 여기서는 역할이 받는 프롬프트를 관리합니다.
+        여기서는 역할이 받는 프롬프트와, 새 진단에서 쓸 기본 모델을 관리합니다. 실제 모델은 새 진단을 만들 때마다 다시 지정할 수 있습니다.
       </p>
+      <RoleDefaultModels roles={roles.map((r) => r.role)} />
       {roles.map((r) => (
         <Card key={r.role} className="space-y-4 p-4">
           <div>
