@@ -1,9 +1,9 @@
 // 스킬 구역: 역할 프롬프트 뒤에 덧붙는 운영자 지침 묶음. 스킬은 LLM 이 일하는 방식을 다듬는 문구일 뿐이라 도구·권한을
 // 늘리지 못하고(정책 검사는 서버가 매 호출 독립적으로 한다) 위의 규칙을 덮어쓰지 못한다고 프롬프트에도 명시돼 있다.
 import { useCallback, useEffect, useState } from "react";
-import { FileUp, Plus, Save, Trash2 } from "lucide-react";
+import { FileText, FileUp, Plus, Save, Trash2 } from "lucide-react";
 
-import { Banner, btnDanger, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, SkeletonRows, useToast } from "@/components/ui";
+import { Banner, btnDanger, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, Sheet, SkeletonRows, useToast } from "@/components/ui";
 import { api, Skill, SkillsResponse, SkillUsage } from "@/lib/api";
 import { AGENT_ROLE_LABEL, formatTime } from "@/lib/labels";
 import { errMsg, Field, ICON } from "./parts";
@@ -185,10 +185,11 @@ export function SkillsSection() {
   const [error, setError] = useState<string | null>(null);
   const [fresh, setFresh] = useState<Draft | null>(null);
   const [edits, setEdits] = useState<Record<string, Draft>>({});
+  const [selected, setSelected] = useState<string | null>(null); // 파일트리에서 고른 스킬 이름(artex 레이아웃 참고, 2026-11)
+  const [importing, setImporting] = useState(false);
   const [del, setDel] = useState<string | null>(null);
   const [saving, setSaving] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showUsage, setShowUsage] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api.get<SkillsResponse>("/api/admin/skills").then(setData).catch((e) => setError(e.message));
@@ -198,13 +199,17 @@ export function SkillsSection() {
   async function save(d: Draft) {
     setBusy(true);
     setError(null);
+    const wasNew = selected === "__new__";
     try {
       setData(await api.put<SkillsResponse>(`/api/admin/skills/${encodeURIComponent(d.name)}`, { description: d.description, instructions: d.instructions, roles: d.roles, enabled: d.enabled, confirm: true }));
       setEdits((m) => {
         const { [d.name]: _drop, ...rest } = m;
         return rest;
       });
-      if (fresh && fresh.name === d.name) setFresh(null);
+      if (wasNew) {
+        setFresh(null);
+        setSelected(d.name);
+      }
       toast("ok", "스킬을 저장했습니다");
     } catch (e) {
       setError(errMsg(e, "저장에 실패했습니다"));
@@ -218,6 +223,7 @@ export function SkillsSection() {
     setBusy(true);
     try {
       setData(await api.post<SkillsResponse>(`/api/admin/skills/${encodeURIComponent(name)}/delete`, { confirm: true }));
+      if (selected === name) setSelected(null);
       toast("ok", "스킬을 삭제했습니다");
     } catch (e) {
       setError(errMsg(e, "삭제에 실패했습니다"));
@@ -230,79 +236,95 @@ export function SkillsSection() {
   if (error && !data) return <Banner>{error}</Banner>;
   if (!data) return <SkeletonRows rows={3} />;
   const valid = (d: Draft) => NAME_RE.test(d.name) && d.instructions.trim().length > 0;
+  const activeSkill = data.skills.find((s) => s.name === selected) ?? null;
+  const activeDraft: Draft | null =
+    selected === "__new__" ? fresh : selected ? (edits[selected] ?? (activeSkill ? fromSkill(activeSkill) : null)) : null;
+  const dirty = selected === "__new__" ? true : activeSkill && activeDraft ? JSON.stringify(activeDraft) !== JSON.stringify(fromSkill(activeSkill)) : false;
+
+  function selectExisting(name: string) {
+    setSelected(name);
+    setEdits((m) => (m[name] ? m : { ...m, [name]: fromSkill(data!.skills.find((s) => s.name === name)!) }));
+  }
+  function setActiveDraft(nd: Draft) {
+    if (selected === "__new__") setFresh(nd);
+    else if (selected) setEdits((m) => ({ ...m, [selected]: nd }));
+  }
+
   return (
     <div className="space-y-4">
       {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
       <p className="text-xs text-faint">
         스킬은 선택한 역할의 시스템 프롬프트 뒤에 덧붙는 지침입니다(역할당 합계 약 6,000자까지, 이름순). 도구·권한을 추가하지 못하고 정책 검사는 그대로 적용됩니다. 저장 후 새로 하는 LLM 호출부터 적용됩니다.
       </p>
-      <ImportSkillCard roles={data.roles} onImported={(d) => { setData(d); toast("ok", "SKILL.md 를 가져왔습니다"); }} />
-      {data.skills.map((s) => {
-        const d = edits[s.name];
-        const dirty = d && JSON.stringify(d) !== JSON.stringify(fromSkill(s));
-        return (
-          <Card key={s.name} className="space-y-3 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-sm font-medium">{s.name}</span>
-                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${s.enabled ? "bg-ok/15 text-ok" : "bg-raised text-muted"}`}>{s.enabled ? "사용" : "꺼짐"}</span>
-                {s.source === "import" && <span className="rounded-full bg-raised px-2 py-0.5 text-xs text-muted">가져옴{s.license ? ` · ${s.license}` : ""}</span>}
-                {s.roles.map((r) => (
-                  <span key={r} className="rounded-full bg-raised px-2 py-0.5 text-xs text-muted">{AGENT_ROLE_LABEL[r] ?? r}</span>
-                ))}
-                {s.roles.length === 0 && <span className="text-xs text-warn">붙은 역할 없음</span>}
-              </div>
-              <span className="text-xs text-faint">{s.updated_by} · {formatTime(s.updated_at)}</span>
-            </div>
-            {d ? (
-              <>
-                <SkillEditor draft={d} setDraft={(nd) => setEdits((m) => ({ ...m, [s.name]: nd }))} roles={data.roles} isNew={false} />
-                <div className="flex gap-2">
-                  <button disabled={busy || !dirty || !valid(d)} className={btnPrimary} onClick={() => setSaving(d)}>
-                    <Save className={ICON} aria-hidden /> 저장
-                  </button>
-                  <button className="rounded-md px-3 py-1.5 text-sm text-muted hover:bg-raised" onClick={() => setEdits(({ [s.name]: _x, ...rest }) => rest)}>취소</button>
-                  <button disabled={busy} className={btnDanger} onClick={() => setDel(s.name)}>
-                    <Trash2 className={ICON} aria-hidden /> 삭제
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                {s.description && <p className="text-xs text-muted">{s.description}</p>}
-                <p className="line-clamp-3 whitespace-pre-wrap text-xs">{s.instructions}</p>
-                <div className="flex gap-3">
-                  <button className="text-xs text-accent hover:underline" onClick={() => setEdits((m) => ({ ...m, [s.name]: fromSkill(s) }))}>편집</button>
-                  <button className="text-xs text-accent hover:underline" onClick={() => setShowUsage(showUsage === s.name ? null : s.name)}>
-                    {showUsage === s.name ? "사용 기록 접기" : "사용 기록 보기"}
-                  </button>
-                </div>
-                {showUsage === s.name && <UsagePanel name={s.name} />}
-              </>
-            )}
-          </Card>
-        );
-      })}
-      {data.skills.length === 0 && !fresh && <p className="text-sm text-faint">등록된 스킬이 없습니다.</p>}
-
-      {fresh ? (
-        <Card className="space-y-3 p-4">
-          <h2 className="text-sm font-semibold">새 스킬</h2>
-          <SkillEditor draft={fresh} setDraft={setFresh} roles={data.roles} isNew />
-          <div className="flex gap-2">
-            <button disabled={busy || !valid(fresh) || data.skills.some((s) => s.name === fresh.name)} className={btnPrimary} onClick={() => setSaving(fresh)}>
-              <Save className={ICON} aria-hidden /> 저장
-            </button>
-            <button className="rounded-md px-3 py-1.5 text-sm text-muted hover:bg-raised" onClick={() => setFresh(null)}>취소</button>
-          </div>
-          {data.skills.some((s) => s.name === fresh.name) && <p className="text-xs text-warn">같은 이름의 스킬이 이미 있습니다. 목록에서 편집하세요.</p>}
-        </Card>
-      ) : (
-        <button className={btnPrimary} onClick={() => setFresh(blank())}>
+      <div className="flex gap-2">
+        <button className={btnSecondary} onClick={() => setImporting(true)}>
+          <FileUp className={ICON} aria-hidden /> 가져오기
+        </button>
+        <button className={btnPrimary} onClick={() => { setFresh(blank()); setSelected("__new__"); }}>
           <Plus className={ICON} aria-hidden /> 스킬 추가
         </button>
-      )}
+      </div>
 
+      <div className="flex gap-4">
+        <nav className="w-56 shrink-0 space-y-0.5 border-r border-line pr-3" aria-label="스킬 목록">
+          {data.skills.length === 0 && <p className="text-xs text-faint">등록된 스킬이 없습니다.</p>}
+          {data.skills.map((s) => (
+            <button
+              key={s.name}
+              onClick={() => selectExisting(s.name)}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${selected === s.name ? "bg-raised text-ink" : "text-muted hover:bg-raised/60 hover:text-ink"}`}
+            >
+              <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="truncate font-mono">{s.name}</span>
+              {!s.enabled && <span className="ml-auto shrink-0 text-xs text-faint">꺼짐</span>}
+            </button>
+          ))}
+        </nav>
+        <div className="min-w-0 flex-1">
+          {!activeDraft ? (
+            <div className="rounded-lg border border-dashed border-line px-6 py-10 text-center text-sm text-faint">
+              왼쪽에서 스킬을 선택하거나 새로 추가하세요
+            </div>
+          ) : (
+            <Card className="space-y-3 p-4">
+              {selected !== "__new__" && activeSkill && (
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${activeSkill.enabled ? "bg-ok/15 text-ok" : "bg-raised text-muted"}`}>{activeSkill.enabled ? "사용" : "꺼짐"}</span>
+                    {activeSkill.source === "import" && <span className="rounded-full bg-raised px-2 py-0.5 text-xs text-muted">가져옴{activeSkill.license ? ` · ${activeSkill.license}` : ""}</span>}
+                  </div>
+                  <span className="text-xs text-faint">{activeSkill.updated_by} · {formatTime(activeSkill.updated_at)}</span>
+                </div>
+              )}
+              <SkillEditor draft={activeDraft} setDraft={setActiveDraft} roles={data.roles} isNew={selected === "__new__"} />
+              <div className="flex gap-2">
+                <button
+                  disabled={busy || !dirty || !valid(activeDraft) || (selected === "__new__" && data.skills.some((s) => s.name === activeDraft.name))}
+                  className={btnPrimary}
+                  onClick={() => setSaving(activeDraft)}
+                >
+                  <Save className={ICON} aria-hidden /> 저장
+                </button>
+                {selected !== "__new__" && (
+                  <button disabled={busy} className={btnDanger} onClick={() => setDel(selected!)}>
+                    <Trash2 className={ICON} aria-hidden /> 삭제
+                  </button>
+                )}
+              </div>
+              {selected === "__new__" && data.skills.some((s) => s.name === activeDraft.name) && (
+                <p className="text-xs text-warn">같은 이름의 스킬이 이미 있습니다.</p>
+              )}
+              {selected !== "__new__" && <UsagePanel name={selected!} />}
+            </Card>
+          )}
+        </div>
+      </div>
+
+      {importing && (
+        <Sheet title="SKILL.md 가져오기" onClose={() => setImporting(false)} widthClass="max-w-xl">
+          <ImportSkillCard roles={data.roles} onImported={(d) => { setData(d); setImporting(false); toast("ok", "SKILL.md 를 가져왔습니다"); }} />
+        </Sheet>
+      )}
       {saving && (
         <ConfirmDialog title={`${saving.name} 스킬을 저장할까요?`} confirmLabel="저장" busy={busy} onConfirm={() => save(saving)} onCancel={() => setSaving(null)}>
           선택한 역할({saving.roles.map((r) => AGENT_ROLE_LABEL[r] ?? r).join(", ") || "없음"})의 이후 LLM 호출에 이 지침이 덧붙습니다. 변경 전/후가 감사 로그에 기록됩니다.
