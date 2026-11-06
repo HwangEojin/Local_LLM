@@ -173,6 +173,18 @@ class SettingsMenusTest(unittest.TestCase):
         self.assertEqual(self._tput({"disabled": False, "confirm": True}).status_code, 200)
         self.assertIn("fs.read_file", wb_runs.registry(self.deps.get_cfg()))
 
+    def test_tool_hidden_from_narrows_candidates_but_not_execution(self):
+        from diagnostic_workbench import prompts as wb_prompts, runs as wb_runs
+        self.addCleanup(lambda: self._tput({"hidden_from": [], "confirm": True}))
+        self.assertEqual(self._tput({"hidden_from": ["planner"], "confirm": True}).status_code, 200)
+        self.assertEqual(self._tool()["hidden_from"], ["planner"])
+        # 레지스트리(실행 경로)에는 그대로 남아 있다 — 숨김은 제안 후보만 좁힌다
+        self.assertIn("fs.read_file", wb_runs.registry(self.deps.get_cfg()))
+        overrides = wb_runs.tool_overrides(self.deps.get_cfg())
+        registry = wb_runs.registry(self.deps.get_cfg())
+        self.assertNotIn("fs.read_file", wb_prompts.visible_tools(registry, "planner", overrides))
+        self.assertIn("fs.read_file", wb_prompts.visible_tools(registry, "worker", overrides))
+
     def test_legacy_tools_local_json_with_risk_key_still_loads(self):
         # 위험도 체계 삭제(CLAUDE.md §8, 2026-11) 이전에 웹에서 저장된 tools.local.json 은 "risk" 키를
         # 가지고 있을 수 있다 — 이 PC 전용(Git 제외) 파일이라 업그레이드로 자동 정리되지 않으므로, 스키마가
