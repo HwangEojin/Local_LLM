@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bell, Bot, ClipboardList, ShieldAlert, Sparkles, Cpu, Crosshair, FileText, Lock, OctagonAlert, Plug, Plus, Power, PowerOff, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Wrench } from "lucide-react";
 
-import { Banner, btnDanger, btnGhost, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, SkeletonRows, useToast } from "@/components/ui";
+import { Banner, btnDanger, btnGhost, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, Sheet, SkeletonRows, useToast } from "@/components/ui";
 import {
   api,
   ApiError,
@@ -16,6 +16,8 @@ import {
   Scope,
   Target,
   testLlm,
+  ToolCatalog,
+  ToolInfo,
   WorkbenchSettings,
 } from "@/lib/api";
 import { formatTime } from "@/lib/labels";
@@ -469,84 +471,163 @@ function LlmSection() {
   );
 }
 
+// ── MCP 서버 상세(artex 의 카드+Sheet 드로어 레이아웃, 2026-11. §설정/도구 탭 — 설정 탭은 읽기 전용 표시
+// + 켜기끄기·삭제뿐이다: 등록된 서버의 명령·주소·허용 도구는 웹에서 못 바꾼다(기존 제약 그대로).
+function McpDetailSheet({ server, onClose, onChanged }: { server: McpServer; onClose: () => void; onChanged: (list: McpServer[]) => void }) {
+  const toast = useToast();
+  const [tab, setTab] = useState<"settings" | "tools">("settings");
+  const [tools, setTools] = useState<ToolInfo[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  useEffect(() => {
+    api.get<ToolCatalog>("/api/admin/tools").then((c) => setTools(c.tools.filter((t) => t.name.startsWith(`mcp:${server.name}/`)))).catch(() => setTools([]));
+  }, [server.name]);
+
+  async function toggle() {
+    setBusy(true);
+    try {
+      onChanged(await api.put<McpServer[]>(`/api/admin/mcp/${encodeURIComponent(server.name)}`, { enabled: !server.enabled, confirm: true }));
+      toast("ok", `${server.name}: ${server.enabled ? "비활성화" : "활성화"}했습니다`);
+      onClose();
+    } catch (e) {
+      toast("danger", errMsg(e, "변경에 실패했습니다"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    try {
+      onChanged(await api.post<McpServer[]>(`/api/admin/mcp/${encodeURIComponent(server.name)}/delete`, { confirm: true }));
+      toast("ok", `${server.name} 서버를 삭제했습니다`);
+      onClose();
+    } catch (e) {
+      toast("danger", errMsg(e, "삭제에 실패했습니다"));
+    } finally {
+      setBusy(false);
+      setRemoving(false);
+    }
+  }
+
+  return (
+    <Sheet
+      title={server.name}
+      subtitle={<span className="font-mono">{server.transport} · {server.target}</span>}
+      onClose={onClose}
+    >
+      <div className="mb-4 flex gap-1.5 border-b border-line pb-3">
+        {(["settings", "tools"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`rounded-full px-3 py-1 text-xs ${tab === t ? "bg-accent/10 text-accent" : "text-muted hover:text-ink"}`}
+          >
+            {t === "settings" ? "설정" : `도구 (${tools?.length ?? "…"})`}
+          </button>
+        ))}
+      </div>
+      {tab === "settings" ? (
+        <div className="space-y-4">
+          <dl className="space-y-2 text-sm">
+            <div className="flex justify-between gap-3"><dt className="text-muted">상태</dt><dd>{server.enabled ? "활성" : "비활성"}</dd></div>
+            <div className="flex justify-between gap-3"><dt className="text-muted">전송</dt><dd className="font-mono">{server.transport}</dd></div>
+            <div className="flex justify-between gap-3"><dt className="text-muted">제한시간</dt><dd>{server.timeout_s}초</dd></div>
+            <div className="flex justify-between gap-3"><dt className="text-muted">출처</dt><dd>{server.source === "local" ? "이 PC 설정" : "공유 파일"}</dd></div>
+            {server.description && <div><dt className="text-muted">설명</dt><dd className="mt-1">{server.description}</dd></div>}
+          </dl>
+          <p className="text-xs text-faint">명령·주소·허용 도구는 웹에서 바꿀 수 없습니다(삭제 후 다시 등록). 변경은 이 PC 전용 파일(mcp_servers.local.json)에 저장됩니다.</p>
+          <div className="flex gap-2">
+            <button disabled={busy} onClick={toggle} className={server.enabled ? btnSecondary : btnPrimary}>
+              {server.enabled ? <PowerOff className={ICON} aria-hidden /> : <Power className={ICON} aria-hidden />}
+              {server.enabled ? "비활성화" : "활성화"}
+            </button>
+            {server.source === "local" && (
+              <button disabled={busy} onClick={() => setRemoving(true)} className={btnDanger}>
+                <Trash2 className={ICON} aria-hidden /> 삭제
+              </button>
+            )}
+          </div>
+        </div>
+      ) : !tools ? (
+        <SkeletonRows rows={3} />
+      ) : tools.length === 0 ? (
+        <p className="text-sm text-faint">등록된 도구가 없습니다.</p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {tools.map((t) => (
+            <li key={t.name} className="py-2">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs">{t.name.split("/").slice(1).join("/")}</span>
+                <span className="rounded-full bg-raised px-2 py-0.5 text-xs text-muted">{t.risk}</span>
+              </div>
+              {Object.keys(t.scope_args).length > 0 && (
+                <p className="mt-0.5 text-xs text-faint">범위 검사: {Object.entries(t.scope_args).map(([a, k]) => `${a}(${k})`).join(", ")}</p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {removing && (
+        <ConfirmDialog title={`${server.name} 서버를 삭제할까요?`} confirmLabel="삭제" danger busy={busy} onConfirm={remove} onCancel={() => setRemoving(false)}>
+          이 PC 전용 설정에서 서버와 등록된 도구 {server.tools.length}개가 지워집니다. 공유 파일에도 있는 서버는 지울 수 없습니다.
+        </ConfirmDialog>
+      )}
+    </Sheet>
+  );
+}
+
 // ── MCP·체크리스트 ──
 function McpSection({ part }: { part: "mcp" | "checklists" }) {
   const toast = useToast();
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [checklists, setChecklists] = useState<ChecklistEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [target, setTarget] = useState<McpServer | null>(null);
-  const [removing, setRemoving] = useState<McpServer | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     api.get<McpServer[]>("/api/admin/mcp").then(setServers).catch((e) => setError(e.message));
     api.get<ChecklistEntry[]>("/api/admin/checklists").then(setChecklists).catch(() => setChecklists([]));
   }, []);
 
-  async function toggle(s: McpServer) {
-    setBusy(true);
-    try {
-      setServers(await api.put<McpServer[]>(`/api/admin/mcp/${encodeURIComponent(s.name)}`, { enabled: !s.enabled, confirm: true }));
-      toast("ok", `${s.name}: ${s.enabled ? "비활성화" : "활성화"}했습니다`);
-    } catch (e) {
-      toast("danger", errMsg(e, "변경에 실패했습니다"));
-    } finally {
-      setBusy(false);
-      setTarget(null);
-    }
-  }
-
-  async function remove(s: McpServer) {
-    setBusy(true);
-    try {
-      setServers(await api.post<McpServer[]>(`/api/admin/mcp/${encodeURIComponent(s.name)}/delete`, { confirm: true }));
-      toast("ok", `${s.name} 서버를 삭제했습니다`);
-    } catch (e) {
-      setError(errMsg(e, "삭제에 실패했습니다"));
-    } finally {
-      setBusy(false);
-      setRemoving(null);
-    }
-  }
+  const selectedServer = servers?.find((s) => s.name === selected) ?? null;
 
   return (
     <div className="space-y-4">
       {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
-      {part === "mcp" && <McpAddCard onAdded={(list) => { setServers(list); toast("ok", "MCP 서버를 등록했습니다"); }} />}
-      {part === "mcp" && <Card className="p-4">
-        <h2 className="mb-3 text-sm font-semibold">MCP 서버</h2>
-        {!servers ? (
-          <SkeletonRows rows={3} />
-        ) : (
-          <ul className="divide-y divide-line">
-            {servers.map((s) => (
-              <li key={s.name} className="flex items-start justify-between gap-4 py-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-sm font-medium">{s.name}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${s.enabled ? "bg-ok/15 text-ok" : "bg-raised text-muted"}`}>{s.enabled ? "활성" : "비활성"}</span>
-                    <span className="text-xs text-faint">{s.transport} · 제한시간 {s.timeout_s}초 · 도구 {s.tools.length}개{s.source === "local" ? " · 이 PC 설정" : ""}</span>
-                  </div>
-                  {s.description && <p className="mt-1 line-clamp-2 text-xs text-muted">{s.description}</p>}
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <button disabled={busy} onClick={() => (s.enabled ? toggle(s) : setTarget(s))} className={`${s.enabled ? btnSecondary : btnPrimary} whitespace-nowrap`}>
-                    {s.enabled ? <PowerOff className={ICON} aria-hidden /> : <Power className={ICON} aria-hidden />}
-                    {s.enabled ? "비활성화" : "활성화"}
-                  </button>
-                  {s.source === "local" && (
-                    <button disabled={busy} onClick={() => setRemoving(s)} className={btnDanger} title="이 PC 전용 서버 삭제">
-                      <Trash2 className={ICON} aria-hidden /> 삭제
-                    </button>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="mt-3 text-xs text-faint">명령·주소·허용 도구는 웹에서 바꿀 수 없고 활성/비활성만 바꿉니다. 변경은 이 PC 전용 파일(mcp_servers.local.json)에 저장됩니다.</p>
-      </Card>}
+      {part === "mcp" && (
+        <div>
+          <h2 className="mb-3 text-sm font-semibold">MCP 서버</h2>
+          {!servers ? (
+            <SkeletonRows rows={3} />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <button
+                onClick={() => setAdding(true)}
+                className="flex min-h-28 flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-line text-sm text-muted hover:border-accent hover:text-accent"
+              >
+                <Plus className={ICON} aria-hidden /> 서버 추가
+              </button>
+              {servers.map((s) => (
+                <button key={s.name} onClick={() => setSelected(s.name)} className="text-left">
+                  <Card className={`space-y-2 p-3 transition-colors hover:border-accent/50 ${!s.enabled ? "opacity-60" : ""}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 truncate font-mono text-sm font-medium">
+                        <Plug className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> {s.name}
+                      </span>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${s.enabled ? "bg-ok/15 text-ok" : "bg-raised text-muted"}`}>{s.enabled ? "활성" : "비활성"}</span>
+                    </div>
+                    <p className="text-xs text-faint">{s.transport} · 도구 {s.tools.length}개{s.source === "local" ? " · 이 PC" : ""}</p>
+                    {s.description && <p className="line-clamp-2 text-xs text-muted">{s.description}</p>}
+                  </Card>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {part === "checklists" && <Card className="p-4">
         <h2 className="mb-3 text-sm font-semibold">체크리스트</h2>
@@ -579,15 +660,18 @@ function McpSection({ part }: { part: "mcp" | "checklists" }) {
         <p className="mt-3 text-xs text-faint">체크리스트 활성화는 원본 해시 검증과 사람의 확인이 필요해 현재는 CLI(checklist activate)에서만 합니다. 여기서는 조회만 가능합니다.</p>
       </Card>}
 
-      {removing && (
-        <ConfirmDialog title={`${removing.name} 서버를 삭제할까요?`} confirmLabel="삭제" danger busy={busy} onConfirm={() => remove(removing)} onCancel={() => setRemoving(null)}>
-          이 PC 전용 설정에서 서버와 등록된 도구 {removing.tools.length}개가 지워집니다. 공유 파일(mcp_servers.json)에도 있는 서버는 지울 수 없습니다.
-        </ConfirmDialog>
+      {adding && (
+        <Sheet title="MCP 서버 추가" onClose={() => setAdding(false)} widthClass="max-w-xl">
+          <McpAddCard onAdded={(list) => { setServers(list); setAdding(false); toast("ok", "MCP 서버를 등록했습니다"); }} />
+        </Sheet>
       )}
-      {target && (
-        <ConfirmDialog title={`${target.name} 서버를 활성화할까요?`} confirmLabel="활성화" busy={busy} onConfirm={() => toggle(target)} onCancel={() => setTarget(null)}>
-          활성화하면 이 서버의 도구 {target.tools.length}개를 진단에서 호출할 수 있게 됩니다. 호출은 여전히 범위·정책 검사를 통과해야 합니다.
-        </ConfirmDialog>
+      {selectedServer && (
+        <McpDetailSheet
+          key={selectedServer.name}
+          server={selectedServer}
+          onClose={() => setSelected(null)}
+          onChanged={(list) => setServers(list)}
+        />
       )}
     </div>
   );
