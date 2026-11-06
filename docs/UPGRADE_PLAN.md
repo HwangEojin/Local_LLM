@@ -146,9 +146,10 @@ A군(정책)과 B군(IA)은 서로 의존성이 없어 **병렬 진행 가능**.
 |---|---|---|
 | LLM 프로파일 개별 바인딩 | `admin_agents.py`에 `llm_profile` 필드 추가, `agent_prompts` 테이블에 컬럼 추가(새 마이그레이션) | 이미 `/runs/new`에 같은 개념(역할별 모델) 있음 — 재사용/통합 검토 |
 | 프롬프트 버전관리 + diff | 새 테이블(`agent_prompt_versions`, 기존 `agent_prompts` 갱신 시 이전 값 보존) | `finding_review_history`와 같은 append-only 이력 패턴 재사용 |
-| max_turns / run_seconds | `agent_prompts`에 컬럼 추가, 실제 강제는 `worker.py`/`explore.py`의 해당 루프에 적용 | 체크리스트 쪽 budget과 유사 패턴 |
+| ~~max_turns / run_seconds~~ | **구현 안 함(재검토 결과)** — artex는 멀티턴 에이전트 루프가 있어 "턴 수"가 의미 있지만, 이 프로젝트의 worker.py 는 백로그 작업 1건당 LLM 호출 1번(도구 1개 선택)으로 끝나 "턴"이라는 단위가 아예 없다. 유사한 것을 새로 만들면 CLAUDE.md §5/§8-10 "작업수·실행시간 하드리밋은 체크리스트 작업에만 적용, 자율 탐색은 하드리밋 없음"과 충돌한다(이미 있는 max_tasks/max_explorations/budget.timeout_s 가 바로 그 체크리스트 전용 한도). 호출 1건의 타임아웃은 이미 llm_profiles.json 의 profile별 `timeout_s`로 있고 F3a-2(역할별 기본 프로파일)로 역할마다 그 프로파일을 고를 수 있게 됐으니 추가 컬럼 없이 커버됨 |
 | web_search 토글 | 현재 web_search 기능 자체가 없음 — 토글 UI만으로는 의미 없음, **토글이 실제로 켜는 기능이 있어야 함**(범위 밖, 별도 과제) |
-| MCP/Skill/Tool 가시성 바인딩 UI | `agent_prompts`에 역할별 허용 MCP/Skill/Tool 목록 컬럼 추가, `prompts.skills_for()`/도구 레지스트리 필터링에 반영 | 실행 권한은 여전히 policy.decide()가 결정 — UI는 "제안 후보"만 좁힘 |
+| ~~Skill 가시성 바인딩~~ | **이미 있음(재확인)** — `agent_skills.roles`(마이그레이션 0017)와 SkillsSection.tsx 의 역할 체크박스로 F2 이전부터 구현돼 있었다. 새로 만들 필요 없음 |
+| MCP/Tool 가시성 바인딩(역할별로 후보 좁히기) | **보류 권장** — MCP 서버는 이미 전역 활성/비활성(F1), 도구는 이미 런 단위 `allowed_tools` 로 범위가 있다. 역할별로 더 좁히면 LLM 제안 후보만 줄어들 뿐 실행 권한은 그대로 policy.decide() 가 결정해 보안 효과가 없고, explore.py/worker.py 의 제안 생성 경로(가장 민감한 부분)를 건드리는 비용 대비 가치가 낮음. 필요해지면 그때 좁은 범위로 다시 검토 |
 | 에이전트 "생성"(제한적) | 5개 고정 역할은 유지하되, 역할별로 **이름 있는 프로파일을 여러 개** 만들 수 있게(예: worker-aggressive, worker-cautious) — artex처럼 완전 자유 역할 생성은 CLAUDE.md §6(Planner=제안, Python=검증을 역할 단위로 서술) 재설계가 필요해 절충안 |
 
 #### F3b. 충돌 있음 — 설계 결정 먼저 필요(구현 보류 권장)
