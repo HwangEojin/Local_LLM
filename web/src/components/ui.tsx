@@ -65,6 +65,50 @@ export function SkeletonRows({ rows = 5 }: { rows?: number }) {
 }
 
 /**
+ * 우측 드로어(artex의 Sheet 패턴 참고, 2026-11 — FindingPanel 이 쓰던 고정 패널 모양을 재사용 가능한
+ * 컴포넌트로 뺐다). Esc 로 닫힌다. 폭은 widthClass 로 조절(기본 상세 패널 폭, 넓은 편집 화면은 더 크게).
+ */
+export function Sheet({
+  title,
+  subtitle,
+  onClose,
+  children,
+  widthClass = "max-w-md",
+}: {
+  title: string;
+  subtitle?: React.ReactNode;
+  onClose: () => void;
+  children: React.ReactNode;
+  widthClass?: string;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <aside
+      role="dialog"
+      aria-label={title}
+      className={`panel-in fixed inset-y-0 right-0 z-40 flex w-full ${widthClass} flex-col border-l border-line bg-surface shadow-2xl shadow-black/40`}
+    >
+      <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-semibold">{title}</h2>
+          {subtitle && <div className="mt-0.5 text-xs text-muted">{subtitle}</div>}
+        </div>
+        <button onClick={onClose} className={btnGhost} aria-label="패널 닫기 (Esc)" title="닫기 (Esc)">
+          ✕
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-5">{children}</div>
+    </aside>
+  );
+}
+
+/**
  * 되돌리기 어려운 변경 앞의 확인 창. 부모가 `{open && <ConfirmDialog …/>}` 로 렌더하면 열 때마다 새로 마운트돼
  * 입력한 사유가 남지 않는다. 네이티브 <dialog> 라서 Esc 닫기·포커스 가두기가 기본으로 된다.
  */
