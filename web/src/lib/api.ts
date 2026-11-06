@@ -373,6 +373,7 @@ export type ToolInfo = {
   name: string;
   risk: string; // 분류용 메타데이터일 뿐, 승인 게이트 아님(CLAUDE.md §8, 2026-11)
   disabled: boolean;
+  hidden_from: string[]; // 이 역할들의 제안 후보에서만 숨김(실행 권한과 무관) — planner/worker 만 의미 있음
   args_schema: Record<string, unknown>;
   scope_args: Record<string, string>;
   source: "mcp" | "builtin";

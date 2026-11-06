@@ -233,8 +233,10 @@ def _context(ctx) -> tuple[str, set[str]]:
         (run_id, run_id)).fetchall()
     offered_risks = {"read", "write"}  # dangerous 는 항상 뺀다(위험도 체계 자체는 승인 게이트가 아니지만, 이 분류는 유지)
     present_types = {t.type for t in ctx.targets.values()}  # 이 실행의 대상 유형(path/host/url)
+    from . import runs as wb_runs  # 지연 import: runs.py 가 explore 를 임포트해서 순환 참조가 됨
+    candidates = prompts.visible_tools(ctx.registry, "planner", wb_runs.tool_overrides(ctx.cfg))
     tools = {name: {"risk": spec.risk, "args_schema": spec.args_schema, "scope_checked_args": spec.scope_args}
-             for name, spec in ctx.registry.items() if spec.risk in offered_risks
+             for name, spec in candidates.items() if spec.risk in offered_risks
              and set(spec.scope_args.values()) <= present_types}  # 대상 유형이 안 맞는 도구는 항상 거부되므로 뺀다
     past = traces.search_all_worker_traces(conn, status="FAILED", exclude_run=run_id, limit=5)
     known = {i for r in results for i in r["evidence_ids"]} | {f["evidence_id"] for f in facts}

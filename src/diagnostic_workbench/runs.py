@@ -63,7 +63,7 @@ def tool_overrides(cfg) -> dict:
     파일이 깨졌으면 조용히 무시하지 않고 ConfigError — 끈 도구가 몰래 다시 켜지면 안 된다."""
     p = cfg.home / "config" / "tools.local.json"
     doc = audit_config.load_json(p, schemas.TOOL_OVERRIDES) if p.exists() else {}
-    return {"disabled": list(doc.get("disabled", []))}
+    return {"disabled": list(doc.get("disabled", [])), "hidden_from": dict(doc.get("hidden_from", {}))}
 
 
 def registry(cfg, apply_overrides: bool = True) -> dict:

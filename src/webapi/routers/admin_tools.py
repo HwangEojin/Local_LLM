@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 class ToolBody(BaseModel):
     disabled: bool | None = None
+    hidden_from: list[str] | None = None  # planner/worker 제안 후보에서만 숨김(실행 권한과 무관) — 생략하면 안 바꿈
     confirm: bool = False
 
 
@@ -24,6 +25,7 @@ def _tool_rows(cfg) -> dict:
     base = wb_runs.registry(cfg, apply_overrides=False)
     ov = wb_runs.tool_overrides(cfg)
     rows = [{"name": n, "risk": t.risk, "disabled": n in ov["disabled"],
+             "hidden_from": ov["hidden_from"].get(n, []),
              "args_schema": t.args_schema, "scope_args": t.scope_args,
              "source": "mcp" if n.startswith("mcp:") else "builtin"}
             for n, t in sorted(base.items())]
@@ -42,9 +44,14 @@ def put_tool(name: str, body: ToolBody, cfg=Depends(get_cfg), conn=Depends(get_c
     if name not in base:
         raise HTTPException(404, f"등록되지 않은 도구: {name}")
     old = wb_runs.tool_overrides(cfg)
-    new = {"disabled": list(old["disabled"])}
+    new = {"disabled": list(old["disabled"]), "hidden_from": {k: list(v) for k, v in old["hidden_from"].items()}}
     if body.disabled is not None:
         new["disabled"] = [n for n in new["disabled"] if n != name] + ([name] if body.disabled else [])
+    if body.hidden_from is not None:
+        if body.hidden_from:
+            new["hidden_from"][name] = list(body.hidden_from)
+        else:
+            new["hidden_from"].pop(name, None)
     errs = schemas.validate(new, schemas.TOOL_OVERRIDES)
     if errs:
         raise HTTPException(422, "검증 실패: " + "; ".join(errs[:5]))

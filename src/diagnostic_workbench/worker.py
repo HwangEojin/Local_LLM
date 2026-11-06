@@ -602,7 +602,9 @@ def _worker_decide(ctx, it) -> tuple[str, dict]:
     spec = ctx.registry.get(tool)
     if not ctx.llm or spec is None or spec.risk != "read":
         return tool, args
-    read_tools = {name: {"args_schema": s.args_schema} for name, s in ctx.registry.items() if s.risk == "read"}
+    from . import runs as wb_runs  # 지연 import: runs.py -> explore.py -> worker.py 순환 참조를 피함
+    candidates = prompts.visible_tools(ctx.registry, "worker", wb_runs.tool_overrides(ctx.cfg))
+    read_tools = {name: {"args_schema": s.args_schema} for name, s in candidates.items() if s.risk == "read"}
     tried = ctx.conn.execute(
         "SELECT payload FROM backlog_items WHERE run_id=%s AND kind='exploration' AND asset_id=%s "
         "AND status NOT IN ('PENDING','READY','RUNNING')", (ctx.run["id"], it["asset_id"])).fetchall()

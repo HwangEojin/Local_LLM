@@ -278,6 +278,9 @@ TOOL_OVERRIDES = {
     "properties": {
         "disabled": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "risk": {"type": "object"},
+        # 역할별 "제안 후보에서 숨기기"일 뿐 실행 권한과는 무관(policy.decide()가 여전히 모든 호출을 판정함) —
+        # disabled 와 달리 도구 자체를 레지스트리에서 빼지 않는다. 키: 도구 이름, 값: 그 도구를 숨길 역할 목록.
+        "hidden_from": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     },
 }
 
