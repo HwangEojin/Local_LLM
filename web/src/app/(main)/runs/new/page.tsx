@@ -81,7 +81,9 @@ function NewRunForm() {
   useEffect(() => {
     api.get<Environment>("/api/environment").then(setEnv).catch((e) => setError(e.message));
     api.get<WorkbenchSettings>("/api/admin/workbench").then((w) => setDefaults(w.budget)).catch(() => {});
-  }, []);
+    // 복제(from)가 아니면 설정 화면의 "역할별 기본 모델"로 미리 채운다(바꿔도 그만, 강제 아님)
+    if (!from) api.get<Record<string, string>>("/api/admin/agents/role-defaults").then(setAgentModels).catch(() => {});
+  }, [from]);
 
   useEffect(() => {
     if (!from) return;

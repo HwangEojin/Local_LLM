@@ -367,6 +367,7 @@ export type AgentPrompt = {
 };
 export type AgentRoleInfo = { role: string; prompts: AgentPrompt[] };
 export type AgentPromptVersion = { id: number; text: string; updated_by: string; created_at: string };
+export type AgentRoleDefaults = Record<string, string>; // role -> llm_profile 이름
 
 export type ToolInfo = {
   name: string;
