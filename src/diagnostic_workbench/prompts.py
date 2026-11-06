@@ -47,11 +47,31 @@ def set(conn, name: str, text: str, *, operator: str) -> None:
         "INSERT INTO agent_prompts (name, text, updated_by) VALUES (%s,%s,%s) "
         "ON CONFLICT (name) DO UPDATE SET text=EXCLUDED.text, updated_by=EXCLUDED.updated_by, updated_at=now()",
         (name, text, operator))
+    _record_version(conn, name, text, operator)
 
 
-def reset(conn, name: str) -> None:
-    """DB 오버라이드를 지워 코드 기본값으로 되돌린다."""
+def reset(conn, name: str, *, operator: str = "system", default: str | None = None) -> None:
+    """DB 오버라이드를 지워 코드 기본값으로 되돌린다. default 를 주면 복원 목록에 그 상태도 한 행 남긴다."""
     conn.execute("DELETE FROM agent_prompts WHERE name=%s", (name,))
+    if default is not None:
+        _record_version(conn, name, default, operator)
+
+
+def _record_version(conn, name: str, text: str, operator: str) -> None:
+    conn.execute("INSERT INTO agent_prompt_versions (name, text, updated_by) VALUES (%s,%s,%s)",
+                 (name, text, operator))
+
+
+def versions(conn, name: str, limit: int = 20) -> list:
+    """최근 버전부터. 되돌리기 목록용(복원 전용, line diff 는 안 만든다)."""
+    return conn.execute(
+        "SELECT id, text, updated_by, created_at FROM agent_prompt_versions "
+        "WHERE name=%s ORDER BY created_at DESC LIMIT %s", (name, limit)).fetchall()
+
+
+def version(conn, name: str, version_id: int):
+    return conn.execute(
+        "SELECT text FROM agent_prompt_versions WHERE id=%s AND name=%s", (version_id, name)).fetchone()
 
 
 def list_all(conn) -> list:

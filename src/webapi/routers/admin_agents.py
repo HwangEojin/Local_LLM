@@ -56,7 +56,7 @@ def put_prompt(name: str, body: PromptBody, conn=Depends(get_conn), user: str = 
         raise HTTPException(422, "프롬프트는 20자 이상 12,000자 이하여야 합니다")
     before = wb_prompts.get(conn, name, default)
     if text == default.strip():  # 기본값과 같으면 오버라이드를 남기지 않는다
-        wb_prompts.reset(conn, name)
+        wb_prompts.reset(conn, name, operator=f"web:{user}", default=default)
     else:
         wb_prompts.set(conn, name, text, operator=f"web:{user}")
     _audit(conn, user, "admin_prompt_changed", {"name": name, "before": before, "after": text})
@@ -68,6 +68,30 @@ def reset_prompt(name: str, body: ConfirmBody, conn=Depends(get_conn), user: str
     _need_confirm(body.confirm)
     default = _prompt_default(name)
     before = wb_prompts.get(conn, name, default)
-    wb_prompts.reset(conn, name)
+    wb_prompts.reset(conn, name, operator=f"web:{user}", default=default)
     _audit(conn, user, "admin_prompt_reset", {"name": name, "before": before})
     return {"name": name, "overridden": False}
+
+
+@router.get("/agents/prompts/{name}/versions")
+def get_prompt_versions(name: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    _prompt_default(name)  # 모르는 이름이면 404
+    return wb_prompts.versions(conn, name)
+
+
+@router.post("/agents/prompts/{name}/versions/{version_id}/restore")
+def restore_prompt_version(name: str, version_id: int, body: ConfirmBody, conn=Depends(get_conn),
+                            user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    default = _prompt_default(name)
+    row = wb_prompts.version(conn, name, version_id)
+    if not row:
+        raise HTTPException(404, "그 버전을 찾을 수 없습니다")
+    before = wb_prompts.get(conn, name, default)
+    text = row["text"]
+    if text == default.strip():
+        wb_prompts.reset(conn, name, operator=f"web:{user}", default=default)
+    else:
+        wb_prompts.set(conn, name, text, operator=f"web:{user}")
+    _audit(conn, user, "admin_prompt_restored", {"name": name, "version_id": version_id, "before": before, "after": text})
+    return {"name": name, "overridden": text != default.strip()}

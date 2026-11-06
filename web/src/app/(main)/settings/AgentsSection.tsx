@@ -1,10 +1,10 @@
 // 에이전트 구역: 역할별 프롬프트 조회·수정·기본값 복원. 프롬프트는 LLM 에 주는 문구일 뿐이라 도구 실행 권한·정책은
 // 바뀌지 않는다(서버의 policy.decide() 가 매 호출 독립적으로 판정).
 import { useCallback, useEffect, useState } from "react";
-import { RotateCcw, Save } from "lucide-react";
+import { History, RotateCcw, Save } from "lucide-react";
 
-import { Banner, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, SkeletonRows, useToast } from "@/components/ui";
-import { AgentPrompt, AgentRoleInfo, api } from "@/lib/api";
+import { Banner, btnGhost, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, Sheet, SkeletonRows, useToast } from "@/components/ui";
+import { AgentPrompt, AgentPromptVersion, AgentRoleInfo, api } from "@/lib/api";
 import { AGENT_ROLE_LABEL, formatTime } from "@/lib/labels";
 import { errMsg, ICON } from "./parts";
 
@@ -16,10 +16,60 @@ const ROLE_HELP: Record<string, string> = {
   reporter: "보고서에 들어가는 설명·권고 문장을 다듬습니다(DB 의 원문은 바뀌지 않음).",
 };
 
+function VersionHistory({ name, onClose, onRestored }: { name: string; onClose: () => void; onRestored: () => void }) {
+  const toast = useToast();
+  const [versions, setVersions] = useState<AgentPromptVersion[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState<number | null>(null);
+  useEffect(() => {
+    api.get<AgentPromptVersion[]>(`/api/admin/agents/prompts/${name}/versions`).then(setVersions).catch((e) => setError(e.message));
+  }, [name]);
+
+  async function restore(id: number) {
+    setRestoring(id);
+    try {
+      await api.post(`/api/admin/agents/prompts/${name}/versions/${id}/restore`, { confirm: true });
+      toast("ok", "그 버전으로 되돌렸습니다");
+      onRestored();
+      onClose();
+    } catch (e) {
+      setError(errMsg(e, "복원에 실패했습니다"));
+    } finally {
+      setRestoring(null);
+    }
+  }
+
+  return (
+    <Sheet title="프롬프트 버전 이력" subtitle={<span className="font-mono">{name}</span>} onClose={onClose}>
+      {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+      {!versions ? (
+        <SkeletonRows rows={3} />
+      ) : versions.length === 0 ? (
+        <p className="text-sm text-muted">아직 저장된 버전이 없습니다.</p>
+      ) : (
+        <ul className="space-y-3">
+          {versions.map((v) => (
+            <li key={v.id} className="rounded-md border border-line p-3">
+              <div className="mb-1 flex items-center justify-between gap-2 text-xs text-faint">
+                <span>{v.updated_by} · {formatTime(v.created_at)}</span>
+                <button disabled={restoring !== null} onClick={() => restore(v.id)} className={btnSecondary}>
+                  {restoring === v.id ? "복원 중…" : "이 버전으로 복원"}
+                </button>
+              </div>
+              <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap font-mono text-xs text-muted">{v.text}</pre>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Sheet>
+  );
+}
+
 function PromptEditor({ prompt, onChanged }: { prompt: AgentPrompt; onChanged: () => void }) {
   const toast = useToast();
   const [text, setText] = useState(prompt.text);
   const [confirm, setConfirm] = useState<"save" | "reset" | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => setText(prompt.text), [prompt.text]);
@@ -61,7 +111,13 @@ function PromptEditor({ prompt, onChanged }: { prompt: AgentPrompt; onChanged: (
         <button disabled={busy || !prompt.overridden} onClick={() => setConfirm("reset")} className={btnSecondary}>
           <RotateCcw className={ICON} aria-hidden /> 기본값으로 되돌리기
         </button>
+        <button onClick={() => setShowHistory(true)} className={btnGhost}>
+          <History className={ICON} aria-hidden /> 버전 이력
+        </button>
       </div>
+      {showHistory && (
+        <VersionHistory name={prompt.name} onClose={() => setShowHistory(false)} onRestored={onChanged} />
+      )}
       {confirm && (
         <ConfirmDialog
           title={confirm === "save" ? "프롬프트를 저장할까요?" : "기본값으로 되돌릴까요?"}
