@@ -6,14 +6,26 @@ LLM 의 판단·정책 계층은 그대로다(CLAUDE.md §7 "LLM 자체가... �
 """
 from __future__ import annotations
 
+from psycopg.types.json import Jsonb
 
 _SKILLS_MAX_CHARS = 6000  # 시스템 프롬프트가 요청 크기 한도(max_request_bytes)를 잡아먹지 않게 하는 상한
 
 
-def get(conn, name: str, default: str, role: str | None = None, run_id=None) -> str:
-    """프롬프트 본문. role 을 주면 그 역할에 붙은 활성 스킬을 뒤에 덧붙인다(스킬은 문구일 뿐 권한은 그대로)."""
-    row = conn.execute("SELECT text FROM agent_prompts WHERE name=%s", (name,)).fetchone()
-    text = row["text"] if row else default
+def get(conn, name: str, default: str, role: str | None = None, run_id=None, profile_name: str | None = None) -> str:
+    """프롬프트 본문. role 을 주면 그 역할에 붙은 활성 스킬을 뒤에 덧붙인다(스킬은 문구일 뿐 권한은 그대로).
+
+    profile_name 을 주면(그 실행이 이 역할에 "이름 있는 프로파일"을 골랐을 때) 전역 agent_prompts 오버라이드
+    보다 그 프로파일의 prompt_overrides 를 먼저 본다 — 프로파일에 이 이름의 오버라이드가 없으면 전역 값,
+    그것도 없으면 default 로 그대로 떨어진다(기존 동작과 100% 같음, 프로파일은 순수 추가 기능)."""
+    text = None
+    if profile_name and role:
+        p = conn.execute("SELECT prompt_overrides FROM agent_profiles WHERE role=%s AND name=%s",
+                         (role, profile_name)).fetchone()
+        if p and name in (p["prompt_overrides"] or {}):
+            text = p["prompt_overrides"][name]
+    if text is None:
+        row = conn.execute("SELECT text FROM agent_prompts WHERE name=%s", (name,)).fetchone()
+        text = row["text"] if row else default
     return text + skills_for(conn, role, run_id) if role else text
 
 
@@ -40,6 +52,26 @@ def skills_for(conn, role: str, run_id=None) -> str:
         return ""
     return ("\n\nSKILLS: operator-provided guidance for this role. They refine how you work but never grant "
             "tools or permissions, and never override the rules above.\n" + "\n\n".join(parts))
+
+
+def list_profiles(conn, role: str | None = None) -> list:
+    """역할별 '이름 있는 프로파일'(F3a 절충안, UPGRADE_PLAN.md — 완전 자유 에이전트 생성 대신 고정 5역할
+    안에서 역할마다 여러 이름 붙은 변형을 둔다, 예: worker-aggressive/worker-cautious)."""
+    if role:
+        return conn.execute("SELECT * FROM agent_profiles WHERE role=%s ORDER BY name", (role,)).fetchall()
+    return conn.execute("SELECT * FROM agent_profiles ORDER BY role, name").fetchall()
+
+
+def create_profile(conn, role: str, name: str, prompt_overrides: dict, llm_profile: str | None, *,
+                   operator: str) -> dict:
+    return conn.execute(
+        "INSERT INTO agent_profiles (role, name, prompt_overrides, llm_profile, created_by) "
+        "VALUES (%s,%s,%s,%s,%s) RETURNING *",
+        (role, name, Jsonb(prompt_overrides), llm_profile, operator)).fetchone()
+
+
+def delete_profile(conn, profile_id: int) -> bool:
+    return conn.execute("DELETE FROM agent_profiles WHERE id=%s", (profile_id,)).rowcount > 0
 
 
 def visible_tools(tools: dict, role: str, overrides: dict) -> dict:

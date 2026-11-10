@@ -624,7 +624,8 @@ def _worker_decide(ctx, it) -> tuple[str, dict]:
     ])
     try:
         llm = _llm_for(ctx, "worker")
-        out = llm.structured_chat([{"role": "system", "content": prompts.get(ctx.conn, "worker_agent_system", _WORKER_AGENT_SYSTEM, "worker", ctx.run["id"])},
+        profile = (ctx.run.get("agent_profile_names") or {}).get("worker")
+        out = llm.structured_chat([{"role": "system", "content": prompts.get(ctx.conn, "worker_agent_system", _WORKER_AGENT_SYSTEM, "worker", ctx.run["id"], profile)},
                                        {"role": "user", "content": text}], _WORKER_PICK_SCHEMA, "worker_decide")
     except LLMError as e:
         db.audit(ctx.conn, ctx.run["id"], "llm_error", {"purpose": "worker_decide", "error": str(e)})

@@ -121,6 +121,38 @@ class SettingsMenusTest(unittest.TestCase):
         self.client.put("/api/admin/agents/role-defaults/worker", json={"llm_profile": None, "confirm": True})
         self.assertNotIn("worker", self.client.get("/api/admin/agents/role-defaults").json())
 
+    def test_agent_profile_create_rejects_bad_input(self):
+        self.assertEqual(self.client.post("/api/admin/agents/profiles/worker",
+                                          json={"name": "x", "confirm": False}).status_code, 400)
+        self.assertEqual(self.client.post("/api/admin/agents/profiles/no-such-role",
+                                          json={"name": "x", "confirm": True}).status_code, 404)
+        self.assertEqual(self.client.post("/api/admin/agents/profiles/worker",
+                                          json={"name": "", "confirm": True}).status_code, 422)
+        self.assertEqual(self.client.post("/api/admin/agents/profiles/worker",
+                                          json={"name": "x", "prompt_overrides": {"explore_system": "짧음"},
+                                                "confirm": True}).status_code, 422)  # worker 역할이 안 쓰는 프롬프트
+
+    def test_agent_profile_create_list_delete_roundtrip(self):
+        text = "역할별 이름 있는 프로파일 — 최소 길이를 채운 테스트 문구"
+        r = self.client.post("/api/admin/agents/profiles/worker",
+                             json={"name": "pytest-profile", "prompt_overrides": {"worker_agent_system": text},
+                                   "llm_profile": None, "confirm": True})
+        self.assertEqual(r.status_code, 200)
+        profile_id = r.json()["id"]
+        listed = self.client.get("/api/admin/agents/profiles").json()
+        self.assertTrue(any(p["id"] == profile_id for p in listed))
+
+        dup = self.client.post("/api/admin/agents/profiles/worker",
+                               json={"name": "pytest-profile", "confirm": True})
+        self.assertEqual(dup.status_code, 409)
+
+        deleted = self.client.post(f"/api/admin/agents/profiles/{profile_id}/delete", json={"confirm": True})
+        self.assertEqual(deleted.status_code, 200)
+        self.assertFalse(any(p["id"] == profile_id for p in self.client.get("/api/admin/agents/profiles").json()))
+
+        self.assertEqual(self.client.post(f"/api/admin/agents/profiles/{profile_id}/delete",
+                                          json={"confirm": True}).status_code, 404)
+
     def test_tools_catalog(self):
         out = self.client.get("/api/admin/tools").json()
         self.assertTrue(out["tools"])

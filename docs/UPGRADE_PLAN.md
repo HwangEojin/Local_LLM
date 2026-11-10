@@ -150,7 +150,7 @@ A군(정책)과 B군(IA)은 서로 의존성이 없어 **병렬 진행 가능**.
 | web_search 토글 | 현재 web_search 기능 자체가 없음 — 토글 UI만으로는 의미 없음, **토글이 실제로 켜는 기능이 있어야 함**(범위 밖, 별도 과제) |
 | ~~Skill 가시성 바인딩~~ | **이미 있음(재확인)** — `agent_skills.roles`(마이그레이션 0017)와 SkillsSection.tsx 의 역할 체크박스로 F2 이전부터 구현돼 있었다. 새로 만들 필요 없음 |
 | ~~MCP/Tool 가시성 바인딩~~ | **구현함**(사용자가 보류 권고에도 진행 요청) — `config/tools.local.json`에 `hidden_from: {tool_name: [role,...]}` 추가(스키마: `audit/schemas.py` TOOL_OVERRIDES), `prompts.visible_tools()`가 그 역할의 제안 후보만 걸러내고, `explore.py::_context`(planner)·`worker.py`의 worker-decide(worker) 두 지점에만 적용. `registry()`(실행 경로, policy.decide() 가 보는 전체 목록)는 전혀 안 건드림 — 숨겨도 다른 경로로 호출되면 그대로 판정됨. 도구 설정 화면에 역할별(planner/worker) 체크박스로 노출. MCP 서버는 도구 단위로 이미 이 목록에 개별 항목으로 들어 있어 서버 전체용 별도 토글은 안 만듦(중복) |
-| 에이전트 "생성"(제한적) | 5개 고정 역할은 유지하되, 역할별로 **이름 있는 프로파일을 여러 개** 만들 수 있게(예: worker-aggressive, worker-cautious) — artex처럼 완전 자유 역할 생성은 CLAUDE.md §6(Planner=제안, Python=검증을 역할 단위로 서술) 재설계가 필요해 절충안 |
+| ~~에이전트 "생성"(제한적)~~ | **구현함(2026-11-10)** — 5개 고정 역할은 그대로 두고, 새 테이블 `agent_profiles`(role, name, prompt_overrides jsonb, llm_profile)로 역할마다 이름 있는 프로파일을 여러 개 둘 수 있게 했다. `prompts.get()` 이 `profile_name` 을 받으면 전역 `agent_prompts` 오버라이드보다 먼저 그 프로파일의 재정의를 본다(없으면 전역값, 그것도 없으면 기본값 — 순수 추가 기능). `runs.create_run` 은 `agent_profile_names`(역할→프로파일 이름)를 검증하고, 프로파일의 `llm_profile` 을 명시적 `agent_models` 지정이 없는 역할의 기본값으로만 채운다(명시적 지정이 우선). 설정 화면(에이전트 탭, 역할별 "이름 있는 프로파일" 섹션)에서 만들기/삭제, `/runs/new` 화면에서 역할별 드롭다운으로 선택. artex처럼 완전 자유 역할 생성은 여전히 안 함(CLAUDE.md §6 재설계가 필요해서) — 그 절충안 그대로 구현 |
 
 #### F3b. 충돌 있음 — 설계 결정 (2026-11-10 완료, 사용자가 둘 다 "확장 설계부터" 선택)
 
