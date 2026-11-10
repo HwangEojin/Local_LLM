@@ -28,6 +28,10 @@
     {
       "name": "ask-write-playwright-actions",
       "tool_pattern": "^mcp:playwright/browser_(click|drag|drop|emulate_media|evaluate|file_upload|fill_form|handle_dialog|hover|press_key|resize|run_code_unsafe|select_option|type)$"
+    },
+    {
+      "name": "ask-dangerous-shell",
+      "tool_pattern": "^shell\\.(open_session|send|close_session)$"
     }
   ]
 }

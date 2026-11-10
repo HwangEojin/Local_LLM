@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
 from audit.models import AuditError
@@ -15,6 +16,7 @@ from diagnostic_workbench import reporting, runs as wb_runs, traces, worker
 
 from .. import deps
 from ..deps import current_user, get_cfg, get_conn
+from .admin import _need_confirm
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -445,6 +447,89 @@ def answer_question(run_ref: str, question_id: str, body: AnswerQuestionBody,
         raise HTTPException(404, f"질문 '{question_id}' 을(를) 찾을 수 없음")
     wb_explore.answer_question(conn, run["id"], q, body.answer, f"web:{user}")
     return {"answered": str(q["id"])}
+
+
+_TRIGGER_KINDS = ("interval", "on_finding", "on_goal_met", "on_task_timeout", "on_tool_call", "on_task_create")
+
+
+class TriggerBody(BaseModel):
+    name: str
+    condition_kind: str
+    condition_args: dict = {}
+    tool: str
+    args: dict = {}
+    target_asset_id: str  # backlog_items.asset_id 가 NOT NULL 이라 모든 작업처럼 대상 하나에 묶여야 함
+    confirm: bool = False
+
+
+@router.get("/{run_ref}/triggers")
+def get_triggers(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    run = _load_run(conn, run_ref)
+    return conn.execute("SELECT * FROM run_triggers WHERE run_id=%s ORDER BY created_at", (run["id"],)).fetchall()
+
+
+@router.post("/{run_ref}/triggers")
+def create_trigger(run_ref: str, body: TriggerBody, cfg=Depends(get_cfg), conn=Depends(get_conn),
+                   user: str = Depends(current_user)):
+    """Triggers(F3b-1, UPGRADE_PLAN.md): LLM 을 부르지 않는 결정론적 규칙. 여기서 만든 작업도 다른 작업과
+    똑같이 backlog_items/policy.decide() 를 거친다 — 등록만으로 바로 실행되지 않는다."""
+    _need_confirm(body.confirm)
+    run = _load_run(conn, run_ref)
+    if body.condition_kind not in _TRIGGER_KINDS:
+        raise HTTPException(422, f"condition_kind 는 {list(_TRIGGER_KINDS)} 중 하나여야 함")
+    if not body.name.strip():
+        raise HTTPException(422, "이름을 입력하세요")
+    if body.tool not in wb_runs.registry(cfg):
+        raise HTTPException(422, f"등록되지 않은 도구: {body.tool}")
+    if not conn.execute("SELECT 1 FROM run_assets WHERE run_id=%s AND asset_id=%s",
+                        (run["id"], body.target_asset_id)).fetchone():
+        raise HTTPException(422, "이 실행의 대상이 아닌 asset_id 임")
+    row = conn.execute(
+        "INSERT INTO run_triggers (run_id, name, condition_kind, condition_args, tool, args, target_asset_id, "
+        "created_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        (run["id"], body.name.strip(), body.condition_kind, Jsonb(body.condition_args), body.tool,
+         Jsonb(body.args), body.target_asset_id, f"web:{user}")).fetchone()
+    wb_db.audit(conn, run["id"], "trigger_created", {"trigger_id": row["id"], "name": row["name"],
+                                                     "condition_kind": row["condition_kind"], "tool": row["tool"]})
+    conn.commit()
+    return row
+
+
+class TriggerUpdateBody(BaseModel):
+    enabled: bool | None = None
+    confirm: bool = False
+
+
+@router.put("/{run_ref}/triggers/{trigger_id}")
+def update_trigger(run_ref: str, trigger_id: int, body: TriggerUpdateBody, conn=Depends(get_conn),
+                   user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    run = _load_run(conn, run_ref)
+    row = conn.execute("SELECT * FROM run_triggers WHERE run_id=%s AND id=%s", (run["id"], trigger_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"트리거 {trigger_id} 를 찾을 수 없음")
+    if body.enabled is not None:
+        conn.execute("UPDATE run_triggers SET enabled=%s WHERE id=%s", (body.enabled, trigger_id))
+        wb_db.audit(conn, run["id"], "trigger_toggled", {"trigger_id": trigger_id, "enabled": body.enabled})
+    conn.commit()
+    return conn.execute("SELECT * FROM run_triggers WHERE id=%s", (trigger_id,)).fetchone()
+
+
+class ConfirmBody(BaseModel):
+    confirm: bool = False
+
+
+@router.post("/{run_ref}/triggers/{trigger_id}/delete")
+def delete_trigger(run_ref: str, trigger_id: int, body: ConfirmBody, conn=Depends(get_conn),
+                   user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    run = _load_run(conn, run_ref)
+    n = conn.execute("DELETE FROM run_triggers WHERE run_id=%s AND id=%s", (run["id"], trigger_id)).rowcount
+    if not n:
+        raise HTTPException(404, f"트리거 {trigger_id} 를 찾을 수 없음")
+    wb_db.audit(conn, run["id"], "trigger_deleted", {"trigger_id": trigger_id})
+    conn.commit()
+    return {"deleted": trigger_id}
 
 
 @router.get("/{run_ref}/server-log")
