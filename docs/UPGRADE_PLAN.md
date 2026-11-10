@@ -154,7 +154,7 @@ A군(정책)과 B군(IA)은 서로 의존성이 없어 **병렬 진행 가능**.
 
 #### F3b. 충돌 있음 — 설계 결정 (2026-11-10 완료, 사용자가 둘 다 "확장 설계부터" 선택)
 
-##### F3b-1. Triggers — 확장 설계(기존 `enrich.py` 패턴을 그대로 재사용)
+##### F3b-1. Triggers — 확장 설계(기존 `enrich.py` 패턴을 그대로 재사용) — **구현 완료(2026-11-10)**
 
 핵심 발견: `enrich.py`(자산 보강)가 이미 "LLM 판단 없이 planner 가 매 계획 주기에 스스로 조건을 보고 작업을
 큐에 올리는" 바로 그 패턴이다(`enrich.enqueue(ctx)` → `exploration_nodes(origin='enrich')` + `backlog_items
@@ -230,7 +230,7 @@ ctx.cfg.triggers_enabled else 0,`. 체크리스트 작업(`max_tasks`)과 달리
 같은 취급 — **하드리밋을 걸지 않음**(CLAUDE.md §5 "자율 탐색은 하드리밋 없음"과 일관). 대신 UI에서 `interval`
 최소값(예: 30초)을 강제해 폭주를 막는 소프트 가드만 둔다.
 
-##### F3b-2. interactive_shell — 확장 설계(새 정책 코드 불필요, 기존 게이트에 올리기만 하면 됨)
+##### F3b-2. interactive_shell — 확장 설계(새 정책 코드 불필요, 기존 게이트에 올리기만 하면 됨) — **구현 완료(2026-11-10)**
 
 핵심 발견: `explore.py::_context()` 의 `offered_risks = {"read", "write"}` 가 이미 `dangerous` 위험도 도구를
 LLM 자율 제안에서 항상 제외한다("dangerous 는 항상 뺀다" 주석, explore.py:234). 즉 셸 도구를 `risk="dangerous"`
@@ -252,12 +252,16 @@ LLM 출력을 바로 셸에 쓰는 것)를 만들지 않는 것이 유일한 규
    승인**을 강제(선택적 강화 — CLAUDE.md 가 요구하진 않지만 artex Go 서버의 실제 검사 여부가 미확인인 채로
    남아 있으니 우리 쪽은 한 겹 더 두는 쪽을 권장).
 
-**아직 구현 전**: 두 설계 모두 테이블/모듈을 실제로 만들지 않았다(이번 세션은 "설계" 단계만 요청받음). 다음
-단계는 `run_triggers`/`shell_sessions` 마이그레이션과 `triggers.py`/셸 `ToolSpec` 구현, 설정 화면 UI.
+**구현 완료(2026-11-10)**: 마이그레이션 0023(`run_triggers`)+0024(target_asset_id NOT NULL), `triggers.py`
+(조건 6종), `planner.plan()` 연결, `tools.py` 의 `shell.open_session`/`send`/`close_session`(risk="dangerous",
+파이프 기반, Kill Switch 반장 스레드), 런 상세 화면의 "트리거" 탭(만들기/켜기·끄기/삭제). `shell_sessions`
+테이블은 안 만들었다(F3b-2 설계대로 — 열기/명령/닫기 각 호출이 기존 tool_invocations/evidence 에 그대로
+남아 새 테이블이 필요 없었음). 테스트: `test_triggers.py`(7), `test_triggers_api.py`(6), `test_shell_tools.py`
+(6) — 실제 planner.plan() 한 사이클로 트리거가 backlog_items(READY)까지 가는 것과 셸 도구가 LLM 자율
+제안 프롬프트에 전혀 안 나타나는 것(explore._context 출력 직접 확인)을 끝까지 확인함.
 
-### F4. 권장 순서
+### F4. 권장 순서 — 전부 완료
 
 1. F1(MCP 레이아웃), F2(스킬 레이아웃) — 완료
 2. F3a(에이전트 안전 기능: 프롬프트 버전이력, 역할별 기본 모델, 도구/MCP 역할별 가시성) — 완료
-3. F3b 설계(Triggers, interactive_shell) — 완료(위 F3b-1/F3b-2). **구현은 아직 안 함** — 다음 단계는
-   `run_triggers`/`shell_sessions` 마이그레이션 + `triggers.py` + 셸 `ToolSpec` 3종 + 두 화면 UI
+3. F3b(Triggers, interactive_shell) — 설계 + 구현 완료(위 F3b-1/F3b-2)

@@ -369,6 +369,24 @@ export type AgentRoleInfo = { role: string; prompts: AgentPrompt[] };
 export type AgentPromptVersion = { id: number; text: string; updated_by: string; created_at: string };
 export type AgentRoleDefaults = Record<string, string>; // role -> llm_profile 이름
 
+export const TRIGGER_KINDS = ["interval", "on_finding", "on_goal_met", "on_task_timeout", "on_tool_call",
+  "on_task_create"] as const;
+export type TriggerKind = (typeof TRIGGER_KINDS)[number];
+export type Trigger = {
+  id: number;
+  run_id: string;
+  name: string;
+  condition_kind: TriggerKind;
+  condition_args: Record<string, unknown>;
+  tool: string;
+  args: Record<string, unknown>;
+  target_asset_id: string;
+  enabled: boolean;
+  last_checked_at: string;
+  created_by: string;
+  created_at: string;
+};
+
 export type ToolInfo = {
   name: string;
   risk: string; // 분류용 메타데이터일 뿐, 승인 게이트 아님(CLAUDE.md §8, 2026-11)

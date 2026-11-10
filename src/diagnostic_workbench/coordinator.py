@@ -33,7 +33,7 @@ def _plan_and_log(ctx, log) -> dict:
     log("  계획 수립 중... (탐색 제안이 있으면 LLM 호출 포함, 최대 수십 초)")
     stats = planner.plan(ctx)
     log(f"  계획 완료: 새 체크리스트 작업 {stats['created']}건, 탐색 제안 {stats['explorations']}건, "
-        f"임대 회수 {stats['reclaimed']}건")
+        f"트리거 발동 {stats['triggered']}건, 임대 회수 {stats['reclaimed']}건")
     return stats
 
 

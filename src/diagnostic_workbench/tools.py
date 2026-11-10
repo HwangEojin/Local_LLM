@@ -24,6 +24,7 @@ import ssl
 import subprocess
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -79,6 +80,80 @@ _TLS_ARGS = {
 }
 _SSL_SCRIPTS = "ssl-enum-ciphers,ssl-heartbleed,ssl-ccs-injection"  # 고정 목록, 인자로 바꿀 수 없음
 
+# ── interactive shell(F3b-2, UPGRADE_PLAN.md) ──
+# risk="dangerous" 로 등록 — explore.py 의 offered_risks={"read","write"} 가 dangerous 를 항상 빼므로 LLM 은
+# 자율 탐색 중 이 도구를 절대 제안받지 못한다. 운영자가 cli collect/webapi 로 명시적으로만 호출 가능하고,
+# 그 경로는 이미 '승인자 지정'을 요구한다 — 이 파일에 새 정책 코드가 없는 이유(policy.decide() 가 모든
+# 다른 dangerous 도구와 똑같이 판정한다).
+#
+# ponytail: 진짜 PTY(termios/ANSI 제어)가 아니라 자식 프로세스의 stdin/stdout 파이프일 뿐이다. 대화형
+# 프로그램(vim 등)은 못 쓰고, 한 줄 명령 + 그 응답 정도만 가능하다. Windows 에 진짜 PTY를 쓰려면
+# pywinpty/conpty 가 필요한데 지금은 과하다고 판단 — 필요해지면 이 두 함수 내부만 교체하면 됨.
+_SHELL_ARGS = {
+    "open_session": {"type": "object", "additionalProperties": False, "required": ["host"],
+                      "properties": {"host": {"type": "string", "minLength": 1, "maxLength": 253}}},
+    "send": {"type": "object", "additionalProperties": False, "required": ["session_id", "command"],
+             "properties": {"session_id": {"type": "string", "minLength": 1},
+                             "command": {"type": "string", "minLength": 1, "maxLength": 4000},
+                             "wait_s": {"type": "number", "minimum": 0, "maximum": 10}}},
+    "close_session": {"type": "object", "additionalProperties": False, "required": ["session_id"],
+                       "properties": {"session_id": {"type": "string", "minLength": 1}}},
+}
+_SHELL_IDLE_TIMEOUT_S = 1800  # 30분 이상 명령이 없으면 반장 스레드가 정리한다
+
+
+class _ShellSession:
+    def __init__(self, proc: subprocess.Popen):
+        self.proc = proc
+        self.last_used = time.monotonic()
+        self._buf: list[str] = []
+        self._lock = threading.Lock()
+        threading.Thread(target=self._reader, daemon=True, name="shell-session-reader").start()
+
+    def _reader(self):
+        try:
+            for line in self.proc.stdout:
+                with self._lock:
+                    self._buf.append(line)
+        except (ValueError, OSError):
+            pass  # 프로세스/파이프가 닫히면 반복이 조용히 끝난다
+
+    def drain(self) -> str:
+        with self._lock:
+            out, self._buf = "".join(self._buf), []
+        return out
+
+
+_sessions: dict[str, _ShellSession] = {}
+_sessions_lock = threading.Lock()
+
+
+def _reap_shell_sessions(stop_file: Path):
+    """Kill Switch·유휴 타임아웃으로 열린 셸 세션을 정리하는 반장 스레드(데몬) — 한 번만 시작한다."""
+    while True:
+        time.sleep(5)
+        with _sessions_lock:
+            dead = [sid for sid, s in _sessions.items()
+                    if stop_file.exists() or time.monotonic() - s.last_used > _SHELL_IDLE_TIMEOUT_S
+                    or s.proc.poll() is not None]
+            for sid in dead:
+                s = _sessions.pop(sid)
+                if s.proc.poll() is None:
+                    s.proc.kill()
+
+
+_reaper_started = False
+_reaper_lock = threading.Lock()
+
+
+def _ensure_reaper(stop_file: Path):
+    global _reaper_started
+    with _reaper_lock:
+        if not _reaper_started:
+            threading.Thread(target=_reap_shell_sessions, args=(stop_file,), daemon=True,
+                             name="shell-session-reaper").start()
+            _reaper_started = True
+
 
 def _port_count(spec: str) -> int:
     total = 0
@@ -116,6 +191,56 @@ def make_tools(cfg) -> dict[str, ToolSpec]:
         return ToolOutput(data, "stdlib-ssl", truncated=False)
 
     tools["tls.inspect"] = ToolSpec("tls.inspect", "write", _TLS_ARGS, {"host": "host"}, inspect_tls, "stdlib-ssl")
+
+    _ensure_reaper(cfg.stop_file)
+
+    def shell_open_session(args):
+        if cfg.stop_file.exists():
+            raise ToolError(f"전체 중지 스위치가 켜져 있어 셸 세션을 열 수 없음 ({cfg.stop_file})")
+        shell_exe = shutil.which("bash") or os.environ.get("ComSpec", "cmd.exe")
+        try:
+            proc = subprocess.Popen([shell_exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
+        except OSError as e:
+            raise ToolError(f"셸을 실행할 수 없음: {e}") from None
+        session_id = str(uuid.uuid4())
+        with _sessions_lock:
+            _sessions[session_id] = _ShellSession(proc)
+        return ToolOutput(json.dumps({"session_id": session_id}).encode(), "shell/pipe", truncated=False)
+
+    def shell_send(args):
+        if cfg.stop_file.exists():
+            raise ToolError(f"전체 중지 스위치가 켜져 있어 명령을 보낼 수 없음 ({cfg.stop_file})")
+        with _sessions_lock:
+            session = _sessions.get(args["session_id"])
+        if session is None or session.proc.poll() is not None:
+            raise ToolError("세션이 없거나 이미 끝남 — open_session 을 다시 호출하세요")
+        session.last_used = time.monotonic()
+        try:
+            session.proc.stdin.write(args["command"] + "\n")
+            session.proc.stdin.flush()
+        except (BrokenPipeError, OSError) as e:
+            raise ToolError(f"세션에 쓰지 못함: {e}") from None
+        time.sleep(min(max(args.get("wait_s", 1.0), 0), 10))  # 명령이 출력을 내놓을 시간을 짧게 기다림(최선 노력)
+        out = session.drain()
+        limit = cfg.settings.limits["max_evidence_bytes"]
+        data = out.encode(errors="replace")
+        return ToolOutput(data[:limit], "shell/pipe", truncated=len(data) > limit)
+
+    def shell_close_session(args):
+        with _sessions_lock:
+            session = _sessions.pop(args["session_id"], None)
+        if session is None:
+            raise ToolError("세션이 없음(이미 닫혔을 수 있음)")
+        if session.proc.poll() is None:
+            session.proc.terminate()
+        return ToolOutput(b"{}", "shell/pipe", truncated=False)
+
+    tools["shell.open_session"] = ToolSpec("shell.open_session", "dangerous", _SHELL_ARGS["open_session"],
+                                           {"host": "host"}, shell_open_session, "shell/pipe")
+    tools["shell.send"] = ToolSpec("shell.send", "dangerous", _SHELL_ARGS["send"], {}, shell_send, "shell/pipe")
+    tools["shell.close_session"] = ToolSpec("shell.close_session", "dangerous", _SHELL_ARGS["close_session"], {},
+                                            shell_close_session, "shell/pipe")
 
     testssl, bash_exe = cfg.testssl_path, shutil.which("bash")
     if testssl and Path(testssl).is_file() and bash_exe:
