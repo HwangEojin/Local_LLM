@@ -152,15 +152,112 @@ A군(정책)과 B군(IA)은 서로 의존성이 없어 **병렬 진행 가능**.
 | ~~MCP/Tool 가시성 바인딩~~ | **구현함**(사용자가 보류 권고에도 진행 요청) — `config/tools.local.json`에 `hidden_from: {tool_name: [role,...]}` 추가(스키마: `audit/schemas.py` TOOL_OVERRIDES), `prompts.visible_tools()`가 그 역할의 제안 후보만 걸러내고, `explore.py::_context`(planner)·`worker.py`의 worker-decide(worker) 두 지점에만 적용. `registry()`(실행 경로, policy.decide() 가 보는 전체 목록)는 전혀 안 건드림 — 숨겨도 다른 경로로 호출되면 그대로 판정됨. 도구 설정 화면에 역할별(planner/worker) 체크박스로 노출. MCP 서버는 도구 단위로 이미 이 목록에 개별 항목으로 들어 있어 서버 전체용 별도 토글은 안 만듦(중복) |
 | 에이전트 "생성"(제한적) | 5개 고정 역할은 유지하되, 역할별로 **이름 있는 프로파일을 여러 개** 만들 수 있게(예: worker-aggressive, worker-cautious) — artex처럼 완전 자유 역할 생성은 CLAUDE.md §6(Planner=제안, Python=검증을 역할 단위로 서술) 재설계가 필요해 절충안 |
 
-#### F3b. 충돌 있음 — 설계 결정 먼저 필요(구현 보류 권장)
+#### F3b. 충돌 있음 — 설계 결정 (2026-11-10 완료, 사용자가 둘 다 "확장 설계부터" 선택)
 
-| 기능 | 충돌 | 결정 필요 사항 |
-|---|---|---|
-| **Triggers(자동 스케줄러)** | CLAUDE.md §5(단일 폐쇄 루프, 정의된 종료조건)·§8(예산·Kill Switch가 "그 루프 안"을 전제)과 정면 충돌. 트리거가 루프 밖에서 독립적으로 새 작업을 만들면 예산/종료조건/Kill Switch 보장이 트리거 경로엔 안 걸릴 위험 | 이식하려면 "UI 복제"가 아니라 트리거가 발행하는 모든 작업도 기존 backlog_items/policy.decide() 경로를 반드시 통과하도록 **아키텍처 확장 설계**부터 필요(Planner에 트리거발 작업을 흡수하는 입구를 만들고, 거기도 예산·Kill Switch가 걸리게). 별도 설계 문서로 분리 권장 |
-| **interactive_shell(영속 PTY)** | CLAUDE.md §8-7 "LLM 출력 문자열을 검증 없이 셸로 실행하지 않음"과 충돌 소지. artex 서버(Go)의 실제 정책 검사 여부는 **미확인**(이번 조사에서 Go 라우트까지는 못 봄) | 이식 전에 artex `server/`의 셸 실행 핸들러를 먼저 확인해 정책 검사가 있는지 보고, 없으면 우리 쪽은 최소한 policy.decide() 동급 검사를 셸 명령에도 적용하는 설계가 선행돼야 함 |
+##### F3b-1. Triggers — 확장 설계(기존 `enrich.py` 패턴을 그대로 재사용)
+
+핵심 발견: `enrich.py`(자산 보강)가 이미 "LLM 판단 없이 planner 가 매 계획 주기에 스스로 조건을 보고 작업을
+큐에 올리는" 바로 그 패턴이다(`enrich.enqueue(ctx)` → `exploration_nodes(origin='enrich')` + `backlog_items
+(kind='exploration')` 삽입 → `planner._admit()` 가 다음 줄에서 모든 PENDING 항목에 `policy.decide()` 를
+돌려 READY/BLOCKED 를 가린다). Triggers 는 이 패턴을 조건 종류만 늘려 그대로 쓰면 되고, **새 실행 경로나
+새 스케줄러를 만들 필요가 없다** — `planner.plan()` 바깥에서 독립적으로 도는 코드가 전혀 없으므로
+CLAUDE.md §5/§8 이 요구하는 "예산·Kill Switch 가 그 루프 안을 전제"하는 조건이 설계만으로 자동 만족된다:
+
+- `planner.plan()` 은 오직 `coordinator.run_loop()`(매 반복에서 먼저 `stop_file`/`deadline`/`CANCELLED` 확인)
+  또는 `_wait_for_wake()`(하트비트/디바운스 전에 먼저 `_stop_reason()` 확인) 안에서만 호출된다 — 그 바깥에서
+  트리거를 평가하는 별도 프로세스를 만들지 않는 한 Kill Switch·시간예산을 벗어날 길이 없다.
+- 설사 그 틈에 트리거가 작업을 큐에 넣었더라도 `policy.decide()` 자체가 `cfg.stop_file.exists()` 를
+  독립적으로 다시 확인하므로(policy.py:75) 이중으로 막힌다.
+
+**새 테이블** `run_triggers`(마이그레이션 예정, 아직 미적용):
+```sql
+CREATE TABLE run_triggers (
+    id              bigserial PRIMARY KEY,
+    run_id          uuid NOT NULL REFERENCES runs(id),
+    name            text NOT NULL,
+    condition_kind  text NOT NULL CHECK (condition_kind IN
+                     ('interval','on_finding','on_goal_met','on_task_timeout','on_tool_call','on_task_create')),
+    condition_args  jsonb NOT NULL DEFAULT '{}',
+    tool            text NOT NULL,
+    args            jsonb NOT NULL DEFAULT '{}',
+    target_asset_id uuid REFERENCES assets(id),
+    enabled         boolean NOT NULL DEFAULT true,
+    last_checked_at timestamptz NOT NULL DEFAULT now(),  -- 조건별 "마지막으로 본 시점" 커서(중복 발화 방지)
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+```
+
+**새 모듈** `triggers.py`(`enrich.py` 와 같은 모양):
+```python
+def evaluate(ctx) -> int:
+    """활성 트리거를 조건별로 확인해 작업을 큐에 올린다. LLM 을 부르지 않는다(결정론적 규칙)."""
+    conn, run_id = ctx.conn, ctx.run["id"]
+    accepted = 0
+    for t in conn.execute("SELECT * FROM run_triggers WHERE run_id=%s AND enabled", (run_id,)).fetchall():
+        fired_key = _check(ctx, t)   # 조건 종류별 분기. 발동했으면 고유 컨텍스트 문자열(예: finding id), 아니면 None
+        conn.execute("UPDATE run_triggers SET last_checked_at=now() WHERE id=%s", (t["id"],))
+        if fired_key is None:
+            continue
+        key = f"trigger:{t['id']}:{fired_key}"
+        if conn.execute("SELECT 1 FROM backlog_items WHERE run_id=%s AND idempotency_key=%s",
+                        (run_id, key)).fetchone():
+            continue
+        node = conn.execute(
+            "INSERT INTO exploration_nodes (run_id, kind, origin, payload) VALUES (%s,'intent','trigger',%s) "
+            "RETURNING id", (run_id, Jsonb({"trigger_id": t["id"], "tool": t["tool"], "args": t["args"]}))
+        ).fetchone()["id"]
+        conn.execute("INSERT INTO exploration_anchors (node_id, asset_id) VALUES (%s,%s)", (node, t["target_asset_id"]))
+        conn.execute(
+            "INSERT INTO backlog_items (run_id, kind, exploration_node_id, asset_id, priority, idempotency_key, "
+            "reason, payload, max_attempts) VALUES (%s,'exploration',%s,%s,70,%s,%s,%s,1) "
+            "ON CONFLICT (run_id, idempotency_key) DO NOTHING",
+            (run_id, node, t["target_asset_id"], key, f"트리거 '{t['name']}' 발동",
+             Jsonb({"tool": t["tool"], "args": t["args"]})))
+        accepted += 1
+    return accepted
+```
+`_check(ctx, t)` 조건별 분기(전부 `t["last_checked_at"]` 이후의 새 행만 봄 — 이미 처리한 과거 이벤트가 다시
+발동하지 않게):
+- `interval`: `now() - t["last_checked_at"] >= condition_args.seconds` 면 발동(fired_key = 그 시각의 분 단위 문자열).
+- `on_finding`: `findings WHERE run_id=... AND created_at > last_checked_at` 에 새 행이 있으면 그 `id` 로 발동.
+- `on_task_timeout`: `backlog.reclaim_expired()` 가 이미 추적하는 lease 만료 항목 중 `last_checked_at` 이후 것.
+- `on_tool_call`: Worker Activity(`traces`)에서 `tool = condition_args.tool` 인 새 호출.
+- `on_task_create` / `on_goal_met`: 각각 `backlog_items`/목표-체크리스트 달성 여부를 같은 방식으로 커서 비교.
+
+`planner.plan()` 에 딱 한 줄 추가: `enrich.enqueue(ctx)` 바로 옆에 `"triggered": triggers.evaluate(ctx) if
+ctx.cfg.triggers_enabled else 0,`. 체크리스트 작업(`max_tasks`)과 달리 트리거 작업은 탐색(exploration)과
+같은 취급 — **하드리밋을 걸지 않음**(CLAUDE.md §5 "자율 탐색은 하드리밋 없음"과 일관). 대신 UI에서 `interval`
+최소값(예: 30초)을 강제해 폭주를 막는 소프트 가드만 둔다.
+
+##### F3b-2. interactive_shell — 확장 설계(새 정책 코드 불필요, 기존 게이트에 올리기만 하면 됨)
+
+핵심 발견: `explore.py::_context()` 의 `offered_risks = {"read", "write"}` 가 이미 `dangerous` 위험도 도구를
+LLM 자율 제안에서 항상 제외한다("dangerous 는 항상 뺀다" 주석, explore.py:234). 즉 셸 도구를 `risk="dangerous"`
+로 등록만 하면 **Planner/LLM 은 애초에 셸을 자율적으로 열거나 쓸 수 없고**, 운영자가 `collect`(cli)/webapi
+의 명시적 단일 호출 경로로만 쓸 수 있다 — 그 경로는 이미 `--approve-as`(읽기 전용이 아닌 도구 승인자 지정)를
+요구한다. CLAUDE.md §8-7 "LLM 출력 문자열을 검증 없이 셸로 실행하지 않음"을 지키기 위해 **새 정책 코드를
+만들 필요가 없다** — 기존 위험도 분류·collect 승인 경로에 얹기만 하면 된다. 새 실행 경로(소켓을 직접 열어
+LLM 출력을 바로 셸에 쓰는 것)를 만들지 않는 것이 유일한 규칙이다.
+
+설계:
+1. `tools.py` 에 `shell.open_session`/`shell.send`/`shell.close_session` 세 개를 보통 `ToolSpec`으로 등록
+   (`risk="dangerous"`, `scope_args={"host": "host"}` 등 대상과 묶음). `shell.send` 의 `args_schema` 는
+   `{"session_id": str, "command": str}` — **명령 문자열도 다른 도구 인자와 똑같이 `ctx.policy.authorize()`/
+   인터셉트 규칙을 거친다**: "이 세션에 뭘 써도 되는가"가 아니라 "이 명령 하나"가 매번 독립적으로 판정받는다.
+2. 세션 상태(PTY 핸들)는 작은 테이블 `shell_sessions(id, run_id, asset_id, pid, opened_at, closed_at)` +
+   같은 Worker 프로세스 안의 레지스트리(dict)로 보관. Worker 프로세스가 재시작되면 세션도 끝남 — artex 수준의
+   "완전한 영속"은 아니지만, 그 이상(별도 장수 프로세스 관리자)은 이번 단계에서 과하다고 판단해 범위 밖으로 둠.
+3. 운영자에게 권장: `shell\.` 패턴의 인터셉트 규칙을 기본으로 추가해 `collect` 호출자 자신 말고 **다른 사람의
+   승인**을 강제(선택적 강화 — CLAUDE.md 가 요구하진 않지만 artex Go 서버의 실제 검사 여부가 미확인인 채로
+   남아 있으니 우리 쪽은 한 겹 더 두는 쪽을 권장).
+
+**아직 구현 전**: 두 설계 모두 테이블/모듈을 실제로 만들지 않았다(이번 세션은 "설계" 단계만 요청받음). 다음
+단계는 `run_triggers`/`shell_sessions` 마이그레이션과 `triggers.py`/셸 `ToolSpec` 구현, 설정 화면 UI.
 
 ### F4. 권장 순서
 
-1. F1(MCP 레이아웃), F2(스킬 레이아웃) — 충돌 없음, 바로 진행 가능
-2. F3a(에이전트 안전 기능) — 충돌 없음, 바로 진행 가능하나 새 테이블 2개(버전이력, 바인딩) 필요해 설계량이 F1/F2보다 큼
-3. F3b(Triggers, interactive_shell) — **사용자 결정 대기**. "그대로 이식" 선택 시에도 UI만 먼저 만들고 실제 자동 기동/셸 실행은 별도 설계 단계를 거칠 것을 권장(이번 세션의 MCP stdio 때처럼 안전장치를 한 겹 두는 방식과 동일한 원칙)
+1. F1(MCP 레이아웃), F2(스킬 레이아웃) — 완료
+2. F3a(에이전트 안전 기능: 프롬프트 버전이력, 역할별 기본 모델, 도구/MCP 역할별 가시성) — 완료
+3. F3b 설계(Triggers, interactive_shell) — 완료(위 F3b-1/F3b-2). **구현은 아직 안 함** — 다음 단계는
+   `run_triggers`/`shell_sessions` 마이그레이션 + `triggers.py` + 셸 `ToolSpec` 3종 + 두 화면 UI
