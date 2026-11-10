@@ -1,10 +1,10 @@
 // 에이전트 구역: 역할별 프롬프트 조회·수정·기본값 복원. 프롬프트는 LLM 에 주는 문구일 뿐이라 도구 실행 권한·정책은
 // 바뀌지 않는다(서버의 policy.decide() 가 매 호출 독립적으로 판정).
 import { useCallback, useEffect, useState } from "react";
-import { History, RotateCcw, Save } from "lucide-react";
+import { History, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 
 import { Banner, btnGhost, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, Sheet, SkeletonRows, useToast } from "@/components/ui";
-import { AgentPrompt, AgentPromptVersion, AgentRoleDefaults, AgentRoleInfo, api, LlmProfileRef } from "@/lib/api";
+import { AgentPrompt, AgentProfile, AgentPromptVersion, AgentRoleDefaults, AgentRoleInfo, api, LlmProfileRef } from "@/lib/api";
 import { AGENT_ROLE_LABEL, formatTime } from "@/lib/labels";
 import { errMsg, ICON } from "./parts";
 
@@ -196,11 +196,135 @@ function RoleDefaultModels({ roles }: { roles: string[] }) {
   );
 }
 
+function NewProfileForm({ role, prompts, onCreated, onCancel }: {
+  role: string; prompts: AgentPrompt[]; onCreated: () => void; onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [name, setName] = useState("");
+  const [llmProfile, setLlmProfile] = useState("");
+  const [texts, setTexts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function create() {
+    if (!name.trim()) {
+      setError("이름을 입력하세요");
+      return;
+    }
+    const prompt_overrides = Object.fromEntries(Object.entries(texts).filter(([, v]) => v.trim()));
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(`/api/admin/agents/profiles/${role}`, {
+        name: name.trim(), prompt_overrides, llm_profile: llmProfile.trim() || null, confirm: true,
+      });
+      toast("ok", "프로파일을 만들었습니다");
+      onCreated();
+    } catch (e) {
+      setError(errMsg(e, "만들지 못했습니다"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet title={`새 프로파일 — ${AGENT_ROLE_LABEL[role] ?? role}`} onClose={onCancel}>
+      {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+      <div className="space-y-3">
+        <div>
+          <label className="mb-1 block text-xs text-muted">이름 (예: worker-aggressive)</label>
+          <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted">기본 LLM 프로파일(선택, 비우면 실행 생성 시 고른 모델을 그대로 씀)</label>
+          <input className={`${inputCls} font-mono`} value={llmProfile} onChange={(e) => setLlmProfile(e.target.value)}
+            placeholder="config/llm_profiles.json 의 프로파일 이름" />
+        </div>
+        {prompts.map((p) => (
+          <div key={p.name}>
+            <label className="mb-1 block text-xs text-muted">{p.label}(선택, 비우면 전역 설정/기본값을 그대로 씀)</label>
+            <textarea rows={4} className={`${inputCls} font-mono text-xs`} value={texts[p.name] ?? ""}
+              onChange={(e) => setTexts((t) => ({ ...t, [p.name]: e.target.value }))} />
+          </div>
+        ))}
+        <button disabled={busy} onClick={create} className={btnPrimary}>
+          <Plus className={ICON} aria-hidden /> 만들기
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+function RoleProfiles({ role, prompts, profiles, onChanged }: {
+  role: string; prompts: AgentPrompt[]; profiles: AgentProfile[]; onChanged: () => void;
+}) {
+  const toast = useToast();
+  const [adding, setAdding] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<AgentProfile | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function remove() {
+    if (!confirmDelete) return;
+    setBusy(true);
+    try {
+      await api.post(`/api/admin/agents/profiles/${confirmDelete.id}/delete`, { confirm: true });
+      toast("ok", "프로파일을 삭제했습니다");
+      onChanged();
+    } catch (e) {
+      toast("danger", errMsg(e, "삭제에 실패했습니다"));
+    } finally {
+      setBusy(false);
+      setConfirmDelete(null);
+    }
+  }
+
+  return (
+    <div className="space-y-2 border-t border-line pt-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-medium text-muted">이름 있는 프로파일</h3>
+        <button onClick={() => setAdding(true)} className={btnGhost}>
+          <Plus className={ICON} aria-hidden /> 추가
+        </button>
+      </div>
+      {profiles.length === 0 ? (
+        <p className="text-xs text-faint">없음 — 새 진단을 만들 때는 전역 설정/기본 모델이 그대로 쓰입니다.</p>
+      ) : (
+        <ul className="space-y-1">
+          {profiles.map((p) => (
+            <li key={p.id} className="flex items-center justify-between gap-2 rounded-md border border-line px-2.5 py-1.5 text-xs">
+              <span>
+                <span className="font-medium">{p.name}</span>
+                {p.llm_profile && <span className="ml-2 font-mono text-faint">모델: {p.llm_profile}</span>}
+                <span className="ml-2 text-faint">프롬프트 재정의 {Object.keys(p.prompt_overrides).length}개</span>
+              </span>
+              <button onClick={() => setConfirmDelete(p)} className={btnGhost} aria-label={`${p.name} 삭제`}>
+                <Trash2 className={ICON} aria-hidden />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {adding && (
+        <NewProfileForm role={role} prompts={prompts} onCancel={() => setAdding(false)}
+          onCreated={() => { setAdding(false); onChanged(); }} />
+      )}
+      {confirmDelete && (
+        <ConfirmDialog title={`'${confirmDelete.name}' 프로파일을 삭제할까요?`} confirmLabel="삭제" danger busy={busy}
+          onConfirm={remove} onCancel={() => setConfirmDelete(null)}>
+          이 프로파일을 고른 새 진단은 더 이상 만들 수 없습니다. 이미 시작된 진단에는 영향이 없습니다.
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
 export function AgentsSection() {
   const [roles, setRoles] = useState<AgentRoleInfo[] | null>(null);
+  const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(() => {
     api.get<AgentRoleInfo[]>("/api/admin/agents").then(setRoles).catch((e) => setError(e.message));
+    api.get<AgentProfile[]>("/api/admin/agents/profiles").then(setProfiles).catch(() => {});
   }, []);
   useEffect(load, [load]);
 
@@ -223,6 +347,10 @@ export function AgentsSection() {
           {r.prompts.map((p) => (
             <PromptEditor key={p.name} prompt={p} onChanged={load} />
           ))}
+          {r.prompts.length > 0 && (
+            <RoleProfiles role={r.role} prompts={r.prompts} profiles={profiles.filter((p) => p.role === r.role)}
+              onChanged={load} />
+          )}
         </Card>
       ))}
     </div>

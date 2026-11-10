@@ -368,6 +368,15 @@ export type AgentPrompt = {
 export type AgentRoleInfo = { role: string; prompts: AgentPrompt[] };
 export type AgentPromptVersion = { id: number; text: string; updated_by: string; created_at: string };
 export type AgentRoleDefaults = Record<string, string>; // role -> llm_profile 이름
+export type AgentProfile = {
+  id: number;
+  role: string;
+  name: string;
+  prompt_overrides: Record<string, string>;
+  llm_profile: string | null;
+  created_by: string;
+  created_at: string;
+};
 
 export const TRIGGER_KINDS = ["interval", "on_finding", "on_goal_met", "on_task_timeout", "on_tool_call",
   "on_task_create"] as const;

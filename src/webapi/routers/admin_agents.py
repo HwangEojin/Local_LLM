@@ -118,3 +118,51 @@ def restore_prompt_version(name: str, version_id: int, body: ConfirmBody, conn=D
         wb_prompts.set(conn, name, text, operator=f"web:{user}")
     _audit(conn, user, "admin_prompt_restored", {"name": name, "version_id": version_id, "before": before, "after": text})
     return {"name": name, "overridden": text != default.strip()}
+
+
+class ProfileBody(BaseModel):
+    """역할별 '이름 있는 프로파일'(F3a 절충안, UPGRADE_PLAN.md) — 고정 5역할을 유지하되 역할마다 여러 이름
+    붙은 변형(예: worker-aggressive)을 둘 수 있게 한다. prompt_overrides 는 그 역할이 쓰는 프롬프트 이름 ->
+    문구(지정 안 한 프롬프트는 전역 오버라이드/기본값으로 그대로 떨어짐)."""
+    name: str
+    prompt_overrides: dict[str, str] = {}
+    llm_profile: str | None = None
+    confirm: bool = False
+
+
+@router.get("/agents/profiles")
+def get_profiles(conn=Depends(get_conn), user: str = Depends(current_user)):
+    return wb_prompts.list_profiles(conn)
+
+
+@router.post("/agents/profiles/{role}")
+def create_profile(role: str, body: ProfileBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    if role not in {r["role"] for r in wb_prompts.catalog()}:
+        raise HTTPException(404, f"알 수 없는 역할: {role}")
+    if not body.name.strip():
+        raise HTTPException(422, "이름을 입력하세요")
+    valid_names = {p["name"] for r in wb_prompts.catalog() if r["role"] == role for p in r["prompts"]}
+    unknown = sorted(set(body.prompt_overrides) - valid_names)
+    if unknown:
+        raise HTTPException(422, f"'{role}' 역할이 쓰지 않는 프롬프트: {unknown} (가능: {sorted(valid_names) or '없음'})")
+    for pname, text in body.prompt_overrides.items():
+        if not (20 <= len(text.strip()) <= 12000):
+            raise HTTPException(422, f"{pname}: 프롬프트는 20자 이상 12,000자 이하여야 합니다")
+    try:
+        row = wb_prompts.create_profile(conn, role, body.name.strip(), body.prompt_overrides, body.llm_profile,
+                                        operator=f"web:{user}")
+    except Exception as e:  # UNIQUE(role, name) 충돌
+        conn.rollback()
+        raise HTTPException(409, f"'{role}' 역할에 '{body.name}' 프로파일이 이미 있음") from e
+    _audit(conn, user, "admin_profile_created", {"role": role, "name": row["name"], "profile_id": row["id"]})
+    return row
+
+
+@router.post("/agents/profiles/{profile_id}/delete")
+def delete_profile(profile_id: int, body: ConfirmBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    if not wb_prompts.delete_profile(conn, profile_id):
+        raise HTTPException(404, f"프로파일 {profile_id} 를 찾을 수 없음")
+    _audit(conn, user, "admin_profile_deleted", {"profile_id": profile_id})
+    return {"deleted": profile_id}

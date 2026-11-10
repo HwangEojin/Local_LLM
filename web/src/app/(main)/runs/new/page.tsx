@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Play, Settings } from "lucide-react";
 
 import { Banner, btnPrimary, btnSecondary, Card, inputCls, SkeletonRows } from "@/components/ui";
-import { api, testLlm, ApiError, Environment, RunDetail, WorkbenchSettings } from "@/lib/api";
+import { api, testLlm, AgentProfile, ApiError, Environment, RunDetail, WorkbenchSettings } from "@/lib/api";
 import { AGENT_ROLE_LABEL, AUTONOMY_LABEL, DOCTOR_LABEL } from "@/lib/labels";
 
 const DOCTOR_TONE: Record<string, string> = {
@@ -73,6 +73,8 @@ function NewRunForm() {
   const [tests, setTests] = useState<Record<string, { busy: boolean; ok?: boolean; text?: string }>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [agentModels, setAgentModels] = useState<Record<string, string>>({});
+  const [agentProfiles, setAgentProfiles] = useState<Record<string, string>>({});
+  const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [goal, setGoal] = useState("");
   const [tools, setTools] = useState<string[]>([]);
   const [maxTasks, setMaxTasks] = useState("");
@@ -83,6 +85,7 @@ function NewRunForm() {
     api.get<WorkbenchSettings>("/api/admin/workbench").then((w) => setDefaults(w.budget)).catch(() => {});
     // 복제(from)가 아니면 설정 화면의 "역할별 기본 모델"로 미리 채운다(바꿔도 그만, 강제 아님)
     if (!from) api.get<Record<string, string>>("/api/admin/agents/role-defaults").then(setAgentModels).catch(() => {});
+    api.get<AgentProfile[]>("/api/admin/agents/profiles").then(setProfiles).catch(() => {});
   }, [from]);
 
   useEffect(() => {
@@ -96,6 +99,7 @@ function NewRunForm() {
         setAutonomy(r.autonomy as string);
         setLlmProvider(r.llm_provider as string);
         setAgentModels((r.llm_agent_models ?? {}) as Record<string, string>);
+        setAgentProfiles((r.agent_profile_names ?? {}) as Record<string, string>);
         if (Array.isArray(r.allowed_tools)) setTools(r.allowed_tools as string[]);
         const b = (r.budget ?? {}) as Record<string, number>;
         if (b.max_tasks) setMaxTasks(String(b.max_tasks));
@@ -146,6 +150,7 @@ function NewRunForm() {
         autonomy,
         llm_provider: llmProvider,
         agent_models: useLlm && Object.keys(agentModels).length ? agentModels : null,
+        agent_profile_names: useLlm && Object.keys(agentProfiles).length ? agentProfiles : null,
         goal: goal.trim() || null,
         tools: tools.length ? tools : null,
         max_tasks: toNum(maxTasks),
@@ -306,6 +311,21 @@ function NewRunForm() {
                             <span className="ml-1 font-mono text-xs text-faint">{role}</span>
                           </label>
                           <div className="flex items-center gap-2">
+                            {profiles.some((p) => p.role === role) && (
+                              <select
+                                className={`${inputCls} min-w-0 max-w-[11rem]`}
+                                value={agentProfiles[role] ?? ""}
+                                onChange={(e) => {
+                                  const { [role]: _drop, ...rest } = agentProfiles;
+                                  setAgentProfiles(e.target.value ? { ...rest, [role]: e.target.value } : rest);
+                                }}
+                              >
+                                <option value="">(프로파일 안 씀)</option>
+                                {profiles.filter((p) => p.role === role).map((p) => (
+                                  <option key={p.id} value={p.name}>프로파일 · {p.name}</option>
+                                ))}
+                              </select>
+                            )}
                             <select
                               id={`am-${role}`}
                               className={`${inputCls} min-w-0 max-w-[14rem]`}
