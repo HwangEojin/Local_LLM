@@ -65,12 +65,18 @@ class AgentProfilesDB(unittest.TestCase):
     def test_create_run_fills_model_gap_from_profile_llm_profile(self):
         # "ollama:" 접두어면 llm_profiles.json 에 등록돼 있을 필요가 없다(설치 여부만 느슨하게 확인) —
         # 이 환경에 llm_profiles.json 이 비어 있을 수 있어 이 형식으로 검증을 통과시킨다.
-        self._profile("worker", "with-model", {}, llm_profile="ollama:qwen2.5:14b")
+        # 실제로 설치된 모델 이름은 환경마다 다르므로(예: qwen2.5:7b-instruct), 하드코딩하지 않고 조회한다.
+        from diagnostic_workbench import explore
+        installed = explore.installed_ollama_models(self.cfg)
+        if not installed:
+            raise unittest.SkipTest("Ollama 에 연결할 수 없거나 설치된 모델이 없음")
+        model = f"ollama:{sorted(installed)[0]}"
+        self._profile("worker", "with-model", {}, llm_profile=model)
         self._require_baseline_demo()
         run = runs.create_run(self.conn, self.cfg, ["baseline-demo"], "pytest-profile", checklist_id=None,
                               use_llm=True, agent_profile_names={"worker": "with-model"})
         self.addCleanup(self.conn.commit)
-        self.assertEqual(run["llm_agent_models"].get("worker"), "ollama:qwen2.5:14b")
+        self.assertEqual(run["llm_agent_models"].get("worker"), model)
         self.assertEqual(run["agent_profile_names"].get("worker"), "with-model")
 
     def test_explicit_agent_model_wins_over_profile_llm_profile(self):
