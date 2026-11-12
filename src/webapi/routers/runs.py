@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import collections
+import json
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -543,3 +545,87 @@ def get_server_log(run_ref: str, conn=Depends(get_conn), user: str = Depends(cur
     with _LOCK:
         buf = _RUN_LOGS.get(str(run["id"]))
         return list(buf) if buf else []
+
+
+# ── 결과보고서(Word/Excel, CLAUDE.md §12) — CLI `workbench report` 와 같은 reporting.generate() 를
+# 웹에서 쓸 수 있게 노출. 새 테이블 없이 기존 audit_events 를 승인 기록(§10 초안/승인 구분)에 재사용한다.
+
+
+class ReportBody(BaseModel):
+    meta: dict | None = None  # 체크리스트 기반 실행의 --basic(kind 없음)만 meta 없이 가능
+    kind: str | None = None
+    confirm: bool = False
+
+
+@router.post("/{run_ref}/report")
+def generate_report(run_ref: str, body: ReportBody, cfg=Depends(get_cfg), conn=Depends(get_conn),
+                    user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    run = _load_run(conn, run_ref)
+    meta_path = None
+    if body.meta is not None:
+        out_dir = cfg.settings.path("reports_dir") / str(run["id"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        meta_path = out_dir / "_meta_web_request.json"
+        meta_path.write_text(json.dumps(body.meta, ensure_ascii=False), encoding="utf-8")
+    try:
+        res = reporting.generate(cfg, conn, run, body.kind, meta_path, None)
+    except AuditError as e:
+        conn.rollback()
+        raise HTTPException(400, str(e)) from None
+    finally:
+        if meta_path:
+            meta_path.unlink(missing_ok=True)
+    return res
+
+
+@router.get("/{run_ref}/report")
+def list_reports(run_ref: str, cfg=Depends(get_cfg), conn=Depends(get_conn), user: str = Depends(current_user)):
+    run = _load_run(conn, run_ref)
+    approved = {r["details"]["file"]: r["details"] for r in conn.execute(
+        "SELECT details FROM audit_events WHERE run_id=%s AND event='report_approved'", (run["id"],)).fetchall()}
+    out_dir = cfg.settings.path("reports_dir") / str(run["id"])
+    if not out_dir.is_dir():
+        return []
+    files = sorted(out_dir.glob("*.docx")) + sorted(out_dir.glob("*.xlsx"))
+    return [{
+        "file": p.name, "size": p.stat().st_size,
+        "modified_at": datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).isoformat(),
+        "approved_by": approved.get(p.name, {}).get("approved_by"),
+        "approved_at": approved.get(p.name, {}).get("approved_at"),
+    } for p in files]
+
+
+def _report_path(cfg, run, filename: str) -> Path:
+    out_dir = (cfg.settings.path("reports_dir") / str(run["id"])).resolve()
+    path = (out_dir / filename).resolve()
+    if path.parent != out_dir or not path.is_file():
+        raise HTTPException(404, "보고서 파일을 찾을 수 없음")
+    return path
+
+
+@router.get("/{run_ref}/report/{filename}/download")
+def download_report(run_ref: str, filename: str, cfg=Depends(get_cfg), conn=Depends(get_conn),
+                    user: str = Depends(current_user)):
+    run = _load_run(conn, run_ref)
+    path = _report_path(cfg, run, filename)
+    media = ("application/vnd.openxmlformats-officedocument.wordprocessingml.document" if path.suffix == ".docx"
+            else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return FileResponse(path, media_type=media, filename=filename)
+
+
+class ApproveReportBody(BaseModel):
+    confirm: bool = False
+
+
+@router.post("/{run_ref}/report/{filename}/approve")
+def approve_report(run_ref: str, filename: str, body: ApproveReportBody, cfg=Depends(get_cfg),
+                   conn=Depends(get_conn), user: str = Depends(current_user)):
+    """CLAUDE.md §10: 자동 생성 보고서는 사람이 검토해 승인을 기록하기 전까지 초안이다."""
+    _need_confirm(body.confirm)
+    run = _load_run(conn, run_ref)
+    _report_path(cfg, run, filename)
+    now = datetime.now(timezone.utc).isoformat()
+    wb_db.audit(conn, run["id"], "report_approved", {"file": filename, "approved_by": user, "approved_at": now})
+    conn.commit()
+    return {"file": filename, "approved_by": user, "approved_at": now}
