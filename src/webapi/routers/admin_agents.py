@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from diagnostic_workbench import prompts as wb_prompts
+from diagnostic_workbench import runs as wb_runs
 
-from ..deps import current_user, get_conn
+from ..deps import current_user, get_cfg, get_conn
 from .admin import _audit, _need_confirm
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -166,3 +167,83 @@ def delete_profile(profile_id: int, body: ConfirmBody, conn=Depends(get_conn), u
         raise HTTPException(404, f"프로파일 {profile_id} 를 찾을 수 없음")
     _audit(conn, user, "admin_profile_deleted", {"profile_id": profile_id})
     return {"deleted": profile_id}
+
+
+# ── 커스텀 에이전트(ARTEX 스타일 자유 에이전트 생성, 2026-11-13) ──
+# 5개 고정 역할(planner/worker/analyst/goals/reporter)과 별개. 자기 실행 경로는 없다 — run_triggers 에
+# 연결됐을 때(TriggerBody.custom_agent_id, runs.py) triggers.py::_agent_decide 가 이 정의로 LLM 을 부른다.
+
+
+class CustomAgentBody(BaseModel):
+    name: str
+    system_prompt: str
+    llm_profile: str | None = None
+    allowed_tools: list[str] = []
+    enabled: bool = True
+    confirm: bool = False
+
+
+@router.get("/custom-agents")
+def list_custom_agents(conn=Depends(get_conn), user: str = Depends(current_user)):
+    return conn.execute("SELECT * FROM custom_agents ORDER BY name").fetchall()
+
+
+def _validate_agent_body(cfg, body: CustomAgentBody) -> None:
+    if not body.name.strip():
+        raise HTTPException(422, "이름을 입력하세요")
+    if not (20 <= len(body.system_prompt.strip()) <= 12000):
+        raise HTTPException(422, "시스템 프롬프트는 20자 이상 12,000자 이하여야 합니다")
+    if not body.allowed_tools:
+        raise HTTPException(422, "허용 도구를 하나 이상 고르세요")
+    unknown = sorted(set(body.allowed_tools) - set(wb_runs.registry(cfg)))
+    if unknown:
+        raise HTTPException(422, f"등록되지 않은 도구: {unknown}")
+
+
+@router.post("/custom-agents")
+def create_custom_agent(body: CustomAgentBody, cfg=Depends(get_cfg), conn=Depends(get_conn),
+                        user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    _validate_agent_body(cfg, body)
+    try:
+        row = conn.execute(
+            "INSERT INTO custom_agents (name, system_prompt, llm_profile, allowed_tools, enabled, created_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
+            (body.name.strip(), body.system_prompt.strip(), body.llm_profile, body.allowed_tools, body.enabled,
+             f"web:{user}")).fetchone()
+    except Exception as e:  # UNIQUE(name) 충돌
+        conn.rollback()
+        raise HTTPException(409, f"'{body.name}' 이름의 에이전트가 이미 있음") from e
+    _audit(conn, user, "custom_agent_created", {"id": row["id"], "name": row["name"]})
+    return row
+
+
+@router.put("/custom-agents/{agent_id}")
+def update_custom_agent(agent_id: int, body: CustomAgentBody, cfg=Depends(get_cfg), conn=Depends(get_conn),
+                        user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    _validate_agent_body(cfg, body)
+    row = conn.execute(
+        "UPDATE custom_agents SET name=%s, system_prompt=%s, llm_profile=%s, allowed_tools=%s, enabled=%s, "
+        "updated_at=now() WHERE id=%s RETURNING *",
+        (body.name.strip(), body.system_prompt.strip(), body.llm_profile, body.allowed_tools, body.enabled,
+         agent_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"에이전트 {agent_id} 를 찾을 수 없음")
+    _audit(conn, user, "custom_agent_updated", {"id": agent_id, "name": row["name"]})
+    return row
+
+
+@router.post("/custom-agents/{agent_id}/delete")
+def delete_custom_agent(agent_id: int, body: ConfirmBody, conn=Depends(get_conn), user: str = Depends(current_user)):
+    _need_confirm(body.confirm)
+    using = conn.execute("SELECT run_id, name FROM run_triggers WHERE custom_agent_id=%s LIMIT 1",
+                        (agent_id,)).fetchone()
+    if using:
+        raise HTTPException(409, f"트리거 '{using['name']}' 이(가) 이 에이전트를 쓰고 있음 — 먼저 그 트리거를 "
+                                 "지우거나 다른 에이전트로 바꾸세요")
+    n = conn.execute("DELETE FROM custom_agents WHERE id=%s", (agent_id,)).rowcount
+    if not n:
+        raise HTTPException(404, f"에이전트 {agent_id} 를 찾을 수 없음")
+    _audit(conn, user, "custom_agent_deleted", {"id": agent_id})
+    return {"deleted": agent_id}

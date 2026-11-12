@@ -11,6 +11,8 @@ import {
   AgentRoleDefaults,
   AgentRoleInfo,
   api,
+  ApiError,
+  CustomAgent,
   LlmProfileRef,
   Skill,
   SkillsResponse,
@@ -460,16 +462,166 @@ function AgentDetailSheet({ role, prompts, profiles, skillCount, onClose, onChan
   );
 }
 
+// ── 커스텀 에이전트(ARTEX 스타일 자유 에이전트 생성, 2026-11-13) ──
+// 5개 고정 역할과 별개. 자기 실행 경로는 없다 — 진단 상세의 "트리거" 탭에서 트리거의 담당으로 고르면
+// 그 트리거가 발동할 때만 이 정의(프롬프트·모델·허용 도구)로 LLM 이 tool/args 를 고른다.
+
+function CustomAgentCard({ agent, onOpen }: { agent: CustomAgent; onOpen: () => void }) {
+  return (
+    <button onClick={onOpen} className="text-left">
+      <Card className="space-y-2 p-3 transition-colors hover:border-accent/50">
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 truncate text-sm font-medium">
+            <Bot className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> {agent.name}
+          </span>
+          {!agent.enabled && <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-xs font-medium text-muted">꺼짐</span>}
+        </div>
+        <p className="line-clamp-2 min-h-8 text-xs text-muted">{agent.system_prompt}</p>
+        <div className="flex flex-wrap gap-1.5 text-[10px] text-faint">
+          <span className="rounded border border-line px-1.5 py-0.5">허용 도구 {agent.allowed_tools.length}</span>
+          {agent.llm_profile && <span className="rounded border border-line px-1.5 py-0.5 font-mono">{agent.llm_profile}</span>}
+        </div>
+      </Card>
+    </button>
+  );
+}
+
+function NewCustomAgentCard({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button onClick={onOpen} className="text-left">
+      <Card className="flex min-h-[7.5rem] items-center justify-center gap-1.5 border-dashed p-3 text-sm text-muted transition-colors hover:border-accent/50 hover:text-ink">
+        <Plus className="h-4 w-4" aria-hidden /> 에이전트 만들기
+      </Card>
+    </button>
+  );
+}
+
+function CustomAgentSheet({ agent, tools, onClose, onChanged }: {
+  agent: CustomAgent | null; tools: ToolInfo[]; onClose: () => void; onChanged: () => void;
+}) {
+  const toast = useToast();
+  const [name, setName] = useState(agent?.name ?? "");
+  const [systemPrompt, setSystemPrompt] = useState(agent?.system_prompt ?? "");
+  const [llmProfile, setLlmProfile] = useState(agent?.llm_profile ?? "");
+  const [allowedTools, setAllowedTools] = useState<string[]>(agent?.allowed_tools ?? []);
+  const [enabled, setEnabled] = useState(agent?.enabled ?? true);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  function toggleTool(name: string) {
+    setAllowedTools((xs) => (xs.includes(name) ? xs.filter((x) => x !== name) : [...xs, name]));
+  }
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const body = { name: name.trim(), system_prompt: systemPrompt.trim(), llm_profile: llmProfile.trim() || null,
+                     allowed_tools: allowedTools, enabled, confirm: true };
+      if (agent) await api.put(`/api/admin/custom-agents/${agent.id}`, body);
+      else await api.post("/api/admin/custom-agents", body);
+      toast("ok", agent ? "저장했습니다" : "에이전트를 만들었습니다");
+      onChanged();
+      onClose();
+    } catch (e) {
+      setError(errMsg(e, "저장에 실패했습니다"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!agent) return;
+    setBusy(true);
+    try {
+      await api.post(`/api/admin/custom-agents/${agent.id}/delete`, { confirm: true });
+      toast("ok", "에이전트를 삭제했습니다");
+      onChanged();
+      onClose();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "삭제에 실패했습니다");
+      setConfirmDelete(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const filteredTools = tools.filter((t) => t.name.toLowerCase().includes(q.trim().toLowerCase()));
+
+  return (
+    <Sheet title={agent ? agent.name : "새 커스텀 에이전트"} onClose={onClose}>
+      <div className="space-y-4">
+        {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+        <div>
+          <label className="mb-1 block text-xs text-muted">이름</label>
+          <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 포트 재스캔 에이전트" />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted">시스템 프롬프트(20자 이상)</label>
+          <textarea className={`${inputCls} h-32`} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted">LLM 프로파일(비우면 이 실행의 기본 모델)</label>
+          <input className={`${inputCls} font-mono`} value={llmProfile} onChange={(e) => setLlmProfile(e.target.value)}
+            placeholder="예: ollama:qwen2.5:7b-instruct 또는 프로파일 이름" />
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" className="accent-[var(--accent)]" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          켜짐
+        </label>
+        <div>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <h3 className="text-xs font-medium text-muted">허용 도구(이 안에서만 고를 수 있음, 1개 이상)</h3>
+            <input className={`${inputCls} h-7 max-w-[10rem] text-xs`} placeholder="검색" value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          <ul className="max-h-56 divide-y divide-line overflow-y-auto rounded-md border border-line">
+            {filteredTools.map((t) => (
+              <li key={t.name} className="flex items-center gap-2 px-2.5 py-1.5 text-xs">
+                <input type="checkbox" className="accent-[var(--accent)]" checked={allowedTools.includes(t.name)}
+                  onChange={() => toggleTool(t.name)} />
+                <span className="truncate font-mono">{t.name}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <button disabled={busy} onClick={save} className={btnPrimary}>
+            <Save className={ICON} aria-hidden /> 저장
+          </button>
+          {agent && (
+            <button disabled={busy} onClick={() => setConfirmDelete(true)} className={btnGhost}>
+              <Trash2 className={ICON} aria-hidden /> 삭제
+            </button>
+          )}
+        </div>
+      </div>
+      {confirmDelete && (
+        <ConfirmDialog title={`'${agent?.name}' 에이전트를 삭제할까요?`} confirmLabel="삭제" danger busy={busy}
+          onConfirm={remove} onCancel={() => setConfirmDelete(false)}>
+          이 에이전트를 담당으로 쓰는 트리거가 있으면 삭제할 수 없습니다 — 먼저 그 트리거를 지우거나 바꾸세요.
+        </ConfirmDialog>
+      )}
+    </Sheet>
+  );
+}
+
 export function AgentsSection() {
   const [roles, setRoles] = useState<AgentRoleInfo[] | null>(null);
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [customAgents, setCustomAgents] = useState<CustomAgent[]>([]);
+  const [tools, setTools] = useState<ToolInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [agentSheet, setAgentSheet] = useState<CustomAgent | "new" | null>(null);
   const load = useCallback(() => {
     api.get<AgentRoleInfo[]>("/api/admin/agents").then(setRoles).catch((e) => setError(e.message));
     api.get<AgentProfile[]>("/api/admin/agents/profiles").then(setProfiles).catch(() => {});
     api.get<SkillsResponse>("/api/admin/skills").then((d) => setSkills(d.skills)).catch(() => {});
+    api.get<CustomAgent[]>("/api/admin/custom-agents").then(setCustomAgents).catch(() => {});
+    api.get<ToolCatalog>("/api/admin/tools").then((c) => setTools(c.tools)).catch(() => {});
   }, []);
   useEffect(load, [load]);
 
@@ -477,18 +629,33 @@ export function AgentsSection() {
   if (!roles) return <SkeletonRows rows={4} />;
   const selectedRole = roles.find((r) => r.role === selected) ?? null;
   return (
-    <div className="space-y-4">
-      <p className="text-xs text-faint">
-        고정된 5개 역할(artex 의 자유 에이전트 생성과 달리, CLAUDE.md §6 이 역할 단위 제안/검증을 전제해 역할 수는 바꾸지 않음)
-        — 카드를 눌러 프롬프트·이름 있는 프로파일·가시성을 관리합니다.
-      </p>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {roles.map((r) => (
-          <AgentCard key={r.role} role={r.role} prompts={r.prompts}
-            profileCount={profiles.filter((p) => p.role === r.role).length}
-            skillCount={skills.filter((s) => s.roles.includes(r.role)).length}
-            onOpen={() => setSelected(r.role)} />
-        ))}
+    <div className="space-y-6">
+      <div>
+        <p className="mb-2 text-xs text-faint">
+          고정된 5개 역할 — 카드를 눌러 프롬프트·이름 있는 프로파일·가시성을 관리합니다(CLAUDE.md §6 이 역할
+          단위 제안/검증을 전제해 역할 수는 바꾸지 않음).
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {roles.map((r) => (
+            <AgentCard key={r.role} role={r.role} prompts={r.prompts}
+              profileCount={profiles.filter((p) => p.role === r.role).length}
+              skillCount={skills.filter((s) => s.roles.includes(r.role)).length}
+              onOpen={() => setSelected(r.role)} />
+          ))}
+        </div>
+      </div>
+      <div>
+        <p className="mb-2 text-xs text-faint">
+          커스텀 에이전트(artex 의 자유 에이전트 생성 재현) — 이름·프롬프트·모델·허용 도구를 자유롭게 정의해
+          무제한 만들 수 있습니다. 자기 실행 경로는 없고, 진단 상세의 "트리거" 탭에서 트리거의 담당으로 고르면
+          그 트리거가 발동할 때만 이 정의로 LLM 이 tool/args 를 고릅니다(실행은 여전히 policy.decide() 가 판정).
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {customAgents.map((a) => (
+            <CustomAgentCard key={a.id} agent={a} onOpen={() => setAgentSheet(a)} />
+          ))}
+          <NewCustomAgentCard onOpen={() => setAgentSheet("new")} />
+        </div>
       </div>
       {selectedRole && (
         <AgentDetailSheet
@@ -498,6 +665,15 @@ export function AgentsSection() {
           profiles={profiles.filter((p) => p.role === selectedRole.role)}
           skillCount={skills.filter((s) => s.roles.includes(selectedRole.role)).length}
           onClose={() => setSelected(null)}
+          onChanged={load}
+        />
+      )}
+      {agentSheet && (
+        <CustomAgentSheet
+          key={agentSheet === "new" ? "new" : agentSheet.id}
+          agent={agentSheet === "new" ? null : agentSheet}
+          tools={tools}
+          onClose={() => setAgentSheet(null)}
           onChanged={load}
         />
       )}

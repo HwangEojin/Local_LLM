@@ -390,13 +390,26 @@ export type Trigger = {
   name: string;
   condition_kind: TriggerKind;
   condition_args: Record<string, unknown>;
-  tool: string;
+  tool: string | null;
   args: Record<string, unknown>;
+  custom_agent_id: number | null; // 있으면 발동 시 tool/args 대신 그 에이전트의 LLM 이 직접 고름
   target_asset_id: string;
   enabled: boolean;
   last_checked_at: string;
   created_by: string;
   created_at: string;
+};
+
+export type CustomAgent = {
+  id: number;
+  name: string;
+  system_prompt: string;
+  llm_profile: string | null;
+  allowed_tools: string[];
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ReportFile = {
