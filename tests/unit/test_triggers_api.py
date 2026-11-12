@@ -114,6 +114,45 @@ class TriggersApiTest(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/runs/{run_b['run_code']}/triggers").json(), [])
         self.assertEqual(len(self.client.get(f"/api/runs/{run_a['run_code']}/triggers").json()), 1)
 
+    def _agent_id(self):
+        row = self.conn.execute(
+            "INSERT INTO custom_agents (name, system_prompt, allowed_tools, created_by) "
+            "VALUES (%s,'테스트 프롬프트',%s,'pytest') RETURNING id",
+            (f"pytest-api-agent-{id(self)}", ["net.dns_resolve"])).fetchone()["id"]
+        self.conn.commit()
+
+        def cleanup():
+            self.conn.execute("DELETE FROM run_triggers WHERE custom_agent_id=%s", (row,))
+            self.conn.execute("DELETE FROM custom_agents WHERE id=%s", (row,))
+            self.conn.commit()
+
+        self.addCleanup(cleanup)
+        return row
+
+    def test_create_requires_exactly_one_of_tool_or_custom_agent_id(self):
+        run = self._run()
+        no_tool = self._body(run)
+        del no_tool["tool"]
+        self.assertEqual(self.client.post(f"/api/runs/{run['run_code']}/triggers", json=no_tool).status_code, 422)
+
+        both = self._body(run, custom_agent_id=self._agent_id())
+        self.assertEqual(self.client.post(f"/api/runs/{run['run_code']}/triggers", json=both).status_code, 422)
+
+    def test_create_rejects_unknown_custom_agent_id(self):
+        run = self._run()
+        body = self._body(run, custom_agent_id=999999)
+        del body["tool"]
+        self.assertEqual(self.client.post(f"/api/runs/{run['run_code']}/triggers", json=body).status_code, 422)
+
+    def test_create_with_custom_agent_id_round_trip(self):
+        run = self._run()
+        agent_id = self._agent_id()
+        body = self._body(run, custom_agent_id=agent_id)
+        del body["tool"]
+        r = self.client.post(f"/api/runs/{run['run_code']}/triggers", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["custom_agent_id"], agent_id)
+
 
 if __name__ == "__main__":
     unittest.main()

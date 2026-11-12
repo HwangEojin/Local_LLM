@@ -5,12 +5,29 @@
 - on_finding 조건은 트리거 생성 이후의 새 finding 에만 반응한다(과거 finding 은 무시).
 - 발동한 트리거는 backlog_items(kind='exploration')에 기존 정책 경로(idempotency_key)로 들어간다 —
   같은 컨텍스트로 두 번 평가해도 중복 생성되지 않는다.
+- 커스텀 에이전트(2026-11-13)가 연결된 트리거는 고정 tool/args 대신 그 에이전트의 LLM 이 허용 도구
+  안에서 직접 고른다 — 실패/허용 밖 응답이면 아무것도 쌓지 않는다(아래 CustomAgentTriggerDB).
 """
 import json
 import unittest
 
+from audit.local_model import LLMError
 from audit.models import ConfigError
 from diagnostic_workbench import config, db, runs, triggers
+
+
+class _FakeLLM:
+    model = "fake-agent"
+
+    def __init__(self, response=None, error: str | None = None):
+        self._response, self._error = response, error
+        self.calls = 0
+
+    def structured_chat(self, messages, schema, purpose):
+        self.calls += 1
+        if self._error:
+            raise LLMError(self._error)
+        return self._response
 
 
 class TriggersDB(unittest.TestCase):
@@ -110,6 +127,93 @@ class TriggersDB(unittest.TestCase):
         item = self.conn.execute("SELECT payload FROM backlog_items WHERE run_id=%s AND kind='exploration'",
                                  (run["id"],)).fetchone()
         self.assertEqual(item["payload"]["tool"], "no.such.tool")
+
+
+class CustomAgentTriggerDB(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.cfg = config.load(None)
+            cls.conn = db.connect(cls.cfg.dsn)
+            db.require_migrated(cls.conn, cls.cfg.migrations_dir)
+        except ConfigError as e:
+            raise unittest.SkipTest(f"DB 연결/마이그레이션 불가: {e}") from None
+        if "baseline-demo" not in {t["target_id"] for t in json.loads(
+                (cls.cfg.home / "config" / "scope.json").read_text(encoding="utf-8"))["targets"]}:
+            raise unittest.SkipTest("scope.json 에 baseline-demo 대상이 없음")
+
+    @classmethod
+    def tearDownClass(cls):
+        if hasattr(cls, "conn"):
+            cls.conn.close()
+
+    def _run_ctx(self):
+        run = runs.create_run(self.conn, self.cfg, ["baseline-demo"], "pytest-agent-trigger",
+                              checklist_id=None, use_llm=True)
+        self.addCleanup(self.conn.commit)
+        return run, runs.build_context(self.cfg, self.conn, run)
+
+    def _agent(self, allowed_tools):
+        row = self.conn.execute(
+            "INSERT INTO custom_agents (name, system_prompt, allowed_tools, created_by) "
+            "VALUES (%s,%s,%s,%s) RETURNING *",
+            (f"pytest-agent-{id(allowed_tools)}", "테스트 에이전트 프롬프트", allowed_tools, "pytest")).fetchone()
+        self.addCleanup(self.conn.commit)
+        return row
+
+    def _trigger(self, run, agent_id, condition_args=None):
+        asset_id = self.conn.execute("SELECT asset_id FROM run_assets WHERE run_id=%s LIMIT 1",
+                                     (run["id"],)).fetchone()["asset_id"]
+        return self.conn.execute(
+            "INSERT INTO run_triggers (run_id, name, condition_kind, condition_args, custom_agent_id, "
+            "target_asset_id, created_by) VALUES (%s,'agent-trigger','interval',%s,%s,%s,%s) RETURNING *",
+            (run["id"], json.dumps(condition_args or {"seconds": 0}), agent_id, asset_id, "pytest")).fetchone()
+
+    def test_agent_picks_tool_within_allowed_list(self):
+        run, ctx = self._run_ctx()
+        agent = self._agent(["net.dns_resolve"])
+        self._trigger(run, agent["id"])
+        ctx.llm = _FakeLLM({"tool": "net.dns_resolve", "args": {"host": "x"}, "rationale": "r"})
+        self.assertEqual(triggers.evaluate(ctx), 1)
+        item = self.conn.execute("SELECT payload FROM backlog_items WHERE run_id=%s AND kind='exploration'",
+                                 (run["id"],)).fetchone()
+        self.assertEqual(item["payload"]["tool"], "net.dns_resolve")
+        ev = self.conn.execute("SELECT details FROM audit_events WHERE run_id=%s AND event='custom_agent_decided'",
+                              (run["id"],)).fetchone()
+        self.assertIsNotNone(ev)
+
+    def test_agent_response_outside_allowed_list_is_rejected(self):
+        run, ctx = self._run_ctx()
+        agent = self._agent(["net.dns_resolve"])
+        self._trigger(run, agent["id"])
+        ctx.llm = _FakeLLM({"tool": "fs.read_file", "args": {"path": "/x"}, "rationale": "r"})
+        self.assertEqual(triggers.evaluate(ctx), 0)
+        n = self.conn.execute("SELECT count(*) AS n FROM backlog_items WHERE run_id=%s AND kind='exploration'",
+                              (run["id"],)).fetchone()["n"]
+        self.assertEqual(n, 0)
+        ev = self.conn.execute(
+            "SELECT 1 FROM audit_events WHERE run_id=%s AND event='custom_agent_decide_rejected'",
+            (run["id"],)).fetchone()
+        self.assertIsNotNone(ev)
+
+    def test_agent_llm_error_is_skipped_not_raised(self):
+        run, ctx = self._run_ctx()
+        agent = self._agent(["net.dns_resolve"])
+        self._trigger(run, agent["id"])
+        ctx.llm = _FakeLLM(error="연결 실패")
+        self.assertEqual(triggers.evaluate(ctx), 0)
+        ev = self.conn.execute("SELECT 1 FROM audit_events WHERE run_id=%s AND event='llm_error'",
+                              (run["id"],)).fetchone()
+        self.assertIsNotNone(ev)
+
+    def test_disabled_agent_is_skipped(self):
+        run, ctx = self._run_ctx()
+        agent = self._agent(["net.dns_resolve"])
+        self.conn.execute("UPDATE custom_agents SET enabled=false WHERE id=%s", (agent["id"],))
+        self._trigger(run, agent["id"])
+        ctx.llm = _FakeLLM({"tool": "net.dns_resolve", "args": {"host": "x"}, "rationale": "r"})
+        self.assertEqual(triggers.evaluate(ctx), 0)
+        self.assertEqual(ctx.llm.calls, 0)  # 꺼진 에이전트는 LLM 을 부르지도 않음
 
 
 if __name__ == "__main__":

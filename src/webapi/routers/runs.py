@@ -459,8 +459,9 @@ class TriggerBody(BaseModel):
     name: str
     condition_kind: str
     condition_args: dict = {}
-    tool: str
+    tool: str | None = None  # tool 또는 custom_agent_id 중 정확히 하나
     args: dict = {}
+    custom_agent_id: int | None = None  # 있으면 발동 시 tool/args 대신 그 에이전트의 LLM 이 직접 고름
     target_asset_id: str  # backlog_items.asset_id 가 NOT NULL 이라 모든 작업처럼 대상 하나에 묶여야 함
     confirm: bool = False
 
@@ -482,18 +483,24 @@ def create_trigger(run_ref: str, body: TriggerBody, cfg=Depends(get_cfg), conn=D
         raise HTTPException(422, f"condition_kind 는 {list(_TRIGGER_KINDS)} 중 하나여야 함")
     if not body.name.strip():
         raise HTTPException(422, "이름을 입력하세요")
-    if body.tool not in wb_runs.registry(cfg):
+    if bool(body.tool) == bool(body.custom_agent_id):
+        raise HTTPException(422, "tool 또는 custom_agent_id 중 정확히 하나를 지정하세요")
+    if body.tool and body.tool not in wb_runs.registry(cfg):
         raise HTTPException(422, f"등록되지 않은 도구: {body.tool}")
+    if body.custom_agent_id and not conn.execute(
+            "SELECT 1 FROM custom_agents WHERE id=%s AND enabled", (body.custom_agent_id,)).fetchone():
+        raise HTTPException(422, f"켜져 있는 커스텀 에이전트 {body.custom_agent_id} 를 찾을 수 없음")
     if not conn.execute("SELECT 1 FROM run_assets WHERE run_id=%s AND asset_id=%s",
                         (run["id"], body.target_asset_id)).fetchone():
         raise HTTPException(422, "이 실행의 대상이 아닌 asset_id 임")
     row = conn.execute(
-        "INSERT INTO run_triggers (run_id, name, condition_kind, condition_args, tool, args, target_asset_id, "
-        "created_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "INSERT INTO run_triggers (run_id, name, condition_kind, condition_args, tool, args, custom_agent_id, "
+        "target_asset_id, created_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (run["id"], body.name.strip(), body.condition_kind, Jsonb(body.condition_args), body.tool,
-         Jsonb(body.args), body.target_asset_id, f"web:{user}")).fetchone()
+         Jsonb(body.args), body.custom_agent_id, body.target_asset_id, f"web:{user}")).fetchone()
     wb_db.audit(conn, run["id"], "trigger_created", {"trigger_id": row["id"], "name": row["name"],
-                                                     "condition_kind": row["condition_kind"], "tool": row["tool"]})
+                                                     "condition_kind": row["condition_kind"], "tool": row["tool"],
+                                                     "custom_agent_id": row["custom_agent_id"]})
     conn.commit()
     return row
 

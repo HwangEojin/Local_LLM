@@ -212,6 +212,33 @@ def make_llm(ctx, role: str | None = None):
     return llm
 
 
+def make_llm_for_spec(ctx, spec: str | None):
+    """커스텀 에이전트(triggers.py::_agent_decide)처럼 ctx.run["llm_agent_models"] 딕셔너리 조회에 묶이지
+    않고, spec 문자열 하나로 바로 모델 클라이언트를 만든다. spec 이 없으면 이 실행의 기본 모델(ctx.llm)을
+    그대로 쓴다 — make_llm() 과 같은 ollama:/프로파일 이름 해석 규칙이지만 역할별 딕셔너리 조회만 뺐다
+    (make_llm() 은 손대지 않음 — 기존 5개 고정 역할 경로에 영향 없음)."""
+    if not spec:
+        return ctx.llm
+    profile_name = None if spec.startswith("ollama:") else spec
+    profile = {"kind": "ollama", "model": spec[len("ollama:"):]} if spec.startswith("ollama:") else None
+    if profile_name:
+        profiles = audit_config.load_llm_profiles(ctx.cfg.home)
+        profile = profiles.get(profile_name)
+        if profile is None:
+            raise LLMError(f"llm_profile '{profile_name}' 을(를) config/llm_profiles.json 에서 찾을 수 없음")
+    kind = profile["kind"] if profile else ctx.run.get("llm_provider")
+    if kind == "claude_cli":
+        from audit.claude_cli_model import ClaudeCliClient
+        cfg = {**ctx.cfg.settings.raw.get("claude_cli", {}), **(profile or {})}
+        llm = ClaudeCliClient(cfg, storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])
+    else:
+        cfg = {**ctx.cfg.settings.ollama, **(profile or {})}
+        llm = OllamaClient(cfg, ctx.cfg.settings.external_api_enabled,
+                           storage=_ModelLog(ctx.conn), run_id=ctx.run["id"])
+    llm.ready_info = llm.check_ready()
+    return llm
+
+
 def _context(ctx) -> tuple[str, set[str]]:
     conn, run_id = ctx.conn, ctx.run["id"]
     results = conn.execute(
