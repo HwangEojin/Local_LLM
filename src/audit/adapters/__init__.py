@@ -25,7 +25,7 @@ def build_registry(settings, mcp_servers: dict, stop_file=None) -> dict[str, Too
             if pol.get("scope_filter") == "burp":
                 from .burp import scope_filter
                 post = scope_filter
-            reg[name] = ToolSpec(name, pol["risk"], pol.get("args_schema", {"type": "object"}),
+            reg[name] = ToolSpec(name, pol["read_only"], pol.get("args_schema", {"type": "object"}),
                                  pol.get("scope_args", {}),
                                  partial(mcp_client.call_tool, srv, tool, max_bytes=max_bytes, stop_file=stop_file),
                                  version=f"mcp:{server}", post=post)

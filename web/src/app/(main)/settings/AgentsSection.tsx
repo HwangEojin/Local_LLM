@@ -325,7 +325,7 @@ function RoleVisibility({ role }: { role: string }) {
   useEffect(() => {
     api.get<SkillsResponse>("/api/admin/skills").then(setSkills).catch((e) => setError(e.message));
     api.get<ToolCatalog>("/api/admin/tools")
-      .then((c) => setTools(c.tools.filter((t) => t.risk !== "dangerous")))  // dangerous 는 어차피 LLM 에 절대 안 보임
+      .then((c) => setTools(c.tools))  // 위험도 분류 삭제(2026-11) — 모든 도구가 LLM 제안 후보가 될 수 있음
       .catch((e) => setError(e.message));
   }, []);
 

@@ -560,7 +560,7 @@ function McpDetailSheet({ server, onClose, onChanged }: { server: McpServer; onC
             <li key={t.name} className="py-2">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs">{t.name.split("/").slice(1).join("/")}</span>
-                <span className="rounded-full bg-raised px-2 py-0.5 text-xs text-muted">{t.risk}</span>
+                <span className="rounded-full bg-raised px-2 py-0.5 text-xs text-muted">{t.read_only ? "읽기전용" : "변경가능"}</span>
               </div>
               {Object.keys(t.scope_args).length > 0 && (
                 <p className="mt-0.5 text-xs text-faint">범위 검사: {Object.entries(t.scope_args).map(([a, k]) => `${a}(${k})`).join(", ")}</p>

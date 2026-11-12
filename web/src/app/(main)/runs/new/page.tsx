@@ -411,7 +411,7 @@ function NewRunForm() {
                         <label key={t.name} className="flex items-center gap-2 text-xs">
                           <input type="checkbox" className="accent-[var(--accent)]" checked={tools.includes(t.name)} onChange={() => toggle(tools, setTools, t.name)} />
                           <span className="truncate font-mono">{t.name}</span>
-                          <span className="text-faint">{t.risk}</span>
+                          <span className="text-faint">{t.read_only ? "읽기전용" : "변경가능"}</span>
                         </label>
                       ))}
                     </div>

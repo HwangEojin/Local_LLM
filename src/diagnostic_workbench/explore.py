@@ -53,10 +53,10 @@ PROPOSALS = {
     "type": "object", "additionalProperties": False, "required": ["proposals"],
     "properties": {"proposals": {"type": "array", "maxItems": 3, "items": {
         "type": "object", "additionalProperties": False,
-        "required": ["rationale", "target_id", "tool", "args", "risk", "expected_evidence", "stop_condition",
+        "required": ["rationale", "target_id", "tool", "args", "expected_evidence", "stop_condition",
                      "based_on_evidence_ids"],
         "properties": {"rationale": _STR, "target_id": _STR, "tool": _STR, "args": {"type": "object"},
-                       "risk": {"enum": ["read", "write"]}, "expected_evidence": _STR, "stop_condition": _STR,
+                       "expected_evidence": _STR, "stop_condition": _STR,
                        "based_on_evidence_ids": {"type": "array", "maxItems": 10, "items": {"type": "string"}},
                        # 같은 응답의 이전 proposal 에 의존하면 그 0-based 인덱스. 여러 단계가 순서를 가져야
                        # 할 때(자격 증명 획득 → 그 자격 증명 사용 등) planner._admit 이 이미 보는 backlog_deps
@@ -79,10 +79,10 @@ SYSTEM = (
     "inquiry (a different target or a different checklist result) is clearly more valuable. Citing the same "
     "RESULTS evidence round after round without ever using a newer FACTS id is a sign you are not actually "
     "continuing the chain — avoid that. "
-    "Use only the listed TOOLS and target_ids, with args that satisfy each tool's schema, and set risk to that "
-    "tool's exact listed risk tier (read or write — tools not listed, including anything dangerous, are "
-    "off-limits). A write step still runs: the host may require human approval first if it matches an intercept "
-    "rule the operator configured, so propose a write step only when a read step cannot answer the same question. Every "
+    "Use only the listed TOOLS and target_ids, with args that satisfy each tool's schema (tools not listed are "
+    "off-limits). Every proposed step still runs through policy checks: the host may require human approval "
+    "first if it matches an intercept rule the operator configured, so propose a more invasive step only when a "
+    "less invasive one cannot answer the same question. Every "
     "proposal must cite evidence ids from the input (RESULTS, FACTS or LATEST_FACT) in based_on_evidence_ids. Do "
     "not repeat anything under ALREADY_TRIED. For a FAIL or INCONCLUSIVE result, a useful step is usually one "
     "that shows how far the issue extends on the same target (for example listing the target or reading a "
@@ -231,13 +231,14 @@ def _context(ctx) -> tuple[str, set[str]]:
         "UNION ALL "  # 거부된 제안도 보여준다 — 그래야 같은 걸 다음 라운드에 또 제안하지 않는다(CLAUDE.md §6)
         "SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='intent' AND state='REJECTED'",
         (run_id, run_id)).fetchall()
-    offered_risks = {"read", "write"}  # dangerous 는 항상 뺀다(위험도 체계 자체는 승인 게이트가 아니지만, 이 분류는 유지)
     present_types = {t.type for t in ctx.targets.values()}  # 이 실행의 대상 유형(path/host/url)
     from . import runs as wb_runs  # 지연 import: runs.py 가 explore 를 임포트해서 순환 참조가 됨
     candidates = prompts.visible_tools(ctx.registry, "planner", wb_runs.tool_overrides(ctx.cfg))
-    tools = {name: {"risk": spec.risk, "args_schema": spec.args_schema, "scope_checked_args": spec.scope_args}
-             for name, spec in candidates.items() if spec.risk in offered_risks
-             and set(spec.scope_args.values()) <= present_types}  # 대상 유형이 안 맞는 도구는 항상 거부되므로 뺀다
+    # 위험도 분류 삭제(2026-11) — 등록된 도구는 전부 제안 후보다. 실제 실행은 policy.decide()/인터셉트
+    # 규칙(config/intercept_rules.json)이 여전히 똑같이 승인을 요구한다(shell.* 등도 그 규칙으로 걸림).
+    tools = {name: {"args_schema": spec.args_schema, "scope_checked_args": spec.scope_args}
+             for name, spec in candidates.items()
+             if set(spec.scope_args.values()) <= present_types}  # 대상 유형이 안 맞는 도구는 항상 거부되므로 뺀다
     past = traces.search_all_worker_traces(conn, status="FAILED", exclude_run=run_id, limit=5)
     known = {i for r in results for i in r["evidence_ids"]} | {f["evidence_id"] for f in facts}
     fact_entries = [{"evidence_ids": [f["evidence_id"]], **f["payload"]} for f in facts]  # 출력 스키마와 키 이름을 맞춘다
@@ -305,7 +306,7 @@ def _bootstrap_probes(ctx, base_text: str, assets: dict) -> tuple[set[str], str]
         if not tool:
             break
         asset_id, spec = assets.get(out["target_id"]), ctx.registry.get(tool)
-        if asset_id is None or spec is None or spec.risk != "read":
+        if asset_id is None or spec is None or not spec.read_only:
             log_entries.append({"tool": tool, "target_id": out["target_id"],
                                 "rejected": "범위 밖 대상이거나 read 전용 도구가 아님(bootstrap 프로브는 read 전용만 허용)"})
             continue
@@ -367,10 +368,8 @@ def propose(ctx) -> int:
         asset_id, spec, cited = assets.get(p["target_id"]), ctx.registry.get(p["tool"]), set(p["based_on_evidence_ids"])
         if asset_id is None:
             why = "범위에 없는 target_id"
-        elif spec is None or spec.risk not in ("read", "write"):
-            why = "등록되지 않았거나 read/write 가 아닌 도구(탐색은 dangerous 도구를 제안하지 않음)"
-        elif p["risk"] != spec.risk:
-            why = f"주장한 위험도 '{p['risk']}' 가 등록된 실제 위험도 '{spec.risk}' 와 다름"
+        elif spec is None:
+            why = "등록되지 않은 도구"
         elif not bootstrap and (not cited or not cited <= known):
             why = "근거 증적 id 가 없거나 존재하지 않는 id 를 인용함"
         elif latest_fact_id and p["target_id"] == latest_fact_target and latest_fact_id not in cited:

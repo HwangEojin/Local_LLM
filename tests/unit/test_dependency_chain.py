@@ -49,7 +49,7 @@ class DependencyChain(unittest.TestCase):
                               checklist_id=None, use_llm=True)
         self.addCleanup(self.conn.commit)
         ctx = runs.build_context(self.cfg, self.conn, run)
-        ctx.registry["test.probe"] = ToolSpec(name="test.probe", risk="read", args_schema={}, scope_args={},
+        ctx.registry["test.probe"] = ToolSpec(name="test.probe", read_only=True, args_schema={}, scope_args={},
                                               executor=lambda args: ToolOutput(b'{"ok":true}', "test.probe/1"))
         return run, ctx
 

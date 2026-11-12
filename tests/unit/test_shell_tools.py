@@ -1,7 +1,8 @@
 """interactive_shell(F3b-2)을 확인한다.
 
-- shell.open_session/send/close_session 이 risk="dangerous" 로 등록돼 있다(LLM 자율 제안에서 항상
-  제외되는 위험도 — explore.py 의 offered_risks 가 보장, 이 테스트는 등록만 확인).
+- shell.open_session/send/close_session 이 read_only=False 로 등록돼 있다. 위험도 분류 삭제(2026-11)
+  이후로는 이 때문에 LLM 자율 제안에서 빠지지 않는다 — 대신 config/intercept_rules.json 의
+  ask-dangerous-shell 규칙이 모든 shell.* 호출에 사람 승인을 강제한다(아래 두 번째 클래스에서 확인).
 - 열기 -> 명령 전송 -> 출력 확인 -> 닫기가 실제로 동작한다(진짜 PTY 가 아니라 파이프 기반, ponytail 주석대로).
 - Kill Switch(stop_file)가 켜져 있으면 새 세션을 열 수 없다.
 - 닫힌(또는 없는) session_id 로 send 하면 ToolError.
@@ -19,10 +20,10 @@ class ShellToolsTest(unittest.TestCase):
         cls.cfg = config.load(None)
         cls.tools = tools.make_tools(cls.cfg)
 
-    def test_registered_as_dangerous(self):
+    def test_registered_as_not_read_only(self):
         for name in ("shell.open_session", "shell.send", "shell.close_session"):
             self.assertIn(name, self.tools)
-            self.assertEqual(self.tools[name].risk, "dangerous")
+            self.assertFalse(self.tools[name].read_only)
 
     def test_open_send_close_roundtrip(self):
         out = self.tools["shell.open_session"].executor({"host": "localhost"})
@@ -55,9 +56,10 @@ class ShellToolsTest(unittest.TestCase):
             self.cfg.stop_file.unlink()
 
 
-class ShellToolsExcludedFromAutonomousProposalDB(unittest.TestCase):
-    """CLAUDE.md §8-7 의 핵심 보장: LLM 은 셸 도구를 자율 제안받을 수 없다(risk="dangerous" 가
-    explore.py 의 offered_risks={"read","write"} 에서 항상 빠지므로) — 실제 플래너 프롬프트 텍스트까지
+class ShellToolsRequireApprovalDB(unittest.TestCase):
+    """위험도 분류 삭제(2026-11) 이후 CLAUDE.md §8-7 의 핵심 보장이 바뀐 자리: LLM 은 이제 셸 도구를
+    자율 제안할 수 있지만(아래 첫 테스트), 실제 호출은 config/intercept_rules.json 의 ask-dangerous-shell
+    규칙이 모든 shell.* 에 사람 승인을 강제한다(두 번째 테스트) — 제안 가능과 승인 요구는 별개임을
     끝까지 확인한다(단위 등록만이 아니라)."""
 
     @classmethod
@@ -77,16 +79,22 @@ class ShellToolsExcludedFromAutonomousProposalDB(unittest.TestCase):
         if hasattr(cls, "conn"):
             cls.conn.close()
 
-    def test_shell_tools_never_appear_in_planner_prompt(self):
-        run = runs.create_run(self.conn, self.cfg, ["baseline-demo"], "pytest-shell-exclude",
+    def test_shell_tools_appear_in_planner_prompt(self):
+        run = runs.create_run(self.conn, self.cfg, ["baseline-demo"], "pytest-shell-proposable",
                               checklist_id=None, use_llm=True)
         self.addCleanup(self.conn.commit)
         ctx = runs.build_context(self.cfg, self.conn, run)
-        self.assertIn("shell.open_session", ctx.registry)  # 등록은 돼 있다(collect 로는 쓸 수 있어야 함)
+        self.assertIn("shell.open_session", ctx.registry)
         text, _known, _latest = explore._context(ctx)
-        self.assertNotIn("shell.open_session", text)
-        self.assertNotIn("shell.send", text)
-        self.assertNotIn("shell.close_session", text)
+        self.assertIn("shell.open_session", text)
+        self.assertIn("shell.send", text)
+        self.assertIn("shell.close_session", text)
+
+    def test_shell_tool_calls_still_require_intercept_approval(self):
+        from diagnostic_workbench import policy as wb_policy
+        for name in ("shell.open_session", "shell.send", "shell.close_session"):
+            self.assertIsNotNone(wb_policy._intercepted(self.cfg.intercept_rules, name, {}),
+                                 f"{name} 에 걸리는 인터셉트 규칙이 없음 — 승인 없이 바로 실행됨")
 
 
 if __name__ == "__main__":

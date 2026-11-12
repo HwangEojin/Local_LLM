@@ -42,13 +42,13 @@ class BootstrapProbeTest(unittest.TestCase):
         if hasattr(cls, "conn"):
             cls.conn.close()
 
-    def _run_with_fake_tool(self, risk="read"):
+    def _run_with_fake_tool(self, read_only=True):
         run = runs.create_run(self.conn, self.cfg, ["baseline-demo"], "pytest-bootstrap-probe",
                               checklist_id=None, use_llm=True)
         self.addCleanup(self.conn.commit)
         ctx = runs.build_context(self.cfg, self.conn, run)
         ctx.registry["test.probe"] = ToolSpec(
-            name="test.probe", risk=risk, args_schema={}, scope_args={},
+            name="test.probe", read_only=read_only, args_schema={}, scope_args={},
             executor=lambda args: ToolOutput(b'{"ok":true}', "test.probe/1"))
         return run, ctx
 
@@ -75,7 +75,7 @@ class BootstrapProbeTest(unittest.TestCase):
         self.assertIn("BOOTSTRAP_PROBES", ctx.llm.calls[-1][1])
 
     def test_dangerous_tool_is_not_executed(self):
-        run, ctx = self._run_with_fake_tool(risk="dangerous")
+        run, ctx = self._run_with_fake_tool(read_only=False)
         ctx.llm = _SequencedLLM([
             {"tool": "test.probe", "target_id": "baseline-demo", "args": {}, "rationale": "위험한 시도"},
             {"tool": "", "target_id": "", "args": {}, "rationale": ""},

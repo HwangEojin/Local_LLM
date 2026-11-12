@@ -63,7 +63,7 @@ def validate_plan(plan: dict, policy: Policy, checklists: Checklists, registry: 
                 entry = {"check_id": cid, "target_id": t.target_id, "tool": req["tool"], "args": args}
                 try:
                     entry["args"] = policy.authorize(spec, req["tool"], args, t, dry_run=True)
-                    entry["decision"] = "승인필요" if spec.risk != "read" else "허용"
+                    entry["decision"] = "승인필요" if not spec.read_only else "허용"
                 except PolicyDenied as e:
                     entry["decision"] = f"거부됨: {e}"
                     denied.append(entry)

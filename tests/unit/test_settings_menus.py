@@ -157,7 +157,7 @@ class SettingsMenusTest(unittest.TestCase):
         out = self.client.get("/api/admin/tools").json()
         self.assertTrue(out["tools"])
         t = out["tools"][0]
-        self.assertTrue({"name", "risk", "args_schema", "source"} <= set(t))
+        self.assertTrue({"name", "read_only", "args_schema", "source"} <= set(t))
 
     def test_approvals_overview_shape(self):
         out = self.client.get("/api/admin/approvals").json()
@@ -229,11 +229,11 @@ class SettingsMenusTest(unittest.TestCase):
         self.assertIn("fs.read_file", wb_runs.registry(self.deps.get_cfg()))
 
     def test_tool_risk_is_not_editable(self):
-        # 위험도 체계 삭제(CLAUDE.md §8, 2026-11) — risk 는 분류용 메타데이터일 뿐, ToolBody 에 그 필드가 없어
-        # 요청에 "risk" 를 보내도(알 수 없는 필드라 조용히 무시됨) 등록된 도구의 risk 는 그대로다.
-        self.assertEqual(self._tool()["risk"], "read")
-        self.assertEqual(self._tput({"risk": "write", "confirm": True}).status_code, 200)
-        self.assertEqual(self._tool()["risk"], "read")
+        # 위험도 체계 삭제(CLAUDE.md §8, 2026-11) — read_only 는 분류용 메타데이터일 뿐, ToolBody 에 그 필드가
+        # 없어 요청에 "read_only" 를 보내도(알 수 없는 필드라 조용히 무시됨) 등록된 도구의 read_only 는 그대로다.
+        self.assertEqual(self._tool()["read_only"], True)
+        self.assertEqual(self._tput({"read_only": False, "confirm": True}).status_code, 200)
+        self.assertEqual(self._tool()["read_only"], True)
 
     # ── 알림 ──
     def test_notifications_mask_urls_and_require_external_confirm(self):

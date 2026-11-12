@@ -305,7 +305,7 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
         ctx.conn.commit()
         return eid, None
     spec, err = ctx.registry[tool], None
-    for _ in range(2 if spec.risk == "read" else 1):  # 상태를 바꾸는 도구는 재시도하지 않는다
+    for _ in range(2 if spec.read_only else 1):  # 상태를 바꾸는 도구는 재시도하지 않는다
         wait = ctx.last_call + ctx.cfg.min_call_interval_ms / 1000 - time.monotonic()
         if wait > 0:
             time.sleep(wait)
@@ -600,11 +600,11 @@ def _worker_decide(ctx, it) -> tuple[str, dict]:
     payload = it["payload"]
     tool, args = payload["tool"], payload["args"]
     spec = ctx.registry.get(tool)
-    if not ctx.llm or spec is None or spec.risk != "read":
+    if not ctx.llm or spec is None or not spec.read_only:
         return tool, args
     from . import runs as wb_runs  # 지연 import: runs.py -> explore.py -> worker.py 순환 참조를 피함
     candidates = prompts.visible_tools(ctx.registry, "worker", wb_runs.tool_overrides(ctx.cfg))
-    read_tools = {name: {"args_schema": s.args_schema} for name, s in candidates.items() if s.risk == "read"}
+    read_tools = {name: {"args_schema": s.args_schema} for name, s in candidates.items() if s.read_only}
     tried = ctx.conn.execute(
         "SELECT payload FROM backlog_items WHERE run_id=%s AND kind='exploration' AND asset_id=%s "
         "AND status NOT IN ('PENDING','READY','RUNNING')", (ctx.run["id"], it["asset_id"])).fetchall()
@@ -631,7 +631,7 @@ def _worker_decide(ctx, it) -> tuple[str, dict]:
         db.audit(ctx.conn, ctx.run["id"], "llm_error", {"purpose": "worker_decide", "error": str(e)})
         return tool, args
     picked = ctx.registry.get(out["tool"])
-    if picked is None or picked.risk != "read":  # 엉뚱한 응답 — Planner 제안 유지(CLAUDE.md §7)
+    if picked is None or not picked.read_only:  # 엉뚱한 응답 — Planner 제안 유지(CLAUDE.md §7)
         return tool, args
     db.audit(ctx.conn, ctx.run["id"], "worker_agent_decided",
              {"backlog_item": str(it["id"]), "suggested": {"tool": tool, "args": args},

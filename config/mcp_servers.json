@@ -8,7 +8,6 @@
       "timeout_s": 180,
       "allowed_tools": {
         "get_proxy_http_history": {
-          "risk": "read",
           "scope_filter": "burp",
           "args_schema": {
             "type": "object",
@@ -28,10 +27,10 @@
                 "minimum": 0
               }
             }
-          }
+          },
+          "read_only": true
         },
         "get_proxy_http_history_regex": {
-          "risk": "read",
           "scope_filter": "burp",
           "args_schema": {
             "type": "object",
@@ -57,10 +56,10 @@
                 "maxLength": 500
               }
             }
-          }
+          },
+          "read_only": true
         },
         "get_organizer_items": {
-          "risk": "read",
           "scope_filter": "burp",
           "args_schema": {
             "type": "object",
@@ -80,10 +79,10 @@
                 "minimum": 0
               }
             }
-          }
+          },
+          "read_only": true
         },
         "get_scanner_issues": {
-          "risk": "read",
           "scope_filter": "burp",
           "args_schema": {
             "type": "object",
@@ -103,13 +102,14 @@
                 "minimum": 0
               }
             }
-          }
+          },
+          "read_only": true
         },
         "send_http1_request": {
-          "risk": "write",
           "scope_args": {
             "targetHostname": "host"
-          }
+          },
+          "read_only": false
         }
       }
     },
@@ -127,85 +127,85 @@
       ],
       "allowed_tools": {
         "list_methods": {
-          "risk": "read"
+          "read_only": true
         },
         "list_classes": {
-          "risk": "read"
+          "read_only": true
         },
         "decompile_function": {
-          "risk": "read"
+          "read_only": true
         },
         "rename_function": {
-          "risk": "write"
+          "read_only": false
         },
         "rename_data": {
-          "risk": "write"
+          "read_only": false
         },
         "list_segments": {
-          "risk": "read"
+          "read_only": true
         },
         "list_imports": {
-          "risk": "read"
+          "read_only": true
         },
         "list_exports": {
-          "risk": "read"
+          "read_only": true
         },
         "list_namespaces": {
-          "risk": "read"
+          "read_only": true
         },
         "list_data_items": {
-          "risk": "read"
+          "read_only": true
         },
         "search_functions_by_name": {
-          "risk": "read"
+          "read_only": true
         },
         "rename_variable": {
-          "risk": "write"
+          "read_only": false
         },
         "get_function_by_address": {
-          "risk": "read"
+          "read_only": true
         },
         "get_current_address": {
-          "risk": "read"
+          "read_only": true
         },
         "get_current_function": {
-          "risk": "read"
+          "read_only": true
         },
         "list_functions": {
-          "risk": "read"
+          "read_only": true
         },
         "decompile_function_by_address": {
-          "risk": "read"
+          "read_only": true
         },
         "disassemble_function": {
-          "risk": "read"
+          "read_only": true
         },
         "set_decompiler_comment": {
-          "risk": "write"
+          "read_only": false
         },
         "set_disassembly_comment": {
-          "risk": "write"
+          "read_only": false
         },
         "rename_function_by_address": {
-          "risk": "write"
+          "read_only": false
         },
         "set_function_prototype": {
-          "risk": "write"
+          "read_only": false
         },
         "set_local_variable_type": {
-          "risk": "write"
+          "read_only": false
         },
         "get_xrefs_to": {
-          "risk": "read"
+          "read_only": true
         },
         "get_xrefs_from": {
-          "risk": "read"
+          "read_only": true
         },
         "get_function_xrefs": {
-          "risk": "read"
+          "read_only": true
         },
         "list_strings": {
-          "risk": "read"
+          "read_only": true
         }
       },
       "error_patterns": [
@@ -223,43 +223,43 @@
       "timeout_s": 120,
       "allowed_tools": {
         "list_processes": {
-          "risk": "read"
+          "read_only": true
         },
         "enumerate_processes": {
-          "risk": "read"
+          "read_only": true
         },
         "enumerate_devices": {
-          "risk": "read"
+          "read_only": true
         },
         "get_device": {
-          "risk": "read"
+          "read_only": true
         },
         "get_usb_device": {
-          "risk": "read"
+          "read_only": true
         },
         "get_process_by_name": {
-          "risk": "read"
+          "read_only": true
         },
         "attach_to_process": {
-          "risk": "dangerous"
+          "read_only": false
         },
         "create_simple_hook": {
-          "risk": "dangerous"
+          "read_only": false
         },
         "spawn_process": {
-          "risk": "dangerous"
+          "read_only": false
         },
         "resume_process": {
-          "risk": "dangerous"
+          "read_only": false
         },
         "kill_process": {
-          "risk": "dangerous"
+          "read_only": false
         },
         "create_interactive_session": {
-          "risk": "dangerous"
+          "read_only": false
         },
         "execute_in_session": {
-          "risk": "dangerous"
+          "read_only": false
         }
       }
     },
@@ -278,100 +278,100 @@
       ],
       "allowed_tools": {
         "fetch_current_class": {
-          "risk": "read"
+          "read_only": true
         },
         "get_selected_text": {
-          "risk": "read"
+          "read_only": true
         },
         "get_method_by_name": {
-          "risk": "read"
+          "read_only": true
         },
         "get_all_classes": {
-          "risk": "read"
+          "read_only": true
         },
         "get_class_source": {
-          "risk": "read"
+          "read_only": true
         },
         "search_method_by_name": {
-          "risk": "read"
+          "read_only": true
         },
         "get_methods_of_class": {
-          "risk": "read"
+          "read_only": true
         },
         "search_classes_by_keyword": {
-          "risk": "read"
+          "read_only": true
         },
         "get_fields_of_class": {
-          "risk": "read"
+          "read_only": true
         },
         "get_smali_of_class": {
-          "risk": "read"
+          "read_only": true
         },
         "get_manifest_component": {
-          "risk": "read"
+          "read_only": true
         },
         "get_android_manifest": {
-          "risk": "read"
+          "read_only": true
         },
         "get_strings": {
-          "risk": "read"
+          "read_only": true
         },
         "get_all_resource_file_names": {
-          "risk": "read"
+          "read_only": true
         },
         "get_resource_file": {
-          "risk": "read"
+          "read_only": true
         },
         "get_main_application_classes_names": {
-          "risk": "read"
+          "read_only": true
         },
         "get_main_application_classes_code": {
-          "risk": "read"
+          "read_only": true
         },
         "get_main_activity_class": {
-          "risk": "read"
+          "read_only": true
         },
         "get_package_tree": {
-          "risk": "read"
+          "read_only": true
         },
         "get_cache_stats": {
-          "risk": "read"
+          "read_only": true
         },
         "clear_cache": {
-          "risk": "write"
+          "read_only": false
         },
         "rename_class": {
-          "risk": "write"
+          "read_only": false
         },
         "rename_method": {
-          "risk": "write"
+          "read_only": false
         },
         "rename_field": {
-          "risk": "write"
+          "read_only": false
         },
         "rename_package": {
-          "risk": "write"
+          "read_only": false
         },
         "rename_variable": {
-          "risk": "write"
+          "read_only": false
         },
         "debug_get_stack_frames": {
-          "risk": "read"
+          "read_only": true
         },
         "debug_get_threads": {
-          "risk": "read"
+          "read_only": true
         },
         "debug_get_variables": {
-          "risk": "read"
+          "read_only": true
         },
         "get_xrefs_to_class": {
-          "risk": "read"
+          "read_only": true
         },
         "get_xrefs_to_method": {
-          "risk": "read"
+          "read_only": true
         },
         "get_xrefs_to_field": {
-          "risk": "read"
+          "read_only": true
         }
       },
       "error_patterns": [
@@ -394,7 +394,6 @@
       "timeout_s": 120,
       "allowed_tools": {
         "browser_snapshot": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -413,10 +412,10 @@
             },
             "additionalProperties": false,
             "required": []
-          }
+          },
+          "read_only": true
         },
         "browser_take_screenshot": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -455,10 +454,10 @@
               "scale"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": true
         },
         "browser_console_messages": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -482,10 +481,10 @@
               "level"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": true
         },
         "browser_network_requests": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -503,10 +502,10 @@
               "static"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": true
         },
         "browser_network_request": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -531,10 +530,10 @@
               "index"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": true
         },
         "browser_find": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -549,10 +548,10 @@
             },
             "additionalProperties": false,
             "required": []
-          }
+          },
+          "read_only": true
         },
         "browser_wait_for": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -570,18 +569,18 @@
               }
             },
             "additionalProperties": false
-          }
+          },
+          "read_only": true
         },
         "browser_close": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {},
             "additionalProperties": false
-          }
+          },
+          "read_only": true
         },
         "browser_navigate": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -597,18 +596,18 @@
           },
           "scope_args": {
             "url": "url"
-          }
+          },
+          "read_only": true
         },
         "browser_navigate_back": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {},
             "additionalProperties": false
-          }
+          },
+          "read_only": true
         },
         "browser_tabs": {
-          "risk": "read",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -638,10 +637,10 @@
           },
           "scope_args": {
             "url": "url"
-          }
+          },
+          "read_only": true
         },
         "browser_click": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -685,10 +684,10 @@
               "target"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_type": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -718,10 +717,10 @@
               "text"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_fill_form": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -773,10 +772,10 @@
               "fields"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_press_key": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -789,10 +788,10 @@
               "key"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_select_option": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -817,10 +816,10 @@
               "values"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_hover": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -837,10 +836,10 @@
               "target"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_drag": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -866,10 +865,10 @@
               "endTarget"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_drop": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -903,10 +902,10 @@
               "target"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_file_upload": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -919,10 +918,10 @@
               }
             },
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_handle_dialog": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -939,10 +938,10 @@
               "accept"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_resize": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -960,10 +959,10 @@
               "height"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_emulate_media": {
-          "risk": "write",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -1044,10 +1043,10 @@
               }
             },
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_evaluate": {
-          "risk": "dangerous",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -1068,10 +1067,10 @@
               "function"
             ],
             "additionalProperties": false
-          }
+          },
+          "read_only": false
         },
         "browser_run_code_unsafe": {
-          "risk": "dangerous",
           "args_schema": {
             "type": "object",
             "properties": {
@@ -1082,7 +1081,8 @@
             },
             "additionalProperties": false,
             "required": []
-          }
+          },
+          "read_only": false
         }
       }
     }

@@ -51,7 +51,7 @@ def get_environment(cfg=Depends(get_cfg), user: str = Depends(current_user)):
     cl = Checklists(cfg.settings.path("checklist_dir"))
     checklists = [{"checklist_id": cid, "version": v["version"], "sha256": v.get("sha256")}
                   for cid, v in cl.entries() if v["status"] == "active"]
-    tools = [{"name": name, "risk": spec.risk} for name, spec in sorted(wb_runs.registry(cfg).items())]
+    tools = [{"name": name, "read_only": spec.read_only} for name, spec in sorted(wb_runs.registry(cfg).items())]
     llm_profiles = _llm_profiles(cfg)
     return {
         "targets": scope["targets"],

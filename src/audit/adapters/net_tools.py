@@ -40,6 +40,6 @@ def make_tools(max_bytes: int) -> dict[str, ToolSpec]:
         return ToolOutput(body[:max_bytes], VERSION, truncated=len(body) > max_bytes)
 
     return {
-        "net.dns_resolve": ToolSpec("net.dns_resolve", "read", _HOST_ARGS, {"host": "host"}, dns_resolve, VERSION),
-        "net.http_head": ToolSpec("net.http_head", "read", _URL_ARGS, {"url": "url"}, http_head, VERSION),
+        "net.dns_resolve": ToolSpec("net.dns_resolve", True, _HOST_ARGS, {"host": "host"}, dns_resolve, VERSION),
+        "net.http_head": ToolSpec("net.http_head", True, _URL_ARGS, {"url": "url"}, http_head, VERSION),
     }

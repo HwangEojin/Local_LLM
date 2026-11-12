@@ -174,7 +174,7 @@ def discover_mcp(body: DiscoverBody, cfg=Depends(get_cfg), user: str = Depends(c
 
 class ToolSel(BaseModel):
     name: str
-    risk: str = "write"
+    read_only: bool = False
     scope_args: dict[str, str] = {}
 
 
@@ -218,21 +218,19 @@ def register_mcp(name: str, body: RegisterBody, cfg=Depends(get_cfg), conn=Depen
             raise HTTPException(422, f"서버에 없는 도구: {sel.name}")
         if not t["schema_ok"]:
             raise HTTPException(422, f"{sel.name}: {t['schema_error']} — 검증이 헐거워질 수 있어 등록하지 않습니다")
-        if sel.risk not in ("read", "write", "dangerous"):
-            raise HTTPException(422, f"{sel.name}: 위험도는 read/write/dangerous 중 하나여야 합니다")
         props = (t["input_schema"].get("properties") or {})
         for arg, kind in sel.scope_args.items():
             if kind not in ("path", "host", "url") or not (isinstance(props.get(arg), dict) and props[arg].get("type") == "string"):
                 raise HTTPException(422, f"{sel.name}: 범위 검사 인자 '{arg}'({kind})가 문자열 인자가 아닙니다")
-        if sel.risk == "read" and not sel.scope_args:
+        if sel.read_only and not sel.scope_args:
             unscoped_reads.append(sel.name)
-        entry = {"risk": sel.risk, "args_schema": t["input_schema"]}
+        entry = {"read_only": sel.read_only, "args_schema": t["input_schema"]}
         if sel.scope_args:
             entry["scope_args"] = sel.scope_args
         allowed[sel.name] = entry
     if unscoped_reads and not body.confirm_unscoped_read:
-        raise HTTPException(400, "범위 검사 인자가 없는 도구를 read 로 등록하면 대상 범위 확인 없이 승인 없이 실행됩니다: "
-                                 + ", ".join(unscoped_reads) + " — 별도 확인(confirm_unscoped_read)이 필요합니다")
+        raise HTTPException(400, "범위 검사 인자가 없는 도구를 읽기전용으로 등록하면 대상 범위 확인 없이(보통 승인도 없이) "
+                                 "실행됩니다: " + ", ".join(unscoped_reads) + " — 별도 확인(confirm_unscoped_read)이 필요합니다")
     local = _file(cfg, "mcp_servers.local.json")
     doc = audit_config.load_json(local, schemas.MCP_SERVERS) if local.exists() else {"servers": {}}
     before = doc["servers"].get(name)
@@ -253,7 +251,7 @@ def register_mcp(name: str, body: RegisterBody, cfg=Depends(get_cfg), conn=Depen
     _audit(conn, user, "admin_mcp_registered", {
         "server": name, "transport": srv["transport"], "target": identity, "enabled": body.enabled,
         "updated": before is not None,
-        "tools": {n: {"risk": v["risk"], "scope_args": v.get("scope_args", {})} for n, v in allowed.items()}})
+        "tools": {n: {"read_only": v["read_only"], "scope_args": v.get("scope_args", {})} for n, v in allowed.items()}})
     return _mcp_rows(get_cfg())
 
 

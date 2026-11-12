@@ -1,5 +1,5 @@
 // 도구 구역: 등록된 도구를 끄거나 켠다. 새 도구 등록·실행 파일·인자 스키마는 웹에서 바꿀 수 없다.
-// 위험도(risk)는 분류용 메타데이터일 뿐 승인 게이트가 아니다(CLAUDE.md §8, 2026-11 삭제) — 표시만 하고 편집은 없다.
+// 읽기전용(read_only)은 분류용 메타데이터일 뿐 승인 게이트가 아니다(CLAUDE.md §8, 2026-11 위험도 체계 삭제) — 표시만 하고 편집은 없다.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Power, PowerOff } from "lucide-react";
 
@@ -7,12 +7,6 @@ import { Banner, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls, Skelet
 import { api, ToolCatalog, ToolInfo } from "@/lib/api";
 import { errMsg, ICON } from "./parts";
 
-const RISK_CLS: Record<string, string> = {
-  read: "bg-ok/15 text-ok",
-  write: "bg-warn/15 text-warn",
-  dangerous: "bg-danger/15 text-danger",
-};
-const RISKS = ["read", "write", "dangerous"];
 const VISIBILITY_ROLES = ["planner", "worker"]; // 이 둘만 제안 단계에서 도구 후보를 고른다(analyst/goals/reporter 는 해당 없음)
 
 export function ToolsSection() {
@@ -20,7 +14,7 @@ export function ToolsSection() {
   const [cat, setCat] = useState<ToolCatalog | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const [risk, setRisk] = useState("");
+  const [readOnlyFilter, setReadOnlyFilter] = useState("");
   const [pending, setPending] = useState<ToolInfo | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -30,8 +24,9 @@ export function ToolsSection() {
   useEffect(load, [load]);
 
   const rows = useMemo(
-    () => (cat?.tools ?? []).filter((t) => (!risk || t.risk === risk) && t.name.toLowerCase().includes(q.trim().toLowerCase())),
-    [cat, q, risk],
+    () => (cat?.tools ?? []).filter((t) =>
+      (!readOnlyFilter || String(t.read_only) === readOnlyFilter) && t.name.toLowerCase().includes(q.trim().toLowerCase())),
+    [cat, q, readOnlyFilter],
   );
 
   async function apply(t: ToolInfo, disabled: boolean) {
@@ -66,11 +61,10 @@ export function ToolsSection() {
       {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
       <div className="flex flex-wrap items-center gap-3">
         <input className={`${inputCls} max-w-xs`} placeholder="도구 이름 검색" value={q} onChange={(e) => setQ(e.target.value)} aria-label="도구 이름 검색" />
-        <select className={`${inputCls} max-w-[10rem]`} value={risk} onChange={(e) => setRisk(e.target.value)} aria-label="위험도 필터">
-          <option value="">모든 위험도</option>
-          {RISKS.map((r) => (
-            <option key={r} value={r}>{r}</option>
-          ))}
+        <select className={`${inputCls} max-w-[10rem]`} value={readOnlyFilter} onChange={(e) => setReadOnlyFilter(e.target.value)} aria-label="읽기전용 필터">
+          <option value="">전체</option>
+          <option value="true">읽기전용</option>
+          <option value="false">변경가능</option>
         </select>
         <span className="text-xs text-muted">{rows.length} / {cat.tools.length}개</span>
       </div>
@@ -81,7 +75,9 @@ export function ToolsSection() {
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <span className="font-mono text-sm">{t.name}</span>
                 <span className="text-xs text-faint">{t.source === "mcp" ? "MCP" : "내장"}</span>
-                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${RISK_CLS[t.risk] ?? ""}`}>{t.risk}</span>
+                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${t.read_only ? "bg-ok/15 text-ok" : "bg-warn/15 text-warn"}`}>
+                  {t.read_only ? "읽기전용" : "변경가능"}
+                </span>
                 {t.disabled && <span className="rounded-full bg-raised px-2 py-0.5 text-xs font-medium text-muted">꺼짐</span>}
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -122,7 +118,7 @@ export function ToolsSection() {
         끈 도구는 모든 경로에서 &lsquo;등록되지 않은 도구&rsquo;로 거부됩니다(진행 중인 진단은 다음 도구 호출 컨텍스트부터). &ldquo;제안 후보에서 숨기기&rdquo;는
         그 역할의 LLM 제안 목록에서만 안 보이게 할 뿐 도구를 끄는 게 아닙니다 — 다른 경로로 호출되면 여전히 policy.decide() 가 그대로 판정합니다.
         둘 다 이 PC 전용 파일(tools.local.json)에 저장되고 변경 전/후가 감사 로그에 남습니다.
-        새 도구 등록, 실행 파일 경로, 인자 스키마, 위험도는 웹에서 바꿀 수 없습니다. 승인 요구 여부는 인터셉트 규칙으로 정합니다.
+        새 도구 등록, 실행 파일 경로, 인자 스키마, 읽기전용 여부는 웹에서 바꿀 수 없습니다. 승인 요구 여부는 인터셉트 규칙으로 정합니다.
       </p>
 
       {pending && (

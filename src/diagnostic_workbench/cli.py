@@ -188,10 +188,11 @@ def cmd_checklist(args):
 
 
 def cmd_tools(args):
-    """실행 가능한 도구와 위험도. read 는 바로, 그 밖은 호출마다 승인이 필요하다."""
+    """실행 가능한 도구 목록. 승인 필요 여부는 config/intercept_rules.json 규칙으로 정해진다(위험도 분류 없음)."""
     cfg = config.load(args.home)
     for name, spec in sorted(runs.registry(cfg).items()):
-        print(f"{name:<44} {spec.risk:<10} 범위검사 인자={spec.scope_args or '-'}")
+        kind = "읽기전용" if spec.read_only else "변경가능"
+        print(f"{name:<44} {kind:<10} 범위검사 인자={spec.scope_args or '-'}")
     return 0
 
 

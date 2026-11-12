@@ -1,7 +1,7 @@
-// MCP 서버 추가: 연결 테스트·도구 발견 → 운영자가 고른 도구만 위험도·범위 검사 인자와 함께 등록.
+// MCP 서버 추가: 연결 테스트·도구 발견 → 운영자가 고른 도구만 읽기전용 여부·범위 검사 인자와 함께 등록.
 // 원격(sse)과 stdio(명령 실행) 둘 다 지원한다(2026-11, artex 참고) — stdio 는 이 PC 에서 그 명령을 실행하게
 // 되므로 별도 확인(confirm_stdio)이 항상 필요하다. 도구는 자동 등록하지 않으며 등록된 도구도 매 호출 서버의
-// 정책 검사(위험도·scope_args·승인)를 그대로 통과해야 한다.
+// 정책 검사(scope_args·인터셉트 승인)를 그대로 통과해야 한다.
 import { useState } from "react";
 import { Plug, Plus, Search } from "lucide-react";
 
@@ -9,9 +9,8 @@ import { Banner, btnPrimary, btnSecondary, Card, ConfirmDialog, inputCls } from 
 import { api, DiscoveredTool, McpDiscovery, McpServer } from "@/lib/api";
 import { errMsg, Field, ICON } from "./parts";
 
-type Pick = { on: boolean; risk: string; scope: Record<string, string> };
+type Pick = { on: boolean; read_only: boolean; scope: Record<string, string> };
 type Transport = "sse" | "stdio";
-const RISKS = ["read", "write", "dangerous"];
 const NAME_RE = /^[A-Za-z0-9_.-]{1,40}$/;
 
 const stringProps = (t: DiscoveredTool) =>
@@ -47,8 +46,8 @@ export function McpAddCard({ onAdded }: { onAdded: (servers: McpServer[]) => voi
         return;
       }
       setFound({ server: r.server, tools: r.tools });
-      // 기본: 아무것도 고르지 않음. 위험도는 write, 범위 검사 인자는 이름으로 짐작한 후보를 미리 채운다(운영자가 확인)
-      setPicks(Object.fromEntries(r.tools.map((t) => [t.name, { on: false, risk: "write", scope: { ...t.suggested_scope } }])));
+      // 기본: 아무것도 고르지 않음. 읽기전용 아님(변경 가능)으로 두고, 범위 검사 인자는 이름으로 짐작한 후보를 미리 채운다(운영자가 확인)
+      setPicks(Object.fromEntries(r.tools.map((t) => [t.name, { on: false, read_only: false, scope: { ...t.suggested_scope } }])));
     } catch (e) {
       setError(errMsg(e, "발견에 실패했습니다"));
     } finally {
@@ -57,7 +56,7 @@ export function McpAddCard({ onAdded }: { onAdded: (servers: McpServer[]) => voi
   }
 
   const chosen = found ? found.tools.filter((t) => picks[t.name]?.on) : [];
-  const unscopedReads = chosen.filter((t) => picks[t.name].risk === "read" && Object.keys(picks[t.name].scope).length === 0);
+  const unscopedReads = chosen.filter((t) => picks[t.name].read_only && Object.keys(picks[t.name].scope).length === 0);
 
   async function register() {
     setBusy(true);
@@ -70,7 +69,7 @@ export function McpAddCard({ onAdded }: { onAdded: (servers: McpServer[]) => voi
         enabled: true,
         confirm: true,
         confirm_unscoped_read: unscopedReads.length > 0,
-        tools: chosen.map((t) => ({ name: t.name, risk: picks[t.name].risk, scope_args: picks[t.name].scope })),
+        tools: chosen.map((t) => ({ name: t.name, read_only: picks[t.name].read_only, scope_args: picks[t.name].scope })),
       });
       onAdded(servers);
       setFound(null);
@@ -152,11 +151,11 @@ export function McpAddCard({ onAdded }: { onAdded: (servers: McpServer[]) => voi
                       <input type="checkbox" className="accent-[var(--accent)]" disabled={!t.schema_ok} checked={!!p?.on} onChange={(e) => setPick(t.name, { on: e.target.checked })} />
                       <span className="font-mono">{t.name}</span>
                     </label>
-                    <select className={`${inputCls} w-28`} value={p?.risk} disabled={!p?.on} aria-label={`${t.name} 위험도`} onChange={(e) => setPick(t.name, { risk: e.target.value })}>
-                      {RISKS.map((r) => (
-                        <option key={r} value={r}>{r}</option>
-                      ))}
-                    </select>
+                    <label className="flex items-center gap-1.5 text-xs text-muted">
+                      <input type="checkbox" className="accent-[var(--accent)]" checked={!!p?.read_only} disabled={!p?.on}
+                            onChange={(e) => setPick(t.name, { read_only: e.target.checked })} />
+                      읽기전용
+                    </label>
                   </div>
                   {t.description && <p className="line-clamp-2 text-xs text-muted">{t.description}</p>}
                   {!t.schema_ok && <p className="text-xs text-danger">{t.schema_error} — 검증이 헐거워질 수 있어 등록할 수 없습니다.</p>}
@@ -204,7 +203,7 @@ stdio(명령 실행) 서버는 등록 즉시 이 PC에서 그 명령이 실행�
           )}
           {unscopedReads.length > 0 && (
             <span className="mt-2 block text-danger">
-              범위 검사 인자 없이 read 로 등록하는 도구: {unscopedReads.map((t) => t.name).join(", ")} — 대상 범위 확인 없이, 승인 없이 실행됩니다.
+              범위 검사 인자 없이 읽기전용으로 등록하는 도구: {unscopedReads.map((t) => t.name).join(", ")} — 대상 범위 확인 없이, 승인 없이 실행됩니다.
             </span>
           )}
         </ConfirmDialog>

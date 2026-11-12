@@ -50,7 +50,7 @@ class InterceptDecideDB(unittest.TestCase):
                               checklist_id=None, use_llm=True, autonomy=autonomy)
         self.addCleanup(self.conn.commit)
         ctx = runs.build_context(self.cfg, self.conn, run)
-        ctx.registry["test.read"] = ToolSpec(name="test.read", risk="read", args_schema={}, scope_args={},
+        ctx.registry["test.read"] = ToolSpec(name="test.read", read_only=True, args_schema={}, scope_args={},
                                              executor=lambda a: ToolOutput(b"{}", "t/1"))
         return ctx
 
