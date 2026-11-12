@@ -24,7 +24,7 @@ class ToolBody(BaseModel):
 def _tool_rows(cfg) -> dict:
     base = wb_runs.registry(cfg, apply_overrides=False)
     ov = wb_runs.tool_overrides(cfg)
-    rows = [{"name": n, "risk": t.risk, "disabled": n in ov["disabled"],
+    rows = [{"name": n, "read_only": t.read_only, "disabled": n in ov["disabled"],
              "hidden_from": ov["hidden_from"].get(n, []),
              "args_schema": t.args_schema, "scope_args": t.scope_args,
              "source": "mcp" if n.startswith("mcp:") else "builtin"}

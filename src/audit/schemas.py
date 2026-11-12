@@ -163,9 +163,9 @@ SCOPE = {
 
 _TOOL_POLICY = {
     "type": "object", "additionalProperties": False,
-    "required": ["risk"],
+    "required": ["read_only"],
     "properties": {
-        "risk": {"enum": ["read", "write", "dangerous"]},
+        "read_only": {"type": "boolean"},
         "scope_args": {"type": "object", "additionalProperties": {"enum": ["path", "host", "url"]}},
         "args_schema": {"type": "object"},
         "scope_filter": {"enum": ["burp"]},  # 결과를 증거로 저장하기 전에 진단 범위 밖 항목을 제거

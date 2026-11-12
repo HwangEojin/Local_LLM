@@ -30,6 +30,6 @@ def make_tools(max_bytes: int) -> dict[str, ToolSpec]:
         return ToolOutput(json.dumps(entries, ensure_ascii=False, indent=1).encode(), VERSION)
 
     return {
-        "fs.read_file": ToolSpec("fs.read_file", "read", _PATH_ARGS, {"path": "path"}, read_file, VERSION),
-        "fs.list_dir": ToolSpec("fs.list_dir", "read", _PATH_ARGS, {"path": "path"}, list_dir, VERSION),
+        "fs.read_file": ToolSpec("fs.read_file", True, _PATH_ARGS, {"path": "path"}, read_file, VERSION),
+        "fs.list_dir": ToolSpec("fs.list_dir", True, _PATH_ARGS, {"path": "path"}, list_dir, VERSION),
     }

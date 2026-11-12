@@ -40,7 +40,7 @@ class AutonomyBinaryTest(unittest.TestCase):
                               checklist_id=None, use_llm=True, autonomy=autonomy)
         self.addCleanup(self.conn.commit)
         ctx = runs.build_context(self.cfg, self.conn, run)
-        ctx.registry["test.write"] = ToolSpec(name="test.write", risk="write", args_schema={}, scope_args={},
+        ctx.registry["test.write"] = ToolSpec(name="test.write", read_only=False, args_schema={}, scope_args={},
                                               executor=lambda args: ToolOutput(b"{}", "test.write/1"))
         ctx.cfg.intercept_rules = [{"name": "test-rule", "tool_re": re.compile(r"^test\.write$"), "arg_re": None}] \
             if intercepted else []  # 이 PC 의 config/intercept_rules.local.json 내용과 무관하게 결정론적으로 만든다

@@ -106,15 +106,14 @@ class McpRegisterTest(unittest.TestCase):
         self.assertTrue(out["error"])
 
     def test_register_validation_then_success_and_delete(self):
-        sel = lambda **k: {"name": "fetch_page", "risk": "write", "scope_args": {"url": "url"}, **k}  # noqa: E731
+        sel = lambda **k: {"name": "fetch_page", "read_only": False, "scope_args": {"url": "url"}, **k}  # noqa: E731
         self.assertEqual(self._reg([sel()], confirm=False).status_code, 400)
         self.assertEqual(self.client.post("/api/admin/mcp/burp/register", json={"url": self.url, "tools": [sel()], "confirm": True}).status_code, 400)  # 공유 서버 덮어쓰기
         self.assertEqual(self._reg([]).status_code, 422)
         self.assertEqual(self._reg([sel(name="nope")]).status_code, 422)  # 서버에 없는 도구
-        self.assertEqual(self._reg([sel(risk="root")]).status_code, 422)
         self.assertEqual(self._reg([sel(scope_args={"depth": "url"})]).status_code, 422)  # 문자열 인자가 아님
-        self.assertEqual(self._reg([{"name": "read_note", "risk": "read"}]).status_code, 400)  # 범위 검사 없는 read
-        self.assertEqual(self._reg([{"name": "read_note", "risk": "read"}], confirm_unscoped_read=True).status_code, 200)
+        self.assertEqual(self._reg([{"name": "read_note", "read_only": True}]).status_code, 400)  # 범위 검사 없는 read
+        self.assertEqual(self._reg([{"name": "read_note", "read_only": True}], confirm_unscoped_read=True).status_code, 200)
         rows = self._reg([sel()]).json()
         row = next(r for r in rows if r["name"] == "fake-test")
         self.assertEqual(row["source"], "local")
@@ -123,9 +122,9 @@ class McpRegisterTest(unittest.TestCase):
         self.assertEqual(saved["allowed_tools"]["fetch_page"]["scope_args"], {"url": "url"})
         self.assertIn("url", saved["allowed_tools"]["fetch_page"]["args_schema"]["properties"])  # 서버가 알려 준 스키마
         spec = wb_runs.registry(self.deps.get_cfg())["mcp:fake-test/fetch_page"]
-        self.assertEqual((spec.risk, spec.scope_args), ("write", {"url": "url"}))
+        self.assertEqual((spec.read_only, spec.scope_args), (False, {"url": "url"}))
         ev = self.conn.execute("SELECT details FROM audit_events WHERE event='admin_mcp_registered' ORDER BY id DESC LIMIT 1").fetchone()
-        self.assertEqual(ev["details"]["tools"]["fetch_page"]["risk"], "write")
+        self.assertEqual(ev["details"]["tools"]["fetch_page"]["read_only"], False)
         self.assertEqual(self.client.post("/api/admin/mcp/fake-test/delete", json={}).status_code, 400)
         self.assertNotIn("fake-test", [r["name"] for r in self.client.post("/api/admin/mcp/fake-test/delete", json={"confirm": True}).json()])
         self.assertEqual(self.client.post("/api/admin/mcp/burp/delete", json={"confirm": True}).status_code, 404)  # 이 PC 전용이 아님
@@ -148,7 +147,7 @@ class McpRegisterTest(unittest.TestCase):
         self.assertTrue(out["ok"], out)
         self.assertEqual({t["name"] for t in out["tools"]}, {"fetch_page"})
 
-        sel = [{"name": "fetch_page", "risk": "write", "scope_args": {"url": "url"}}]
+        sel = [{"name": "fetch_page", "read_only": False, "scope_args": {"url": "url"}}]
         reg_body = {**self._stdio_body(confirm_stdio=False), "tools": sel}
         self.assertEqual(self.client.post("/api/admin/mcp/fake-stdio/register", json=reg_body).status_code, 400)
 
@@ -158,7 +157,7 @@ class McpRegisterTest(unittest.TestCase):
         self.assertEqual(row["transport"], "stdio")
         self.assertEqual(row["tools"], ["fetch_page"])
         spec = wb_runs.registry(self.deps.get_cfg())["mcp:fake-stdio/fetch_page"]
-        self.assertEqual(spec.risk, "write")
+        self.assertEqual(spec.read_only, False)
         self.client.post("/api/admin/mcp/fake-stdio/delete", json={"confirm": True})
 
 

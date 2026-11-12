@@ -47,13 +47,13 @@ class WorkerAgentDecideTest(unittest.TestCase):
         if hasattr(cls, "conn"):
             cls.conn.close()
 
-    def _run_and_item(self, suggested_tool="test.probe", suggested_risk="read"):
+    def _run_and_item(self, suggested_tool="test.probe", suggested_read_only=True):
         run = runs.create_run(self.conn, self.cfg, ["baseline-demo"], "pytest-worker-agent",
                               checklist_id=None, use_llm=True)
         self.addCleanup(self.conn.commit)
         ctx = runs.build_context(self.cfg, self.conn, run)
-        for name, risk in (("test.probe", suggested_risk), ("test.probe2", "read")):
-            ctx.registry[name] = ToolSpec(name=name, risk=risk, args_schema={}, scope_args={},
+        for name, read_only in (("test.probe", suggested_read_only), ("test.probe2", True)):
+            ctx.registry[name] = ToolSpec(name=name, read_only=read_only, args_schema={}, scope_args={},
                                           executor=lambda args, n=name: ToolOutput(f'{{"from":"{n}"}}'.encode(), f"{n}/1"))
         asset_id = next(iter(ctx.targets))
         node = self.conn.execute(
@@ -86,7 +86,7 @@ class WorkerAgentDecideTest(unittest.TestCase):
         self.assertEqual(ev["details"]["picked"]["tool"], "test.probe2")
 
     def test_write_risk_suggestion_is_never_reconsidered(self):
-        ctx, it = self._run_and_item(suggested_risk="write")
+        ctx, it = self._run_and_item(suggested_read_only=False)
         ctx.llm = _FakeLLM(fail_if_called=True)  # 승인은 제안의 정확한 tool+args 해시에 묶여 있어 재판단 금지
         tool, args = worker._worker_decide(ctx, it)
         self.assertEqual(tool, "test.probe")

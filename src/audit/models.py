@@ -54,7 +54,7 @@ class Target:
 class ToolSpec:
     """등록된(허용 목록) 도구. 등록되지 않은 것은 실행할 수 없다."""
     name: str
-    risk: str
+    read_only: bool  # 재시도 안전성(worker)·부트스트랩 즉시실행 자격(CLAUDE.md §1/§7)에만 쓰인다 — 승인 게이트 아님
     args_schema: dict
     scope_args: dict[str, str]  # 인자 이름 -> "path" | "host" | "url"
     executor: object = None  # 호출 가능 객체: callable(args) -> ToolOutput

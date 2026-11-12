@@ -81,10 +81,9 @@ _TLS_ARGS = {
 _SSL_SCRIPTS = "ssl-enum-ciphers,ssl-heartbleed,ssl-ccs-injection"  # 고정 목록, 인자로 바꿀 수 없음
 
 # ── interactive shell(F3b-2, UPGRADE_PLAN.md) ──
-# risk="dangerous" 로 등록 — explore.py 의 offered_risks={"read","write"} 가 dangerous 를 항상 빼므로 LLM 은
-# 자율 탐색 중 이 도구를 절대 제안받지 못한다. 운영자가 cli collect/webapi 로 명시적으로만 호출 가능하고,
-# 그 경로는 이미 '승인자 지정'을 요구한다 — 이 파일에 새 정책 코드가 없는 이유(policy.decide() 가 모든
-# 다른 dangerous 도구와 똑같이 판정한다).
+# read_only=False 로 등록. 위험도 분류 삭제(2026-11) 이후 LLM 자율 탐색에서도 제안받을 수 있지만,
+# config/intercept_rules.json 의 ask-dangerous-shell 규칙이 모든 shell.* 호출에 사람 승인을 강제한다
+# — 이 파일에 새 정책 코드가 없는 이유(policy.decide() 가 다른 도구와 똑같이 판정한다).
 #
 # ponytail: 진짜 PTY(termios/ANSI 제어)가 아니라 자식 프로세스의 stdin/stdout 파이프일 뿐이다. 대화형
 # 프로그램(vim 등)은 못 쓰고, 한 줄 명령 + 그 응답 정도만 가능하다. Windows 에 진짜 PTY를 쓰려면
@@ -190,7 +189,7 @@ def make_tools(cfg) -> dict[str, ToolSpec]:
         data = json.dumps(result, ensure_ascii=False).encode("utf-8")
         return ToolOutput(data, "stdlib-ssl", truncated=False)
 
-    tools["tls.inspect"] = ToolSpec("tls.inspect", "write", _TLS_ARGS, {"host": "host"}, inspect_tls, "stdlib-ssl")
+    tools["tls.inspect"] = ToolSpec("tls.inspect", False, _TLS_ARGS, {"host": "host"}, inspect_tls, "stdlib-ssl")
 
     _ensure_reaper(cfg.stop_file)
 
@@ -236,10 +235,10 @@ def make_tools(cfg) -> dict[str, ToolSpec]:
             session.proc.terminate()
         return ToolOutput(b"{}", "shell/pipe", truncated=False)
 
-    tools["shell.open_session"] = ToolSpec("shell.open_session", "dangerous", _SHELL_ARGS["open_session"],
+    tools["shell.open_session"] = ToolSpec("shell.open_session", False, _SHELL_ARGS["open_session"],
                                            {"host": "host"}, shell_open_session, "shell/pipe")
-    tools["shell.send"] = ToolSpec("shell.send", "dangerous", _SHELL_ARGS["send"], {}, shell_send, "shell/pipe")
-    tools["shell.close_session"] = ToolSpec("shell.close_session", "dangerous", _SHELL_ARGS["close_session"], {},
+    tools["shell.send"] = ToolSpec("shell.send", False, _SHELL_ARGS["send"], {}, shell_send, "shell/pipe")
+    tools["shell.close_session"] = ToolSpec("shell.close_session", False, _SHELL_ARGS["close_session"], {},
                                             shell_close_session, "shell/pipe")
 
     testssl, bash_exe = cfg.testssl_path, shutil.which("bash")
@@ -259,7 +258,7 @@ def make_tools(cfg) -> dict[str, ToolSpec]:
             limit = cfg.settings.limits["max_evidence_bytes"]
             return ToolOutput(p.stdout[:limit], "testssl.sh/3.2.4", truncated=len(p.stdout) > limit)
 
-        tools["tls.renegotiation"] = ToolSpec("tls.renegotiation", "write", _TLS_ARGS, {"host": "host"},
+        tools["tls.renegotiation"] = ToolSpec("tls.renegotiation", False, _TLS_ARGS, {"host": "host"},
                                               renegotiation_scan, "testssl.sh")
 
     exe = cfg.nmap_path or shutil.which("nmap") or (str(_DEFAULT_NMAP) if _DEFAULT_NMAP.exists() else None)
@@ -300,6 +299,6 @@ def make_tools(cfg) -> dict[str, ToolSpec]:
         limit = cfg.settings.limits["max_evidence_bytes"]
         return ToolOutput(stdout[:limit], "nmap/nse", truncated=len(stdout) > limit)
 
-    tools["nmap.scan"] = ToolSpec("nmap.scan", "write", _NMAP_ARGS, {"host": "host"}, scan, "nmap")
-    tools["nmap.ssl_scan"] = ToolSpec("nmap.ssl_scan", "write", _TLS_ARGS, {"host": "host"}, ssl_scan, "nmap")
+    tools["nmap.scan"] = ToolSpec("nmap.scan", False, _NMAP_ARGS, {"host": "host"}, scan, "nmap")
+    tools["nmap.ssl_scan"] = ToolSpec("nmap.ssl_scan", False, _TLS_ARGS, {"host": "host"}, ssl_scan, "nmap")
     return tools

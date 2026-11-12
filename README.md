@@ -26,17 +26,17 @@ py -3.13 -m venv .venv
 | `.env` | `WORKBENCH_PG_DSN`, `PGPASSWORD`(`.env.example` 복사). 다른 앱과 DB 를 같이 쓰면 전용 스키마: DSN 끝에 `?options=-csearch_path%3Dworkbench` |
 | `config/scope.json` | 승인된 범위: `engagement_id`, `approved_by`, `valid_until`, `targets`(`path`/`host`/`url`, 필요 시 `platform`). 만료되면 모든 실행이 거부된다 |
 | `config/settings.json` | Ollama 주소·모델·한도, 증적·보고서·체크리스트·템플릿 경로, 도구 호출 한도. 루프백이 아닌 모델 주소는 `external_api.enabled=false` 면 거부. `WORKBENCH_LLM_PROVIDER=claude_cli`(임시 테스트 전용) 설정 시 설치된 `claude` CLI(구독 로그인, API 과금 아님)를 대신 호출 — 도구 접근은 막고 실제 도구 실행은 그대로 Python 정책 계층만 거친다 |
-| `config/mcp_servers.json` | MCP 서버와 허용 도구(`risk`, `scope_args`, `args_schema`). 이 PC 의 경로는 `mcp_servers.local.json` 에 같은 서버 이름으로 적는다 |
+| `config/mcp_servers.json` | MCP 서버와 허용 도구(`read_only`, `scope_args`, `args_schema`). 이 PC 의 경로는 `mcp_servers.local.json` 에 같은 서버 이름으로 적는다 |
 | `config/workbench.json` (선택) | 제외 대상 `exclude`, 예산 `budget`, `lease_s`, `min_call_interval_ms`, `nmap_path`, `testssl_path`(`workbench.example.json` 참고) |
 | `config/notify.json` (선택) | finding 이 CONFIRMED 될 때 알릴 웹훅 채널 목록(`notify.example.json` 참고) |
 | `config/llm_profiles.json` (선택) | 이름 있는 LLM 프로파일 목록(`llm_profiles.example.json` 참고). settings.json 기본 블록 위에 바꿀 값만 덮어쓴다 |
-| `config/intercept_rules.json` (선택) | 도구 이름·인자 정규식에 매치되면 위험도·자율 모드와 무관하게 사람 승인을 강제(ask 전용). 이 PC 전용 `intercept_rules.local.json` 과 합쳐진다 |
+| `config/intercept_rules.json` (선택) | 도구 이름·인자 정규식에 매치되면 자율 모드와 무관하게 사람 승인을 강제(ask 전용). 이 PC 전용 `intercept_rules.local.json` 과 합쳐진다 |
 
 ```powershell
 $wb = ".venv\Scripts\python", "-m", "diagnostic_workbench"
 & $wb migrate      # 스키마 적용
 & $wb doctor       # 설정·DB·범위·모델 점검 (--probe-mcp 로 MCP 연결 확인)
-& $wb tools        # 등록된 도구와 위험도
+& $wb tools        # 등록된 도구와 읽기전용 여부
 & $wb llm-profiles --check   # 프로파일별 실제 연결 가능 여부
 ```
 

@@ -96,7 +96,7 @@ class Orchestrator:
                 record(error="정책 거부: max_tool_calls_per_run 한도에 도달함")
                 complete = False
                 continue
-            attempts = 2 if spec.risk == "read" else 1  # 상태를 변경하는 도구는 재시도하지 않는다
+            attempts = 2 if spec.read_only else 1  # 상태를 변경하는 도구는 재시도하지 않는다
             for attempt in range(attempts):
                 self.tool_calls += 1
                 self.storage.audit(self.run_id, "tool_call", {"check_id": item["check_id"], "tool": tool,

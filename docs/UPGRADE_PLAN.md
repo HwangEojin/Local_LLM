@@ -1,5 +1,12 @@
 # 업그레이드 작업 계획서 (2026-10-30)
 
+**추가 후속 삭제(2026-11-13)**: A1 때 "유지(메타데이터로만)"로 남겨뒀던 `ToolSpec.risk`(read/write/dangerous)
+필드 자체를 완전히 제거했다 — `read_only: bool` 하나로 축소. `explore.py` 의 `offered_risks`(dangerous 를
+LLM 자율 제안에서 항상 빼던 필터)도 함께 삭제해, 이제 셸 도구(`shell.*`)도 LLM 이 자율적으로 제안할 수
+있다(사용자 명시적 결정). 실행 시점의 안전판은 바뀌지 않음 — `config/intercept_rules.json` 의
+`ask-dangerous-shell` 규칙이 모든 `shell.*` 호출에 여전히 사람 승인을 강제한다. bootstrap 라운드의
+"read 전용만 즉시실행"(CLAUDE.md §1/§7)은 `spec.read_only` 로 그대로 보존됨.
+
 **A1~A3 구현 완료(2026-11-02)**. 실제 구현 시 A1 의 "가정" 표시였던 autonomy 재정의는 **채택하지 않음**으로
 확정했다 — 기존 `test_intercept_rules.py`가 "인터셉트 규칙은 자율 모드(full 포함)와 무관하게 항상 사람 승인을
 강제한다"를 이미 검증하고 있었고, 그 불변식을 깨는 쪽(autonomy='full'이 인터셉트도 건너뛰게 하는 것)은 운영자가
