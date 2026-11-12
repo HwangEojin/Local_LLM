@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Check, Copy, CopyPlus, Download, Pause, Play, RotateCcw, RotateCw, Square, Trash2, Undo2, X, Zap } from "lucide-react";
+import { Check, Copy, CopyPlus, Download, FileText, Pause, Play, RotateCcw, RotateCw, Square, Trash2, Undo2, X, Zap } from "lucide-react";
 
 import { FindingPanel, EvidenceViewer } from "@/components/FindingPanel";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -31,6 +31,8 @@ import {
   FINDING_STATUSES,
   findingsExportUrl,
   Question,
+  ReportFile,
+  reportDownloadUrl,
   RunDetail,
   ServerLogEntry,
   TrafficEntry,
@@ -49,8 +51,8 @@ import {
 import { usePolling } from "@/lib/usePolling";
 import { useRunResource } from "@/lib/useRunResource";
 
-type TabKey = "findings" | "backlog" | "assets" | "graph" | "traffic" | "chat" | "evidence" | "activity" | "server-log" | "triggers";
-const TAB_KEYS: TabKey[] = ["findings", "backlog", "assets", "graph", "traffic", "chat", "evidence", "activity", "server-log", "triggers"];
+type TabKey = "findings" | "backlog" | "assets" | "graph" | "traffic" | "chat" | "evidence" | "activity" | "server-log" | "triggers" | "report";
+const TAB_KEYS: TabKey[] = ["findings", "backlog", "assets", "graph", "traffic", "chat", "evidence", "activity", "server-log", "triggers", "report"];
 const TAB_LABEL: Record<TabKey, string> = {
   findings: "발견 사항",
   backlog: "작업 큐",
@@ -62,6 +64,7 @@ const TAB_LABEL: Record<TabKey, string> = {
   activity: "실행 기록",
   "server-log": "서버 로그",
   triggers: "트리거",
+  report: "보고서",
 };
 
 type FindingFilter = { statuses: string[]; severities: string[]; q: string };
@@ -1198,6 +1201,106 @@ function ServerLogTab({ runId }: { runId: string }) {
   );
 }
 
+// ── 결과보고서(Word/Excel, CLAUDE.md §12) ──
+function ReportTab({ runId, completed }: { runId: string; completed: boolean }) {
+  const toast = useToast();
+  const { data: files, reload } = useRunResource<ReportFile[]>(`/api/runs/${runId}/report`, 0);
+  const [meta, setMeta] = useState('{\n  "customer": "",\n  "project": "",\n  "targets": [{"target_id": "", "name": ""}]\n}');
+  const [kind, setKind] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function generate() {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(meta);
+    } catch {
+      setError("보고서 정보는 올바른 JSON 이어야 합니다");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(`/api/runs/${runId}/report`, { meta: parsed, kind: kind.trim() || null, confirm: true });
+      toast("ok", "보고서를 생성했습니다");
+      reload();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "생성에 실패했습니다");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function approve(f: ReportFile) {
+    setBusy(true);
+    try {
+      await api.post(`/api/runs/${runId}/report/${encodeURIComponent(f.file)}/approve`, { confirm: true });
+      toast("ok", "승인했습니다");
+      reload();
+    } catch (e) {
+      toast("danger", e instanceof ApiError ? e.message : "승인에 실패했습니다");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {!completed && <Banner tone="warn">완료(COMPLETED)된 진단만 결과보고서를 생성할 수 있습니다.</Banner>}
+      <Card className="space-y-3 p-4">
+        <h3 className="text-sm font-semibold">결과보고서 생성</h3>
+        {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+        <div>
+          <label className="mb-1 block text-xs text-muted">
+            보고서 정보(JSON, customer/project/targets 필수) — 체크리스트 기반 실행의 기본(내부 점검) 요약은 생략할 수 있습니다
+          </label>
+          <textarea className={`${inputCls} h-32 font-mono text-xs`} value={meta} onChange={(e) => setMeta(e.target.value)} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted">템플릿 유형(회사 템플릿을 쓸 때만, 예: web)</label>
+          <input className={`${inputCls} !w-40`} value={kind} onChange={(e) => setKind(e.target.value)} placeholder="생략 가능" />
+        </div>
+        <button disabled={busy || !completed} onClick={generate} className={btnPrimary}>
+          <FileText className="h-4 w-4" aria-hidden /> 생성
+        </button>
+        <p className="text-xs text-faint">
+          생성된 문서는 사람이 검토해 아래에서 승인하기 전까지 초안입니다(CLAUDE.md §10). 승인 기록은 감사 로그에 남습니다.
+        </p>
+      </Card>
+
+      {!files ? (
+        <SkeletonRows />
+      ) : files.length === 0 ? (
+        <Empty title="생성된 보고서가 없습니다" />
+      ) : (
+        <Card className="divide-y divide-line">
+          {files.map((f) => (
+            <div key={f.file} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+              <div className="min-w-0">
+                <div className="font-mono text-xs">{f.file}</div>
+                <div className="text-xs text-faint">
+                  {formatBytes(f.size)} · {formatTime(f.modified_at)}
+                  {f.approved_by && <> · 승인: {f.approved_by} ({formatTime(f.approved_at as string)})</>}
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <a href={reportDownloadUrl(runId, f.file)} className={btnGhost} download>
+                  <Download className="h-4 w-4" aria-hidden /> 다운로드
+                </a>
+                {!f.approved_by && (
+                  <button disabled={busy} onClick={() => approve(f)} className={btnSecondary}>
+                    <Check className="h-4 w-4" aria-hidden /> 승인
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // ── 본문 ──
 function RunDetailBody({ runId }: { runId: string }) {
   const [detail, setDetail] = useState<RunDetail | null>(null);
@@ -1291,6 +1394,7 @@ function RunDetailBody({ runId }: { runId: string }) {
         {tab === "activity" && <ActivityTab runId={runId} />}
         {tab === "server-log" && <ServerLogTab runId={runId} />}
         {tab === "triggers" && <TriggersTab runId={runId} />}
+        {tab === "report" && <ReportTab runId={runId} completed={detail.run.status === "COMPLETED"} />}
       </div>
 
       {selected && <FindingPanel key={selected.id} runId={runId} finding={selected} onClose={closePanel} onChanged={load} />}

@@ -70,6 +70,9 @@ export const downloadUrl = (runId: string, evidenceId: string) =>
 export const findingsExportUrl = (runId: string, format: "csv" | "json") =>
   `${apiBase()}/api/runs/${runId}/findings/export?format=${format}`;
 
+export const reportDownloadUrl = (runId: string, filename: string) =>
+  `${apiBase()}/api/runs/${runId}/report/${encodeURIComponent(filename)}/download`;
+
 export type Run = {
   id: string;
   run_code: string; // 사람이 읽는 진단 ID. 예: BASE-20261023-01
@@ -318,7 +321,7 @@ export type DoctorRow = { status: "OK" | "WARN" | "FAIL" | "INFO"; name: string;
 export type Environment = {
   targets: Target[];
   checklists: ChecklistRef[];
-  tools: { name: string; risk: string }[];
+  tools: { name: string; read_only: boolean }[];
   autonomy_levels: string[];
   llm_providers: string[];
   llm_profiles: { name: string; kind: string; model: string | null }[];
@@ -396,9 +399,17 @@ export type Trigger = {
   created_at: string;
 };
 
+export type ReportFile = {
+  file: string;
+  size: number;
+  modified_at: string;
+  approved_by: string | null;
+  approved_at: string | null;
+};
+
 export type ToolInfo = {
   name: string;
-  risk: string; // 분류용 메타데이터일 뿐, 승인 게이트 아님(CLAUDE.md §8, 2026-11)
+  read_only: boolean; // 분류용 메타데이터일 뿐, 승인 게이트 아님(CLAUDE.md §8, 2026-11)
   disabled: boolean;
   hidden_from: string[]; // 이 역할들의 제안 후보에서만 숨김(실행 권한과 무관) — planner/worker 만 의미 있음
   args_schema: Record<string, unknown>;
