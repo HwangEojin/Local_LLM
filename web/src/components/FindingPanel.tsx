@@ -9,6 +9,13 @@ import { api, ApiError, downloadUrl, Finding, FINDING_STATUSES, FindingDetail, S
 import { describe, formatBytes, formatTime, VERIFICATION_LABEL } from "@/lib/labels";
 
 const EVIDENCE_KIND_LABEL: Record<string, string> = { RULE: "규칙", LLM: "AI" };
+const VOTE_STAGE_LABEL: Record<string, string> = { proposer: "제안", verifier: "검증" };
+const VOTE_VERDICT_LABEL: Record<string, { label: string; tone: string }> = {
+  CONFIRMS: { label: "동의", tone: "text-ok" },
+  REFUTES: { label: "반박", tone: "text-danger" },
+  INSUFFICIENT: { label: "불충분", tone: "text-warn" },
+  ERROR: { label: "오류", tone: "text-danger" },
+};
 
 const TEXT_TYPE = /^(text\/|application\/(json|xml))/;
 
@@ -411,6 +418,32 @@ export function FindingPanel({
                 </ul>
               )}
             </section>
+
+            {detail.llm_votes.length > 0 && (
+              <section aria-label="LLM 교차 검증">
+                <h3 className="mb-2 text-sm font-semibold">
+                  LLM 판정 <span className="font-normal text-faint">({detail.llm_votes.length})</span>
+                </h3>
+                <ul className="space-y-2">
+                  {detail.llm_votes.map((v, i) => (
+                    <li key={i} className="rounded-md border border-line bg-canvas p-2 text-xs">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-medium text-ink">{VOTE_STAGE_LABEL[v.stage] ?? v.stage}</span>
+                        <span className="font-mono text-faint">{v.model}</span>
+                        <span className={`font-medium ${VOTE_VERDICT_LABEL[v.verdict]?.tone ?? ""}`}>
+                          {VOTE_VERDICT_LABEL[v.verdict]?.label ?? v.verdict}
+                        </span>
+                        <span className="ml-auto text-faint">{formatTime(v.created_at)}</span>
+                      </div>
+                      <p className="mt-1 whitespace-pre-wrap text-muted">{v.rationale}</p>
+                      {v.evidence_ids.length > 0 && (
+                        <p className="mt-1 text-faint">인용 증적 {v.evidence_ids.length}건</p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             <section aria-label="검토 이력">
               <h3 className="mb-2 text-sm font-semibold">

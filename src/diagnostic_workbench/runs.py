@@ -186,10 +186,26 @@ def next_run_code(conn, abbr: str) -> str:
     return f"{abbr}-{day}-{(last or 0) + 1:02d}"
 
 
+def _check_model_spec(cfg, label: str, spec: str, profiles: dict, installed_cache: list) -> None:
+    """모델 지정 문자열 하나를 검증한다. 값은 llm_profiles.json 의 프로파일 이름 또는 'ollama:<설치된 모델>'.
+    installed_cache 는 [None] 한 칸짜리 리스트로 넘겨 호출 간에 설치 목록 조회를 한 번만 하게 한다(Ollama
+    에 연결할 수 없으면 설치 여부는 검증하지 못하므로 통과시키고, 실제로 쓸 때 check_ready 가 막는다)."""
+    if spec.startswith("ollama:"):
+        if installed_cache[0] is None:
+            installed_cache[0] = explore.installed_ollama_models(cfg) or []
+        installed = installed_cache[0]
+        name = spec[len("ollama:"):]
+        if not name:
+            raise ConfigError(f"{label}: 'ollama:' 뒤에 모델명이 필요함")
+        if installed and name not in installed and f"{name}:latest" not in installed:
+            raise ConfigError(f"{label}: 모델 '{name}' 이(가) 설치되어 있지 않음 (설치된 모델: {installed})")
+    elif spec not in profiles:
+        raise ConfigError(f"{label}: '{spec}' 은(는) llm_profiles.json 프로파일도 'ollama:<모델>' 도 아님 "
+                          f"(등록된 프로파일: {sorted(profiles) or '없음'})")
+
+
 def _check_agent_models(cfg, agent_models: dict[str, str], use_llm: bool) -> dict[str, str]:
-    """역할별 모델 지정을 검증한다. 값은 llm_profiles.json 의 프로파일 이름 또는 'ollama:<설치된 모델>'.
-    지정은 운영자가 실행 생성 시에만 하고(LLM 이 바꾸지 못함) 이후 고정된다. Ollama 에 연결할 수 없으면
-    설치 여부는 검증하지 못하므로 통과시키고, 실제로 쓸 때 check_ready 가 막는다."""
+    """역할별 모델 지정을 검증한다(지정은 운영자가 실행 생성 시에만 하고(LLM 이 바꾸지 못함) 이후 고정된다)."""
     if not agent_models:
         return {}
     if not use_llm:
@@ -198,18 +214,9 @@ def _check_agent_models(cfg, agent_models: dict[str, str], use_llm: bool) -> dic
     if bad:
         raise ConfigError(f"알 수 없는 에이전트 역할: {bad} (가능: {list(explore.AGENT_ROLES)})")
     profiles = audit_config.load_llm_profiles(cfg.home)
-    installed = None
+    installed_cache = [None]
     for role, spec in agent_models.items():
-        if spec.startswith("ollama:"):
-            installed = explore.installed_ollama_models(cfg) if installed is None else installed
-            name = spec[len("ollama:"):]
-            if not name:
-                raise ConfigError(f"{role}: 'ollama:' 뒤에 모델명이 필요함")
-            if installed and name not in installed and f"{name}:latest" not in installed:
-                raise ConfigError(f"{role}: 모델 '{name}' 이(가) 설치되어 있지 않음 (설치된 모델: {installed})")
-        elif spec not in profiles:
-            raise ConfigError(f"{role}: '{spec}' 은(는) llm_profiles.json 프로파일도 'ollama:<모델>' 도 아님 "
-                              f"(등록된 프로파일: {sorted(profiles) or '없음'})")
+        _check_model_spec(cfg, role, spec, profiles, installed_cache)
     return dict(agent_models)
 
 
@@ -230,12 +237,19 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
                version: str | None = None, check_ids: list[str] | None = None, use_llm: bool = False,
                budget: dict | None = None, allowed_tools: list[str] | None = None, autonomy: str = "approval",
                goal_text: str | None = None, llm_provider: str = "ollama", llm_profile: str | None = None,
-               agent_models: dict[str, str] | None = None, agent_profile_names: dict[str, str] | None = None) -> dict:
+               agent_models: dict[str, str] | None = None, agent_profile_names: dict[str, str] | None = None,
+               verifier_model: str | None = None) -> dict:
     """실행 생성. checklist_id 가 없으면 체크리스트 항목 없이 자율 탐색만 하는 실행이 된다 — 체크리스트는
     필수 조건이 아니라 선택적으로 곁들이는 기능이다(CLAUDE.md §3.2/§13).
 
     llm_profile 을 주면 config/llm_profiles.json 에서 그 이름을 찾아 llm_provider 를 그 프로파일의 kind 로
     맞춘다(둘 다 주면 llm_profile 이 우선). 프로파일이 없으면 llm_provider 하나만으로 기존처럼 동작한다.
+
+    verifier_model 을 주면(G2) LLM 이 낸 finding 을 그 모델이 독립적으로 다시 봐서 동의할 때만 확정한다
+    (D4: 안 주면 현행처럼 단일 모델이 바로 확정). planner 역할이 실제로 쓸 모델과 같은 spec 문자열이면
+    거부한다 — 같은 모델 두 번은 교차 검증이 아니다. planner 가 역할별 지정 없이 run 기본 모델(llm_profile/
+    llm_provider)을 쓸 때는 그 기본 spec 과 비교한다(ollama 기본 모델처럼 spec 문자열이 없는 경우는 비교
+    불가라 통과시킨다 — 실제로 같은 모델이면 사람이 알아챌 수 있는 수준의 보조 장치일 뿐).
     """
     if autonomy not in AUTONOMY_LEVELS:
         raise ConfigError(f"autonomy 는 {AUTONOMY_LEVELS} 중 하나여야 함: {autonomy}")
@@ -258,6 +272,13 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
         if row and row["llm_profile"]:
             agent_models[role] = row["llm_profile"]
     agent_models = _check_agent_models(cfg, agent_models, use_llm)
+    if verifier_model:
+        if not use_llm:
+            raise ConfigError("교차 검증 모델은 --llm 과 함께만 쓸 수 있음")
+        _check_model_spec(cfg, "verifier_model", verifier_model, audit_config.load_llm_profiles(cfg.home), [None])
+        proposer_spec = agent_models.get("planner") or llm_profile
+        if proposer_spec and proposer_spec == verifier_model:
+            raise ConfigError("교차 검증 모델이 제안 모델(planner)과 같음 — 같은 모델 두 번은 교차 검증이 아님")
     if not checklist_id and not use_llm:
         raise ConfigError("체크리스트 없이 실행하려면 --llm 이 필요함(자율 탐색은 LLM 제안에 의존함)")
     scope = audit_config.load_scope(cfg.home)
@@ -291,11 +312,12 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
     run_code = next_run_code(conn, target_abbr(first, code))
     run = conn.execute(
         "INSERT INTO runs (engagement_id, operator, checklist_version_id, scope, budget, use_llm, allowed_tools, "
-        "autonomy, llm_provider, run_code, llm_profile_name, llm_agent_models, agent_profile_names) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "autonomy, llm_provider, run_code, llm_profile_name, llm_agent_models, agent_profile_names, "
+        "verifier_model) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (scope["engagement_id"], operator, cv["id"] if cv else None, Jsonb(scope),
          Jsonb({**cfg.budget, **(budget or {})}), use_llm, allowed_tools, autonomy, llm_provider, run_code,
-         llm_profile, Jsonb(agent_models), Jsonb(agent_profile_names))).fetchone()
+         llm_profile, Jsonb(agent_models), Jsonb(agent_profile_names), verifier_model)).fetchone()
     default_goal = f"체크리스트 {checklist_id}@{version} 진단" if checklist_id else f"자율 진단: {', '.join(target_ids)}"
     # 운영자가 목표를 직접 썼고 LLM 을 쓰는 실행이면 대상별 하위 목표로 나눠볼 수 있다(2단계, §13의 default_goal
     # 은 나눌 의미가 없어 대상으로 그대로 둠). 실패/미사용 시 기존처럼 목표 하나로 폴백한다.

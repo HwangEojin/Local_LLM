@@ -142,6 +142,14 @@ export type FindingDetail = {
     evidence_ids: string[];
     changed_at: string;
   }[];
+  llm_votes: {
+    model: string;
+    stage: "proposer" | "verifier";
+    verdict: "CONFIRMS" | "REFUTES" | "INSUFFICIENT" | "ERROR";
+    rationale: string;
+    evidence_ids: string[];
+    created_at: string;
+  }[];
 };
 
 export type BacklogItem = {

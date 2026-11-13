@@ -302,7 +302,8 @@ def cmd_run(args):
                               check_ids=args.check_ids.split(",") if args.check_ids else None, use_llm=args.llm,
                               budget=budget, allowed_tools=args.tools.split(",") if args.tools else None,
                               autonomy=args.autonomy, goal_text=args.goal, llm_provider=args.llm_provider,
-                              llm_profile=args.llm_profile, agent_models=_parse_agent_models(args.agent_model))
+                              llm_profile=args.llm_profile, agent_models=_parse_agent_models(args.agent_model),
+                              verifier_model=args.verifier)
         print(f"실행 생성됨: {run['id']}  자율 모드={run['autonomy']}"
               + ("" if cid else "  (체크리스트 없음 — 자율 탐색 전용)")
               + (f"  LLM={run['llm_profile_name'] or run['llm_provider']}" if run["llm_provider"] != "ollama"
@@ -313,6 +314,8 @@ def cmd_run(args):
                   "무관하게 항상 사람 승인이 필요합니다. 실행 중 바꿀 수 없습니다(scope 와 같은 방식으로 고정).")
         if run["llm_agent_models"]:
             print("  에이전트별 모델: " + ", ".join(f"{k}={v}" for k, v in run["llm_agent_models"].items()))
+        print(f"  교차 검증: {run['verifier_model']}" if run["verifier_model"]
+              else "  교차 검증: 없음 — LLM 이 혼자 낸 finding 도 바로 확정됩니다")
         print(f"미리 보기: run plan {run['id']}   시작: run start {run['id']}")
         return 0
     if args.action == "list":
@@ -778,6 +781,9 @@ def build_parser():
                    help="에이전트 역할별 모델 지정(여러 번 가능). 역할: planner|worker|analyst|goals|reporter, "
                         "모델: 'ollama:<설치된 모델>' 또는 llm_profiles.json 프로파일 이름. 생략한 역할은 실행 기본 모델 "
                         "(--llm 과 함께만)")
+    r.add_argument("--verifier", help="G2: LLM 이 낸 finding 을 다른 모델이 독립적으로 다시 봐서 동의할 때만 "
+                                      "확정(--llm 과 함께만). 생략하면 현행처럼 단일 모델이 바로 확정. "
+                                      "'ollama:<설치된 모델>' 또는 llm_profiles.json 프로파일 이름, planner 와 달라야 함")
     r.add_argument("--max-tasks", type=int)
     r.add_argument("--max-explorations", type=int)
     b = sub.add_parser("backlog", help="작업 큐(TodoList) 조회")

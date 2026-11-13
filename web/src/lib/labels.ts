@@ -37,6 +37,7 @@ export const AUTONOMY_LABEL: Record<string, string> = {
 
 export const VERIFICATION_LABEL: Record<string, string> = {
   LLM_CONFIRMED: "AI 확정",
+  LLM_PROPOSED: "단일 모델 제안", // G2: 교차 검증 대기 중(verifier_model 지정 시)
   HUMAN: "사람 확인",
   RULE: "규칙 확정",
 };

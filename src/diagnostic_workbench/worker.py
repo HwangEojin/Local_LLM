@@ -322,8 +322,9 @@ def create_retest(conn, run_id, finding_id, *, operator, reason) -> list:
     return item_ids
 
 
-def create_llm_finding(conn, cfg, run_id, asset_id, *, title, vuln_class, rationale, remediation, evidence_ids, model):
-    """LLM이 자신이 인용한 실존 증거를 근거로 finding을 직접 CONFIRMED로 기록한다(CLAUDE.md §1/§7/§9).
+def create_llm_finding(conn, cfg, run_id, asset_id, *, title, vuln_class, rationale, remediation, evidence_ids,
+                       model, provisional=False):
+    """LLM이 자신이 인용한 실존 증거를 근거로 finding을 기록한다(CLAUDE.md §1/§7/§9).
     인용한 증거 id가 이 실행(run)에 실제로 존재하는지만 확인하는
     최소한의 데이터 무결성 검사이고, 주장(취약점이 실제로 있는지)의 실체는 검증하지 않는다 — 그게 이
     정책의 요지다. finding_review_history 에 actor='llm:<model>' 로 남아 추적 가능하고, 사람은 이후에도
@@ -335,8 +336,12 @@ def create_llm_finding(conn, cfg, run_id, asset_id, *, title, vuln_class, ration
     (upsert_exploration_finding). 주입 지점은 **인용한 첫 증거(id 정렬 기준)의 evidence.args** 에서
     Python 이 뽑는다 — LLM 이 적은 target_id/title 류 값은 신뢰 경계상 쓰지 않는다(§8-5).
 
-    반환: (finding_id, 새로 만들었는지). 호출자는 새로 만들었을 때만 "방금 확정됨" 알림을 보내야 한다 —
-    병합된 경우 이미 전에 알렸거나(기존 CONFIRMED) upsert 가 스스로 재오픈 알림을 보냈다(D3).
+    G2: provisional=True(교차 검증 모델이 지정된 실행)이면 바로 확정하지 않고 LLM_PROPOSED/NEEDS_REVIEW 로
+    남긴다 — 호출자(explore._report_llm_finding)가 다른 모델로 독립 검증한 뒤 동의하면
+    promote_llm_proposed() 로 확정한다.
+
+    반환: (finding_id, 새로 만들었는지). 호출자는 새로 만들었을 때만 이어지는 절차(최초 확정 알림 또는
+    교차 검증 시작)를 밟는다 — 병합된 경우 이미 전에 처리됐거나 upsert 가 스스로 재오픈 알림을 보냈다(D3).
     """
     real = sorted({r["id"] for r in conn.execute(
         "SELECT id FROM evidence WHERE run_id=%s AND id = ANY(%s::uuid[])", (run_id, list(evidence_ids))).fetchall()})
@@ -344,21 +349,44 @@ def create_llm_finding(conn, cfg, run_id, asset_id, *, title, vuln_class, ration
         return None, False
     actor = f"llm:{model}"
     first_args = conn.execute("SELECT args FROM evidence WHERE id=%s", (real[0],)).fetchone()["args"]
+    verification, status = ("LLM_PROPOSED", "NEEDS_REVIEW") if provisional else ("LLM_CONFIRMED", "CONFIRMED")
 
     def insert(c):
         return c.execute(
             "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification, status, "
             "reviewed_by, reviewed_at, review_reason) "
-            "VALUES (%s,%s,%s,%s,%s,'LLM_CONFIRMED','CONFIRMED',%s,now(),%s) RETURNING id",
-            (run_id, asset_id, title, rationale, remediation, actor, rationale)).fetchone()["id"]
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,now(),%s) RETURNING id",
+            (run_id, asset_id, title, rationale, remediation, verification, status, actor, rationale)).fetchone()["id"]
 
     fid, created = upsert_exploration_finding(conn, cfg, run_id, asset_id, vuln_class=vuln_class, args=first_args,
                                               evidence_kind="LLM", insert_fn=insert, evidence_ids=real, actor=actor)
     if created:
         conn.execute(
             "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
-            "VALUES (%s,NULL,'CONFIRMED',%s,%s,%s)", (fid, rationale, actor, real))
+            "VALUES (%s,NULL,%s,%s,%s,%s)", (fid, status, rationale, actor, real))
     return fid, created
+
+
+def promote_llm_proposed(conn, finding_id, *, actor, reason) -> None:
+    """G2: 교차 검증에 동의(CONFIRMS)했을 때 LLM_PROPOSED/NEEDS_REVIEW 상태의 finding 을 확정한다."""
+    f = conn.execute("SELECT status FROM findings WHERE id=%s", (finding_id,)).fetchone()
+    conn.execute("UPDATE findings SET verification='LLM_CONFIRMED', status='CONFIRMED', reviewed_at=now(), "
+                "review_reason=%s WHERE id=%s", (reason, finding_id))
+    conn.execute(
+        "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
+        "VALUES (%s,%s,'CONFIRMED',%s,%s,'{}')", (finding_id, f["status"], reason, actor))
+
+
+def record_llm_vote(conn, run_id, finding_id, model, stage, verdict, rationale, evidence_ids) -> None:
+    """G2: 제안(proposer)·검증(verifier) 모델의 판정을 추가 전용으로 남긴다(finding_llm_votes). 이 호출
+    직전에 그 모델이 한 model_calls 기록과 최선으로 이어 붙인다(같은 실행에서 바로 직전에 쌓인 호출 —
+    Worker 는 실행 단위로 순차 실행이라(CLAUDE.md 설계 결정) 경합이 없다)."""
+    mc = conn.execute("SELECT id FROM model_calls WHERE run_id=%s AND model=%s ORDER BY id DESC LIMIT 1",
+                      (run_id, model)).fetchone()
+    conn.execute(
+        "INSERT INTO finding_llm_votes (finding_id, model, stage, verdict, rationale, evidence_ids, model_call_id) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+        (finding_id, model, stage, verdict, rationale, list(evidence_ids), mc["id"] if mc else None))
 
 
 def _tool_calls_used(ctx, kind: str) -> int:

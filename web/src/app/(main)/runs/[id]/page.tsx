@@ -261,6 +261,11 @@ function Summary({
                   .join(", ")}
               </>
             )}
+            {run.use_llm && (
+              <> · 교차 검증{" "}
+                {run.verifier_model ? (run.verifier_model as string).replace(/^ollama:/, "") : "없음"}
+              </>
+            )}
             {run.stop_reason ? <> · 종료 사유: {run.stop_reason as string}</> : null}
           </p>
         </div>

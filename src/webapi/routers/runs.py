@@ -139,6 +139,7 @@ class CreateRunBody(BaseModel):
     llm_profile: str | None = None
     agent_models: dict[str, str] | None = None  # 역할 -> 'ollama:<모델>' 또는 프로파일 이름
     agent_profile_names: dict[str, str] | None = None  # 역할 -> "이름 있는 프로파일"(F3a 절충안) 이름
+    verifier_model: str | None = None  # G2: LLM 판정 교차 검증 모델(선택, 'ollama:<모델>' 또는 프로파일 이름)
 
 
 @router.post("")
@@ -155,7 +156,8 @@ def create_run(body: CreateRunBody, cfg=Depends(get_cfg), conn=Depends(get_conn)
                                  check_ids=body.check_ids, use_llm=body.use_llm, budget=budget,
                                  allowed_tools=body.tools, autonomy=body.autonomy, goal_text=body.goal,
                                  llm_provider=body.llm_provider, llm_profile=body.llm_profile,
-                                 agent_models=body.agent_models, agent_profile_names=body.agent_profile_names)
+                                 agent_models=body.agent_models, agent_profile_names=body.agent_profile_names,
+                                 verifier_model=body.verifier_model)
     except AuditError as e:
         conn.rollback()
         raise HTTPException(400, str(e)) from None
