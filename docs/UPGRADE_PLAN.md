@@ -434,7 +434,17 @@ COMMENT ON COLUMN findings.severity IS 'retired 2026-11 (D7): 읽기 전용 과�
 `schemas.py` 체크리스트·알림 deprecated 항목, `runs.py:117-120` 체크리스트 등록)만 남음 + 전체 테스트 통과 +
 브라우저에서 발견 사항 목록·실행 상세·대시보드·알림 설정에 심각도가 보이지 않는지 확인.
 
-### G1. Finding fingerprint 와 중복 제거 — P1
+### G1. Finding fingerprint 와 중복 제거 — P1 — **구현 완료(2026-11-13)**
+
+**구현 결과(계획과 달라진 점)**: `upsert_exploration_finding(conn, cfg, run_id, asset_id, ...)` — 계획에
+`cfg` 가 빠져 있었는데 D3 재오픈 알림(`notify.notify_finding_reopened`)이 `cfg.home` 으로 `notify.json`
+을 읽어야 해서 추가했다. 반환값도 `finding_id` 하나가 아니라 `(finding_id, created)` 로 바꿨다 — 새로
+만들었는지를 호출자가 알아야 "최초 확정" 이력/알림을 한 번만 남기고, 병합된 경우 중복으로 다시 남기지
+않을 수 있어서다. `_create_finding` 은 병합된 경우에도 `exploration_anchors` 로 기존 finding_node 를 찾아
+새 `proves` 엣지만 긋는다(병합돼도 그 fact 가 이 finding 을 뒷받침한다는 사실은 남겨야 함 — 계획엔
+명시 안 됐지만 G5 출처 체인과 일관되게 자연스러운 확장). 마이그레이션 0029 적용, 전체 테스트
+333 passed(신규 3개 파일 24건 포함), TypeScript 컴파일·브라우저로 발견 사항 패널(위치/발생 횟수/근거
+종류/중복 의심 섹션) 확인.
 
 **목표**: 같은 실행에서 같은 자산·같은 취약점 클래스·같은 주입 지점이 다시 관찰되면 새 finding 을 만들지 않고
 기존 finding 에 증거만 더한다. 실행을 가로질러서도 같은 식별자를 써서 G6 비교의 기준이 되게 한다.
@@ -736,7 +746,7 @@ PRODUCT.md 원칙 3 에 따라 편집 화면 옆에 연결된 증거 목록을 �
 |---|---|---|---|
 | 0 | G-결정 D1~D7 전부 확정 — **완료(2026-11-13)** | — | — |
 | 1 | G-S finding 심각도 제거 — **완료(2026-11-13)** | 0028 | 0 |
-| 2 | G1 fingerprint·중복 제거 | 0029 | 1(새 INSERT 경로에 severity 를 넣지 않도록) |
+| 2 | G1 fingerprint·중복 제거 — **완료(2026-11-13)** | 0029 | 1(새 INSERT 경로에 severity 를 넣지 않도록) |
 | 3 | G2 교차 검증 게이트 | 0030 | 2(upsert 경유) |
 | 4 | G3 검토자 편집 | 0031 | 1 (2·3 과 병렬 가능, FindingPanel 충돌만 주의) |
 | 5 | G4 실행 상세 분리 | — | 1 이후 권장(심각도 UI 제거가 같은 파일을 크게 건드림) |

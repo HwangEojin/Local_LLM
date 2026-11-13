@@ -5,8 +5,10 @@ import { Check, Download, Eye, EyeOff, RotateCw, X } from "lucide-react";
 
 import { StatusBadge } from "@/components/StatusBadge";
 import { Banner, btnGhost, btnPrimary, btnSecondary, inputCls, SkeletonRows, useToast } from "@/components/ui";
-import { api, ApiError, downloadUrl, Finding, FINDING_STATUSES, FindingDetail } from "@/lib/api";
+import { api, ApiError, downloadUrl, Finding, FINDING_STATUSES, FindingDetail, SimilarFinding } from "@/lib/api";
 import { describe, formatBytes, formatTime, VERIFICATION_LABEL } from "@/lib/labels";
+
+const EVIDENCE_KIND_LABEL: Record<string, string> = { RULE: "규칙", LLM: "AI" };
 
 const TEXT_TYPE = /^(text\/|application\/(json|xml))/;
 
@@ -185,6 +187,103 @@ function ReviewForm({
   );
 }
 
+function MergeSection({
+  runId,
+  finding,
+  onDone,
+}: {
+  runId: string;
+  finding: Finding;
+  onDone: () => void;
+}) {
+  const toast = useToast();
+  const [similar, setSimilar] = useState<SimilarFinding[] | null>(null);
+  const [target, setTarget] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.get<SimilarFinding[]>(`/api/runs/${runId}/findings/${finding.id}/similar`).then(setSimilar).catch(() => setSimilar([]));
+  }, [runId, finding.id]);
+
+  async function merge() {
+    if (!target || !reason) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(`/api/runs/${runId}/findings/${finding.id}/merge`, { into: target, reason });
+      toast("ok", "다른 발견 사항으로 병합했습니다");
+      onDone();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "병합에 실패했습니다");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unmerge() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(`/api/runs/${runId}/findings/${finding.id}/unmerge`, { reason: "사람이 병합 해제" });
+      toast("ok", "병합을 해제했습니다");
+      onDone();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "병합 해제에 실패했습니다");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (finding.duplicate_of) {
+    return (
+      <section aria-label="병합 상태" className="space-y-2">
+        <h3 className="text-sm font-semibold">병합됨</h3>
+        <p className="text-sm text-muted">다른 발견 사항으로 병합된 상태입니다.</p>
+        {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+        <button disabled={busy} onClick={unmerge} className={btnSecondary}>병합 해제</button>
+      </section>
+    );
+  }
+
+  const candidates = similar ?? [];
+
+  return (
+    <section aria-label="중복 의심·병합" className="space-y-2">
+      <h3 className="text-sm font-semibold">
+        중복 의심 <span className="font-normal text-faint">({candidates.length})</span>
+      </h3>
+      {!similar ? (
+        <p className="text-xs text-faint">불러오는 중…</p>
+      ) : candidates.length === 0 ? (
+        <p className="text-xs text-faint">같은 위치(메서드·경로·매개변수)의 다른 발견 사항이 없습니다.</p>
+      ) : (
+        <>
+          {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+          <select value={target} onChange={(e) => setTarget(e.target.value)} className={inputCls}>
+            <option value="">— 병합 대상 선택 —</option>
+            {candidates.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.title} ({describe(s.status).label}, 증적 {s.evidence_count}건)
+              </option>
+            ))}
+          </select>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="병합 사유 (필수)"
+            className={inputCls}
+          />
+          <button disabled={busy || !target || !reason} onClick={merge} className={btnSecondary}>
+            이 finding 으로 병합
+          </button>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function FindingPanel({
   runId,
   finding,
@@ -217,6 +316,9 @@ export function FindingPanel({
   }, [onClose]);
 
   const f = detail?.finding ?? finding;
+  const reopened = detail?.history.find(
+    (h) => h.actor === "system:dedup" && h.reason.startsWith("기각 후 새 종류 근거"),
+  );
 
   return (
     <aside
@@ -240,6 +342,27 @@ export function FindingPanel({
       <div className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
         {error && <Banner>{error}</Banner>}
 
+        {reopened && (
+          <Banner tone="warn">
+            <span className="font-medium">기각 후 재관찰됨</span> — {reopened.reason}
+          </Banner>
+        )}
+
+        <section aria-label="위치·발생 정보" className="space-y-1 text-xs text-muted">
+          {f.locator?.method && f.locator?.path && (
+            <p>
+              <span className="font-mono text-ink">{f.locator.method} {f.locator.path}</span>
+              {f.locator.params && f.locator.params.length > 0 && <span> · 매개변수 {f.locator.params.join(", ")}</span>}
+            </p>
+          )}
+          <p>
+            발생 {f.occurrence_count}회 · 최근 관찰 {formatTime(f.last_seen_at)}
+            {f.evidence_kinds.length > 0 && (
+              <> · 근거 종류 {f.evidence_kinds.map((k) => EVIDENCE_KIND_LABEL[k] ?? k).join(", ")}</>
+            )}
+          </p>
+        </section>
+
         <section aria-label="판단 근거">
           <h3 className="mb-1 text-sm font-semibold">판단 근거</h3>
           <p className="whitespace-pre-wrap text-sm text-muted">{f.rationale || "기록된 근거가 없습니다."}</p>
@@ -250,6 +373,8 @@ export function FindingPanel({
             </>
           )}
         </section>
+
+        <MergeSection runId={runId} finding={f} onDone={() => { load(); onChanged(); }} />
 
         {!detail && !error ? (
           <SkeletonRows rows={3} />

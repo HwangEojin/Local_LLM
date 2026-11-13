@@ -108,10 +108,21 @@ export type Finding = {
   reviewed_at: string | null;
   review_reason: string | null;
   created_at: string;
+  // G1: fingerprint·중복 제거(UPGRADE_PLAN.md)
+  vuln_class: string | null;
+  locator: { method?: string; path?: string; params?: string[] };
+  occurrence_count: number;
+  last_seen_at: string;
+  evidence_kinds: string[];
+  duplicate_of: string | null;
+  suspected_duplicates?: number; // 목록 조회에만 붙는다(상세에는 없음)
+  merged_count?: number; // 이 finding 으로 병합된 다른 finding 수(목록 조회에만 붙음)
 };
 
 // 전역 발견 사항 화면(/findings, UPGRADE_PLAN.md B2)용 — run_code 만 추가된다.
 export type FindingWithRun = Finding & { run_code: string };
+
+export type SimilarFinding = { id: string; title: string; vuln_class: string | null; status: string; evidence_count: number };
 
 export type FindingDetail = {
   finding: Finding;

@@ -13,10 +13,12 @@ router = APIRouter(tags=["findings", "traffic"])
 
 
 @router.get("/api/findings")
-def list_all_findings(q: str = "", status: str | None = None, limit: int = 100,
+def list_all_findings(q: str = "", status: str | None = None, include_duplicates: bool = False, limit: int = 100,
                       offset: int = 0, conn=Depends(get_conn), user: str = Depends(current_user)):
     limit, offset = max(1, min(limit, 500)), max(0, offset)
     where, params = ["r.deleted_at IS NULL"], []
+    if not include_duplicates:
+        where.append("f.duplicate_of IS NULL")
     if q.strip():
         where.append("(f.title ILIKE %s OR f.rationale ILIKE %s)")
         params += [f"%{q.strip()}%", f"%{q.strip()}%"]
@@ -27,7 +29,11 @@ def list_all_findings(q: str = "", status: str | None = None, limit: int = 100,
     total = conn.execute(f"SELECT count(*) AS n FROM findings f JOIN runs r ON r.id = f.run_id WHERE {sql_where}",
                          params).fetchone()["n"]
     rows = conn.execute(
-        f"SELECT f.*, r.run_code FROM findings f JOIN runs r ON r.id = f.run_id WHERE {sql_where} "
+        f"SELECT f.*, r.run_code, "
+        f"  (SELECT count(*) FROM findings d WHERE d.run_id=f.run_id AND d.locator_hash=f.locator_hash "
+        f"   AND d.locator_hash IS NOT NULL AND d.duplicate_of IS NULL AND d.id<>f.id) AS suspected_duplicates, "
+        f"  (SELECT count(*) FROM findings m WHERE m.duplicate_of=f.id) AS merged_count "
+        f"FROM findings f JOIN runs r ON r.id = f.run_id WHERE {sql_where} "
         "ORDER BY f.created_at DESC LIMIT %s OFFSET %s", params + [limit, offset]).fetchall()
     return {"items": rows, "total": total, "limit": limit, "offset": offset}
 

@@ -44,18 +44,26 @@ def send_test(url: str) -> tuple[str, bool]:
                                  ensure_ascii=False).encode("utf-8"))
 
 
-def notify_finding_confirmed(conn, cfg, run_id, finding_id, *, title, actor) -> None:
-    """등록된 모든 채널에 finding 확정을 알린다(D7: 심각도 필터 폐지). 채널이 없으면 아무 일도 하지 않는다."""
+def _notify_event(conn, cfg, run_id, finding_id, event: str, **extra) -> None:
+    """등록된 모든 채널에 finding 이벤트를 알린다(D7: 심각도 필터 폐지). 채널이 없으면 아무 일도 하지 않는다."""
     channels = load_channels(cfg.home / "config" / "notify.json")
     if not channels:
         return
-    payload = json.dumps({"event": "finding_confirmed", "run_id": str(run_id), "finding_id": str(finding_id),
-                          "title": title, "actor": actor},
+    payload = json.dumps({"event": event, "run_id": str(run_id), "finding_id": str(finding_id), **extra},
                          ensure_ascii=False).encode("utf-8")
     for ch in channels:
         detail, ok = _post(ch["url"], payload)
         db.audit(conn, run_id, "notification_sent" if ok else "notification_failed",
                  {"channel": ch["name"], "finding_id": str(finding_id), "detail": detail})
+
+
+def notify_finding_confirmed(conn, cfg, run_id, finding_id, *, title, actor) -> None:
+    _notify_event(conn, cfg, run_id, finding_id, "finding_confirmed", title=title, actor=actor)
+
+
+def notify_finding_reopened(conn, cfg, run_id, finding_id, *, title, actor) -> None:
+    """G1 D3: 기각됐던 finding 이 새 종류 근거로 재관찰돼 NEEDS_REVIEW 로 재오픈됐을 때 알린다."""
+    _notify_event(conn, cfg, run_id, finding_id, "finding_reopened", title=title, actor=actor)
 
 
 def _post(url: str, body: bytes) -> tuple[str, bool]:

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 from psycopg.types.json import Jsonb
 
-from audit import config as audit_config
+from audit import config as audit_config, signals
 from audit.local_model import LLMError, OllamaClient
 from audit.policy import mask_secrets
 
@@ -42,9 +42,12 @@ PROBE_SYSTEM = (
 )
 _FINDING_ITEM = {
     "type": "object", "additionalProperties": False,
-    "required": ["target_id", "title", "rationale", "remediation", "evidence_ids"],
+    "required": ["target_id", "title", "vuln_class", "rationale", "remediation", "evidence_ids"],
     "properties": {
         "target_id": _STR, "title": _STR,
+        # G1: 분류는 LLM 이 고르지만, fingerprint 를 만드는 위치(메서드/경로/매개변수)는 Python 이 증거의
+        # 원 인자에서만 뽑는다(§8-5) — 이 필드는 "어떤 종류인지"만 말하고 "어디인지"는 말하지 않는다.
+        "vuln_class": {"enum": [*signals.SIGNALS, "OTHER"]},
         "rationale": _STR, "remediation": _STR,
         "evidence_ids": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string"}},
     },
@@ -94,7 +97,9 @@ SYSTEM = (
     "finding's evidence_ids must cite ids that already appear in the input — never a proposal you are making in "
     "the same reply. This is reported as CONFIRMED immediately, with no prior human check, so only use it when "
     "the cited evidence itself (not your inference about what it implies) directly shows the vulnerability. When "
-    "unsure, leave it out and describe the suspicion in a proposal's rationale instead. "
+    "unsure, leave it out and describe the suspicion in a proposal's rationale instead. Every finding must set "
+    "vuln_class to its best-matching category from the enum, or 'OTHER' if none fit — this only labels the kind "
+    "of issue, never its exact location (the system derives that from the evidence itself). "
     "If one proposal in this same reply must run only after another one in this reply succeeds (e.g. obtain "
     "credentials, then use them), set the later proposal's optional depends_on to the earlier one's 0-based index "
     "in this proposals list. Do not reference an index at or after its own position. Leave it out for independent "
@@ -542,11 +547,13 @@ def _report_llm_finding(ctx, fnd: dict, assets: dict, known: set[str]) -> None:
                  {"title": fnd["title"], "target_id": fnd["target_id"],
                   "reason": "범위 밖 대상이거나 인용 증거가 실존을 확인할 수 없음"})
         return
-    fid = worker.create_llm_finding(conn, run_id, asset_id, title=fnd["title"],
-                                    rationale=mask_secrets(fnd["rationale"]), remediation=fnd["remediation"],
-                                    evidence_ids=sorted(cited), model=llm_for(ctx, "planner").model)
+    fid, created = worker.create_llm_finding(conn, ctx.cfg, run_id, asset_id, title=fnd["title"],
+                                             vuln_class=fnd["vuln_class"],
+                                             rationale=mask_secrets(fnd["rationale"]), remediation=fnd["remediation"],
+                                             evidence_ids=sorted(cited), model=llm_for(ctx, "planner").model)
     if fid:
         db.audit(conn, run_id, "llm_finding_confirmed", {"finding_id": str(fid), "title": fnd["title"],
-                                                          "model": llm_for(ctx, "planner").model})
-        notify.notify_finding_confirmed(conn, ctx.cfg, run_id, fid, title=fnd["title"],
-                                        actor=f"llm:{llm_for(ctx, 'planner').model}")
+                                                          "model": llm_for(ctx, "planner").model, "created": created})
+        if created:  # 병합된 경우는 이미 확정됐었거나(재알림 안 함) upsert 가 재오픈 알림을 따로 보냄(D3)
+            notify.notify_finding_confirmed(conn, ctx.cfg, run_id, fid, title=fnd["title"],
+                                            actor=f"llm:{llm_for(ctx, 'planner').model}")

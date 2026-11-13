@@ -109,7 +109,19 @@ export default function FindingsPage() {
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedId(f.id); } }}
                   className={`cursor-pointer border-t border-line transition-colors hover:bg-raised/60 ${selected?.id === f.id ? "bg-raised" : ""}`}
                 >
-                  <td className="px-3 py-1.5 font-medium">{f.title}</td>
+                  <td className="px-3 py-1.5 font-medium">
+                    {f.title}
+                    {!!f.suspected_duplicates && (
+                      <span className="ml-2 rounded-full bg-warn/15 px-2 py-0.5 text-xs font-medium text-warn">
+                        ⚠ 중복 의심 {f.suspected_duplicates}건
+                      </span>
+                    )}
+                    {!!f.merged_count && (
+                      <span className="ml-2 rounded-full bg-raised px-2 py-0.5 text-xs font-medium text-muted">
+                        중복 {f.merged_count}건 병합됨
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-1.5">
                     <Link href={`/runs/${f.run_code}`} onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-accent hover:underline">
                       {f.run_code}

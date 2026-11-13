@@ -448,7 +448,19 @@ function FindingsTab({
                   }}
                   className={`cursor-pointer border-t border-line transition-colors hover:bg-raised/60 ${selectedId === f.id ? "bg-raised" : ""}`}
                 >
-                  <td className="px-4 py-2 font-medium">{f.title}</td>
+                  <td className="px-4 py-2 font-medium">
+                    {f.title}
+                    {!!f.suspected_duplicates && (
+                      <span className="ml-2 rounded-full bg-warn/15 px-2 py-0.5 text-xs font-medium text-warn">
+                        ⚠ 중복 의심 {f.suspected_duplicates}건
+                      </span>
+                    )}
+                    {!!f.merged_count && (
+                      <span className="ml-2 rounded-full bg-raised px-2 py-0.5 text-xs font-medium text-muted">
+                        중복 {f.merged_count}건 병합됨
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-2"><StatusBadge value={f.status} /></td>
                   <td className="px-4 py-2 text-muted">{VERIFICATION_LABEL[f.verification] ?? f.verification}</td>
                   <td className="px-4 py-2 text-muted">{f.reviewed_by ?? "검토 전"}</td>
