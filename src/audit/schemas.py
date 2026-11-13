@@ -291,8 +291,8 @@ NOTIFY_CHANNEL = {
     "properties": {
         "name": _ID, "kind": {"enum": ["webhook"]}, "url": {"type": "string", "minLength": 1},
         "enabled": {"type": "boolean"},
-        # 이 심각도 이상인 finding 만 보낸다(안 적으면 전부). 없는 값(risk-N 등)은 걸러지지 않고 그냥 보내진다
-        # — 모르는 값을 조용히 삼키는 것보다 더 보내는 쪽이 "확정 알림을 놓친다"는 사고보다 낫다.
+        # D7(2026-11): finding 심각도 폐지로 더는 쓰이지 않음(notify.py 가 무시함). 필드는 남겨서 기존
+        # notify.local.json 에 이 키가 있어도 스키마 검증이 깨지지 않게 한다(doctor 가 남은 값을 경고).
         "min_severity": {"enum": ["critical", "high", "medium", "low", "info"]},
     },
 }

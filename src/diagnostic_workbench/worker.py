@@ -248,7 +248,7 @@ def create_retest(conn, run_id, finding_id, *, operator, reason) -> list:
     return item_ids
 
 
-def create_llm_finding(conn, run_id, asset_id, *, title, severity, rationale, remediation, evidence_ids, model):
+def create_llm_finding(conn, run_id, asset_id, *, title, rationale, remediation, evidence_ids, model):
     """LLM이 자신이 인용한 실존 증거를 근거로 finding을 직접 CONFIRMED로 기록한다(CLAUDE.md §1/§7/§9).
     인용한 증거 id가 이 실행(run)에 실제로 존재하는지만 확인하는
     최소한의 데이터 무결성 검사이고, 주장(취약점이 실제로 있는지)의 실체는 검증하지 않는다 — 그게 이
@@ -263,10 +263,10 @@ def create_llm_finding(conn, run_id, asset_id, *, title, severity, rationale, re
         return None
     actor = f"llm:{model}"
     f = conn.execute(
-        "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification, status, "
+        "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification, status, "
         "reviewed_by, reviewed_at, review_reason) "
-        "VALUES (%s,%s,%s,%s,%s,%s,'LLM_CONFIRMED','CONFIRMED',%s,now(),%s) RETURNING id",
-        (run_id, asset_id, title, severity, rationale, remediation, actor, rationale)).fetchone()
+        "VALUES (%s,%s,%s,%s,%s,'LLM_CONFIRMED','CONFIRMED',%s,now(),%s) RETURNING id",
+        (run_id, asset_id, title, rationale, remediation, actor, rationale)).fetchone()
     for eid in real:
         conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], eid))
     conn.execute(
@@ -453,10 +453,10 @@ def _run_checklist(ctx, it, wr) -> tuple[str, str | None]:
                 evidence_ids=ids, rule_outcome=rule_outcome, llm_outcome=llm_outcome)
     if v == "FAIL":  # 규칙과 증적이 뒷받침한 경우에만 발견 사항으로 올린다
         f = ctx.conn.execute(
-            "INSERT INTO findings (run_id, asset_id, run_checklist_item_id, title, severity, rationale, "
-            "remediation, verification) VALUES (%s,%s,%s,%s,%s,%s,%s,'RULE_CONFIRMED') "
+            "INSERT INTO findings (run_id, asset_id, run_checklist_item_id, title, rationale, "
+            "remediation, verification) VALUES (%s,%s,%s,%s,%s,%s,'RULE_CONFIRMED') "
             "ON CONFLICT (run_id, run_checklist_item_id) DO NOTHING RETURNING id",
-            (ctx.run["id"], it["asset_id"], it["run_checklist_item_id"], body["title"], body["severity"],
+            (ctx.run["id"], it["asset_id"], it["run_checklist_item_id"], body["title"],
              reason, body["remediation"])).fetchone()
         for eid in (rule_outcome["evidence_ids"] if f else []):
             ctx.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], eid))
@@ -506,9 +506,9 @@ def _check_sqli_boolean_diff(ctx, it, evidence_id, args, data: bytes):
 
 def _create_finding(ctx, it, fact_id, evidence_ids, vclass, outcome):
     f = ctx.conn.execute(
-        "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification) "
-        "VALUES (%s,%s,%s,%s,%s,%s,'RULE_CONFIRMED') RETURNING id",
-        (ctx.run["id"], it["asset_id"], f"탐색 기반 발견: {vclass}", signals.SEVERITY[vclass], outcome.reason,
+        "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification) "
+        "VALUES (%s,%s,%s,%s,%s,'RULE_CONFIRMED') RETURNING id",
+        (ctx.run["id"], it["asset_id"], f"탐색 기반 발견: {vclass}", outcome.reason,
          signals.REMEDIATION[vclass])).fetchone()
     for eid in evidence_ids:
         ctx.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], eid))

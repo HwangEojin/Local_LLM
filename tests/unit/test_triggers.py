@@ -103,8 +103,8 @@ class TriggersDB(unittest.TestCase):
         run, ctx = self._run_ctx()
         asset_id = self._asset_id(run)
         self.conn.execute(
-            "INSERT INTO findings (run_id, asset_id, title, severity, rationale, verification) "
-            "VALUES (%s,%s,'old','LOW','r','RULE_CONFIRMED')", (run["id"], asset_id))
+            "INSERT INTO findings (run_id, asset_id, title, rationale, verification) "
+            "VALUES (%s,%s,'old','r','RULE_CONFIRMED')", (run["id"], asset_id))
         self._add_trigger(run, "on_finding")
         self.assertEqual(triggers.evaluate(ctx), 0)  # 트리거 생성 전에 이미 있던 finding 은 무시
 
@@ -114,8 +114,8 @@ class TriggersDB(unittest.TestCase):
         self._add_trigger(run, "on_finding")
         self.conn.commit()  # now() 는 트랜잭션 시작 시각이라, 같은 트랜잭션 안의 INSERT 는 같은 시각으로 찍힘
         self.conn.execute(
-            "INSERT INTO findings (run_id, asset_id, title, severity, rationale, verification) "
-            "VALUES (%s,%s,'new','HIGH','r','RULE_CONFIRMED')", (run["id"], asset_id))
+            "INSERT INTO findings (run_id, asset_id, title, rationale, verification) "
+            "VALUES (%s,%s,'new','r','RULE_CONFIRMED')", (run["id"], asset_id))
         self.assertEqual(triggers.evaluate(ctx), 1)
 
     def test_unknown_tool_still_queues_and_gets_denied_by_policy_not_by_triggers(self):

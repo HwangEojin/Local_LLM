@@ -59,7 +59,7 @@ class LlmFindingTest(unittest.TestCase):
         ctx.llm = _FakeLLM({})
         assets = {"baseline-demo": asset_id}
         explore._report_llm_finding(ctx, {
-            "target_id": "baseline-demo", "title": "LLM 직접 확정 테스트", "severity": "high",
+            "target_id": "baseline-demo", "title": "LLM 직접 확정 테스트",
             "rationale": "증거에서 직접 확인됨", "remediation": "패치", "evidence_ids": [eid],
         }, assets, {eid})
         row = self.conn.execute(
@@ -83,7 +83,7 @@ class LlmFindingTest(unittest.TestCase):
         assets = {"baseline-demo": asset_id}
         fake_id = "00000000-0000-0000-0000-000000000000"
         explore._report_llm_finding(ctx, {
-            "target_id": "baseline-demo", "title": "존재하지 않는 증거 테스트", "severity": "high",
+            "target_id": "baseline-demo", "title": "존재하지 않는 증거 테스트",
             "rationale": "실존하지 않는 증거를 인용", "remediation": "-", "evidence_ids": [fake_id],
         }, assets, {fake_id})  # known 에도 넣어 인용 검증은 통과시키되, 실제 evidence 행이 없음을 확인
         row = self.conn.execute(
@@ -94,7 +94,7 @@ class LlmFindingTest(unittest.TestCase):
         run, ctx, asset_id, eid = self._run_with_known_evidence()
         ctx.llm = _FakeLLM({})
         explore._report_llm_finding(ctx, {
-            "target_id": "no-such-target", "title": "범위 밖 테스트", "severity": "low",
+            "target_id": "no-such-target", "title": "범위 밖 테스트",
             "rationale": "x", "remediation": "-", "evidence_ids": [eid],
         }, {}, {eid})
         row = self.conn.execute(

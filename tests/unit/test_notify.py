@@ -117,8 +117,8 @@ class NotifyFindingConfirmedDB(unittest.TestCase):
         asset_id = self.conn.execute(
             "SELECT asset_id FROM run_assets WHERE run_id=%s", (run["id"],)).fetchone()["asset_id"]
         f = self.conn.execute(
-            "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification) "
-            "VALUES (%s,%s,'테스트 발견','high','신호 일치','패치','RULE_CONFIRMED') RETURNING id",
+            "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification) "
+            "VALUES (%s,%s,'테스트 발견','신호 일치','패치','RULE_CONFIRMED') RETURNING id",
             (run["id"], asset_id)).fetchone()
         return run, f["id"]
 
@@ -126,7 +126,7 @@ class NotifyFindingConfirmedDB(unittest.TestCase):
         run, fid = self._run_and_finding()
         fake_cfg = types.SimpleNamespace(home=Path(tempfile.mkdtemp()))
         before = self.conn.execute("SELECT count(*) AS n FROM audit_events WHERE run_id=%s", (run["id"],)).fetchone()["n"]
-        notify.notify_finding_confirmed(self.conn, fake_cfg, run["id"], fid, title="t", severity="high", actor="test")
+        notify.notify_finding_confirmed(self.conn, fake_cfg, run["id"], fid, title="t", actor="test")
         after = self.conn.execute("SELECT count(*) AS n FROM audit_events WHERE run_id=%s", (run["id"],)).fetchone()["n"]
         self.assertEqual(before, after)
 
@@ -140,8 +140,7 @@ class NotifyFindingConfirmedDB(unittest.TestCase):
                 json.dumps({"channels": [{"name": "test-ch", "kind": "webhook", "url": srv.url(), "enabled": True}]}),
                 encoding="utf-8")
             fake_cfg = types.SimpleNamespace(home=tmp)
-            notify.notify_finding_confirmed(self.conn, fake_cfg, run["id"], fid, title="t", severity="high",
-                                            actor="test")
+            notify.notify_finding_confirmed(self.conn, fake_cfg, run["id"], fid, title="t", actor="test")
             row = self.conn.execute(
                 "SELECT event, details FROM audit_events WHERE run_id=%s AND event='notification_sent'",
                 (run["id"],)).fetchone()
@@ -150,7 +149,8 @@ class NotifyFindingConfirmedDB(unittest.TestCase):
         finally:
             srv.close()
 
-    def test_min_severity_filters_lower_severity_findings(self):
+    def test_min_severity_in_config_is_ignored_and_sends_anyway(self):
+        """D7: 심각도 필터 폐지. 설정에 min_severity 가 남아 있어도(과거 notify.json) 무시되고 전부 전송된다."""
         run, fid = self._run_and_finding()
         srv = _Server(status=200)
         try:
@@ -160,33 +160,13 @@ class NotifyFindingConfirmedDB(unittest.TestCase):
                 json.dumps({"channels": [{"name": "high-only", "kind": "webhook", "url": srv.url(),
                                           "enabled": True, "min_severity": "high"}]}), encoding="utf-8")
             fake_cfg = types.SimpleNamespace(home=tmp)
-            notify.notify_finding_confirmed(self.conn, fake_cfg, run["id"], fid, title="t", severity="low",
-                                            actor="test")
-            sent = self.conn.execute(
-                "SELECT 1 FROM audit_events WHERE run_id=%s AND event IN ('notification_sent','notification_failed')",
-                (run["id"],)).fetchone()
-            self.assertIsNone(sent)  # low < high 라 채널에 안 걸림, 아무 전송도 시도 안 함
-
-            notify.notify_finding_confirmed(self.conn, fake_cfg, run["id"], fid, title="t", severity="critical",
-                                            actor="test")
+            notify.notify_finding_confirmed(self.conn, fake_cfg, run["id"], fid, title="t", actor="test")
             row = self.conn.execute(
                 "SELECT details FROM audit_events WHERE run_id=%s AND event='notification_sent'",
                 (run["id"],)).fetchone()
-            self.assertIsNotNone(row)  # critical >= high 라 걸림
-            self.assertEqual(row["details"]["severity"], "critical")
+            self.assertIsNotNone(row)  # min_severity 는 더는 거르지 않으므로 전송됨
         finally:
             srv.close()
-
-
-class MinSeverityFilter(unittest.TestCase):
-    def test_passes_severity_ranking_and_unknown_values(self):
-        no_floor = {"name": "x"}
-        floor_high = {"name": "x", "min_severity": "high"}
-        self.assertTrue(notify._passes_severity(no_floor, "info"))
-        self.assertTrue(notify._passes_severity(floor_high, "critical"))
-        self.assertTrue(notify._passes_severity(floor_high, "high"))
-        self.assertFalse(notify._passes_severity(floor_high, "medium"))
-        self.assertTrue(notify._passes_severity(floor_high, "risk-3"))  # 모르는 값은 거르지 않음(놓치는 것보다 나음)
 
 
 if __name__ == "__main__":

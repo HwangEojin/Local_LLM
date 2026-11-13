@@ -46,8 +46,8 @@ class FindingsExportTest(unittest.TestCase):
         self.asset_id = asset_id
         for title, status in (("SQLi 테스트", "CONFIRMED"), ("오탐", "REJECTED")):
             self.conn.execute(
-                "INSERT INTO findings (run_id, asset_id, title, severity, status, rationale, remediation, "
-                "verification) VALUES (%s,%s,%s,'high',%s,'근거','조치','LLM_CONFIRMED')",
+                "INSERT INTO findings (run_id, asset_id, title, status, rationale, remediation, "
+                "verification) VALUES (%s,%s,%s,%s,'근거','조치','LLM_CONFIRMED')",
                 (self.run["id"], asset_id, title, status))
         self.conn.commit()
 

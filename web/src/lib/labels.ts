@@ -24,19 +24,11 @@ const MAP: Record<string, Entry> = {
   BLOCKED: { label: "차단됨", tone: "warn" },
   SUCCEEDED: { label: "성공", tone: "ok" },
   FAILED: { label: "실패", tone: "danger" },
-  // 심각도
-  critical: { label: "치명", tone: "danger" },
-  high: { label: "높음", tone: "danger" },
-  medium: { label: "중간", tone: "warn" },
-  low: { label: "낮음", tone: "neutral" },
-  info: { label: "정보", tone: "info" },
 };
 
 export function describe(value: string): Entry {
   return MAP[value] ?? { label: value, tone: "neutral" };
 }
-
-export const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"] as const;
 
 export const AUTONOMY_LABEL: Record<string, string> = {
   approval: "항상 승인",

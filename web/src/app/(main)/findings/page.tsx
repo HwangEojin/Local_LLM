@@ -11,7 +11,7 @@ import { FindingPanel } from "@/components/FindingPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Banner, btnGhost, Card, Empty, inputCls, SkeletonRows } from "@/components/ui";
 import { api, FINDING_STATUSES, FindingWithRun } from "@/lib/api";
-import { describe, formatTime, SEVERITY_ORDER } from "@/lib/labels";
+import { describe, formatTime } from "@/lib/labels";
 import { usePolling } from "@/lib/usePolling";
 
 const PAGE = 50;
@@ -25,7 +25,6 @@ export default function FindingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
-  const [severity, setSeverity] = useState("");
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -33,24 +32,19 @@ export default function FindingsPage() {
     const p = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
     if (q.trim()) p.set("q", q.trim());
     if (status) p.set("status", status);
-    if (severity) p.set("severity", severity);
     api
       .get<{ items: FindingWithRun[]; total: number }>(`/api/findings?${p.toString()}`)
       .then((r) => { setItems(r.items); setTotal(r.total); setError(null); })
       .catch((e) => setError(e.message));
-  }, [q, status, severity, offset]);
+  }, [q, status, offset]);
   useEffect(load, [load]);
   usePolling(load, 15000);
 
-  const filtering = q !== "" || status !== "" || severity !== "";
+  const filtering = q !== "" || status !== "";
   const page = Math.floor(offset / PAGE) + 1;
   const pages = Math.max(1, Math.ceil(total / PAGE));
   const sorted = useMemo(
-    () => items?.slice().sort((a, b) => {
-      const sa = SEVERITY_ORDER.indexOf(a.severity as (typeof SEVERITY_ORDER)[number]);
-      const sb = SEVERITY_ORDER.indexOf(b.severity as (typeof SEVERITY_ORDER)[number]);
-      return (sa < 0 ? 99 : sa) - (sb < 0 ? 99 : sb) || b.created_at.localeCompare(a.created_at);
-    }) ?? null,
+    () => items?.slice().sort((a, b) => b.created_at.localeCompare(a.created_at)) ?? null,
     [items],
   );
   const selected = sorted?.find((f) => f.id === selectedId) ?? null;
@@ -80,15 +74,8 @@ export default function FindingsPage() {
               </button>
             ))}
           </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="심각도 필터">
-          {SEVERITY_ORDER.map((s) => (
-            <button key={s} aria-pressed={severity === s} onClick={() => { setSeverity(severity === s ? "" : s); setOffset(0); }} className={chip(severity === s)}>
-              {describe(s).label}
-            </button>
-          ))}
           {filtering && (
-            <button onClick={() => { setQ(""); setStatus(""); setSeverity(""); setOffset(0); }} className={btnGhost}>
+            <button onClick={() => { setQ(""); setStatus(""); setOffset(0); }} className={btnGhost}>
               필터 초기화
             </button>
           )}
@@ -107,7 +94,6 @@ export default function FindingsPage() {
               <tr>
                 <th scope="col" className={th}>제목</th>
                 <th scope="col" className={th}>진단</th>
-                <th scope="col" className={th}>심각도</th>
                 <th scope="col" className={th}>판정</th>
                 <th scope="col" className={th}>검토자</th>
                 <th scope="col" className={th}>발견 시각</th>
@@ -129,7 +115,6 @@ export default function FindingsPage() {
                       {f.run_code}
                     </Link>
                   </td>
-                  <td className="px-3 py-1.5"><StatusBadge value={f.severity} /></td>
                   <td className="px-3 py-1.5"><StatusBadge value={f.status} /></td>
                   <td className="px-3 py-1.5 text-muted">{f.reviewed_by ?? "검토 전"}</td>
                   <td className="px-3 py-1.5 text-muted">{formatTime(f.created_at)}</td>

@@ -39,12 +39,12 @@ class FindingReviewTest(unittest.TestCase):
         return run, asset_id
 
     def _finding(self, run_id, asset_id, **overrides):
-        body = {"title": "테스트 발견", "severity": "high", "rationale": "신호 일치",
+        body = {"title": "테스트 발견", "rationale": "신호 일치",
                 "remediation": "패치", "verification": "RULE_CONFIRMED", **overrides}
         return self.conn.execute(
-            "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *",
-            (run_id, asset_id, body["title"], body["severity"], body["rationale"], body["remediation"],
+            "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification) "
+            "VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
+            (run_id, asset_id, body["title"], body["rationale"], body["remediation"],
              body["verification"])).fetchone()
 
     def _evidence(self, run_id, asset_id):

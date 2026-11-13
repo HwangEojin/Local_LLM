@@ -42,9 +42,9 @@ PROBE_SYSTEM = (
 )
 _FINDING_ITEM = {
     "type": "object", "additionalProperties": False,
-    "required": ["target_id", "title", "severity", "rationale", "remediation", "evidence_ids"],
+    "required": ["target_id", "title", "rationale", "remediation", "evidence_ids"],
     "properties": {
-        "target_id": _STR, "title": _STR, "severity": {"enum": ["low", "medium", "high", "critical"]},
+        "target_id": _STR, "title": _STR,
         "rationale": _STR, "remediation": _STR,
         "evidence_ids": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string"}},
     },
@@ -542,11 +542,11 @@ def _report_llm_finding(ctx, fnd: dict, assets: dict, known: set[str]) -> None:
                  {"title": fnd["title"], "target_id": fnd["target_id"],
                   "reason": "범위 밖 대상이거나 인용 증거가 실존을 확인할 수 없음"})
         return
-    fid = worker.create_llm_finding(conn, run_id, asset_id, title=fnd["title"], severity=fnd["severity"],
+    fid = worker.create_llm_finding(conn, run_id, asset_id, title=fnd["title"],
                                     rationale=mask_secrets(fnd["rationale"]), remediation=fnd["remediation"],
                                     evidence_ids=sorted(cited), model=llm_for(ctx, "planner").model)
     if fid:
         db.audit(conn, run_id, "llm_finding_confirmed", {"finding_id": str(fid), "title": fnd["title"],
                                                           "model": llm_for(ctx, "planner").model})
-        notify.notify_finding_confirmed(conn, ctx.cfg, run_id, fid, title=fnd["title"], severity=fnd["severity"],
+        notify.notify_finding_confirmed(conn, ctx.cfg, run_id, fid, title=fnd["title"],
                                         actor=f"llm:{llm_for(ctx, 'planner').model}")

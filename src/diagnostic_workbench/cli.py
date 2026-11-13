@@ -70,6 +70,13 @@ def cmd_doctor(args):
                                     f"제외 {len(cfg.exclude)}개, 중지 스위치 {'켜짐' if cfg.stop_file.exists() else '꺼짐'}")
     check("증적 디렉터리", lambda: str(cfg.evidence_dir))
 
+    def notify_min_severity():
+        stale = [c["name"] for c in notify.load_all_channels(cfg.home / "config" / "notify.json") if c.get("min_severity")]
+        if stale:
+            raise RuntimeError(f"min_severity 는 더 이상 쓰이지 않음(D7, 전부 전송됨): {', '.join(stale)}")
+        return "없음"
+    check("알림 채널 min_severity(폐지됨)", notify_min_severity, warn=True)
+
     def ollama():
         from audit.local_model import OllamaClient
         info = OllamaClient(cfg.settings.ollama, cfg.settings.external_api_enabled).check_ready()
@@ -389,10 +396,10 @@ def cmd_review(args):
     worker.set_verdict(conn, r["id"], args.verdict, reason, actor=f"reviewer:{args.reviewer}", decided_by="reviewer",
                        evidence_ids=ev)
     if args.verdict == "FAIL":
-        conn.execute("INSERT INTO findings (run_id, asset_id, run_checklist_item_id, title, severity, rationale, "
-                     "remediation, verification) VALUES (%s,%s,%s,%s,%s,%s,%s,'REVIEWER_CONFIRMED') "
+        conn.execute("INSERT INTO findings (run_id, asset_id, run_checklist_item_id, title, rationale, "
+                     "remediation, verification) VALUES (%s,%s,%s,%s,%s,%s,'REVIEWER_CONFIRMED') "
                      "ON CONFLICT (run_id, run_checklist_item_id) DO NOTHING",
-                     (run["id"], r["asset_id"], r["id"], r["body"]["title"], r["body"]["severity"], reason,
+                     (run["id"], r["asset_id"], r["id"], r["body"]["title"], reason,
                       r["body"]["remediation"]))
     db.audit(conn, run["id"], "verdict_changed", {"check_id": args.check_id, "target_id": args.target_id,
                                                    "old": r["verdict"], "new": args.verdict, "reviewer": args.reviewer})
@@ -514,7 +521,7 @@ def cmd_finding(args):
             ([f["id"] for f in rows],)).fetchall()}
         for f in rows:
             reviewed = f"검토: {f['status']}({f['reviewed_by']})" if f["reviewed_by"] else "검토 전"
-            print(f"{str(f['id'])[:8]}  [{f['severity']:<6}] {f['title'][:50]:<50} "
+            print(f"{str(f['id'])[:8]}  {f['title'][:50]:<50} "
                   f"verification={f['verification']:<17} status={f['status']:<10} {reviewed}")
             if f["id"] in retests:
                 print(f"    최근 {retests[f['id']]}")
@@ -543,7 +550,7 @@ def cmd_finding(args):
     db.audit(conn, run["id"], "finding_status_changed",
              {"finding_id": str(f["id"]), "old": old_status, "new": args.status, "reviewer": args.reviewer})
     if args.status == "CONFIRMED":
-        notify.notify_finding_confirmed(conn, cfg, run["id"], f["id"], title=f["title"], severity=f["severity"],
+        notify.notify_finding_confirmed(conn, cfg, run["id"], f["id"], title=f["title"],
                                         actor=f"reviewer:{args.reviewer}")
     conn.commit()
     print(f"{f['id']}: {old_status} -> {args.status} (이력 기록됨)")

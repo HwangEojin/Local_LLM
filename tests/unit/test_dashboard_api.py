@@ -30,7 +30,7 @@ class DashboardApiTest(unittest.TestCase):
 
     def test_shape_includes_token_usage(self):
         out = self.client.get("/api/dashboard").json()
-        for key in ("by_status", "by_severity", "totals", "recent_runs", "token_daily", "token_totals"):
+        for key in ("by_status", "totals", "recent_runs", "token_daily", "token_totals"):
             self.assertIn(key, out)
         self.assertIn("calls", out["token_totals"])
         self.assertIn("tokens", out["token_totals"])

@@ -13,7 +13,7 @@ router = APIRouter(tags=["findings", "traffic"])
 
 
 @router.get("/api/findings")
-def list_all_findings(q: str = "", status: str | None = None, severity: str | None = None, limit: int = 100,
+def list_all_findings(q: str = "", status: str | None = None, limit: int = 100,
                       offset: int = 0, conn=Depends(get_conn), user: str = Depends(current_user)):
     limit, offset = max(1, min(limit, 500)), max(0, offset)
     where, params = ["r.deleted_at IS NULL"], []
@@ -23,9 +23,6 @@ def list_all_findings(q: str = "", status: str | None = None, severity: str | No
     if status:
         where.append("f.status = %s")
         params.append(status)
-    if severity:
-        where.append("f.severity = %s")
-        params.append(severity)
     sql_where = " AND ".join(where)
     total = conn.execute(f"SELECT count(*) AS n FROM findings f JOIN runs r ON r.id = f.run_id WHERE {sql_where}",
                          params).fetchone()["n"]

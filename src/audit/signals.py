@@ -283,8 +283,6 @@ def verify_cmdi(args: dict, body: bytes) -> SignalResult:
 
 SIGNALS = {"SQLI": verify_sqli, "XSS": verify_xss, "CSRF": verify_csrf, "SSRF": verify_ssrf,
           "SSTI": verify_ssti, "XXE": verify_xxe, "CMDI": verify_cmdi}
-SEVERITY = {"SQLI": "high", "XSS": "medium", "CSRF": "medium", "SSRF": "high",
-           "SSTI": "critical", "XXE": "high", "CMDI": "critical"}
 REMEDIATION = {
     "SQLI": "매개변수화된 쿼리(prepared statement)를 쓰고 사용자 입력을 SQL 문자열에 직접 연결하지 않는다.",
     "XSS": "출력 문맥에 맞는 인코딩(HTML/속성/URL/JS)을 적용하고 사용자 입력을 신뢰하지 않는다.",

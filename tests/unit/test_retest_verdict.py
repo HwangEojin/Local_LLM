@@ -42,8 +42,8 @@ class ResolveRetestDB(unittest.TestCase):
 
     def _finding(self, run_id, asset_id, verification="RULE_CONFIRMED"):
         return self.conn.execute(
-            "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification) "
-            "VALUES (%s,%s,'테스트 발견','high','신호 일치','패치',%s) RETURNING id",
+            "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification) "
+            "VALUES (%s,%s,'테스트 발견','신호 일치','패치',%s) RETURNING id",
             (run_id, asset_id, verification)).fetchone()["id"]
 
     def _retest_node(self, run_id, asset_id, finding_id, vclass, args):
