@@ -1,6 +1,6 @@
 "use client";
 
-// 명령(도구 호출) 이력: 모든 진단을 가로지르는 조회 전용 화면(artex 의 commands 메뉴 참고). 진단 상세의
+// 명령(도구 호출) 이력: 모든 진단을 가로지르는 조회 전용 화면(레퍼런스 프로젝트 의 commands 메뉴 참고). 진단 상세의
 // '실행 기록' 탭과 같은 데이터(tool_invocations)를 전체 진단 범위로 검색한다. 새 진단 로직 없음.
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";

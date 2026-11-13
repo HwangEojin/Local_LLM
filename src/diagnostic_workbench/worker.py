@@ -116,7 +116,7 @@ _BLOCKED_PATTERN = re.compile(
 
 
 def classify_outcome(status: str, text: str) -> str | None:
-    """실패 귀속(Observer/G5 패턴, artex guard.go 의 postToolUse 참고, CLAUDE.md §6/§8, 2026-11).
+    """실패 귀속(Observer/G5 패턴, 레퍼런스 프로젝트 guard.go 의 postToolUse 참고, CLAUDE.md §6/§8, 2026-11).
 
     성공/실패 2분법 대신 ok/blocked/error 로 나눈다 — 'blocked'(WAF·레이트리밋·캡차 등 대상측 차단 흔적이
     출력에 보임)는 같은 도구를 그대로 반복해도 또 막힐 뿐이라는 신호라, 일반 'error'(그 외 실행 실패)와
@@ -588,7 +588,7 @@ def _resolve_retest(ctx, it, eid, args, out) -> None:
 
 
 def _worker_decide(ctx, it) -> tuple[str, dict]:
-    """탐색 작업을 실행하기 전에 Worker 가 '어떻게 할지' 다시 판단한다(멀티에이전트 1단계 — artex 의
+    """탐색 작업을 실행하기 전에 Worker 가 '어떻게 할지' 다시 판단한다(멀티에이전트 1단계 — 레퍼런스 프로젝트 의
     Planner/Worker 역할 분리를 재현). Planner(explore.propose)가 고른 tool/args 는 제안일 뿐이고, Worker 가
     같은 대상·read 위험도 안에서 다른 선택을 할 수 있다. 무엇을 고르든 run_tool() 하나만 거쳐 정책 검사를
     다시 받으므로(CLAUDE.md §7/§8) 실행 권한의 경계는 그대로다.

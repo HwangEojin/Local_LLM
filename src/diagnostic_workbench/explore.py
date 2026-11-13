@@ -119,7 +119,7 @@ class _ModelLog:
 
     def record_model_call(self, run_id, model, purpose, pt, ct, source, duration_ms, ok, error=None,
                           request_text=None, response_text=None):
-        # artex llmrec 참고(원문 호출 기록, 2026-11) — 비밀값은 저장 전에 가린다(CLAUDE.md §8).
+        # 레퍼런스 프로젝트 llmrec 참고(원문 호출 기록, 2026-11) — 비밀값은 저장 전에 가린다(CLAUDE.md §8).
         req = mask_secrets(request_text)[:8000] if request_text else None
         resp = mask_secrets(response_text)[:8000] if response_text else None
         self.conn.execute(

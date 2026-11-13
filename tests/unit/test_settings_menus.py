@@ -366,7 +366,7 @@ class SettingsMenusTest(unittest.TestCase):
         self.assertEqual(sorted(row["roles"]), ["reporter", "worker"])
         self.assertIn("IMPORT-MARKER", row["instructions"])
 
-        # 실제 LLM 호출 지점이 읽는 skills_for 를 run_id 와 함께 호출하면 skill_usage 에 기록된다(artex 의 skill 사용 집계 참고).
+        # 실제 LLM 호출 지점이 읽는 skills_for 를 run_id 와 함께 호출하면 skill_usage 에 기록된다(레퍼런스 프로젝트 의 skill 사용 집계 참고).
         # skill_usage 는 외래 키가 없으므로(마이그레이션 주석 참고) 진짜 실행을 만들 필요 없이 무작위 UUID 로 충분하다.
         # 웹 API 는 이 테스트의 self.conn 과는 다른 커넥션을 쓰므로, 커밋해야 거기서 보인다.
         run_id = uuid.uuid4()

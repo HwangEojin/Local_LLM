@@ -1,10 +1,10 @@
-"""웹에서 MCP 서버 추가: 연결 테스트·도구 발견 → 운영자가 고른 도구만 등록 (artex 의 'MCP 추가 → tools/list 발견' 흐름을
+"""웹에서 MCP 서버 추가: 연결 테스트·도구 발견 → 운영자가 고른 도구만 등록 (레퍼런스 프로젝트 의 'MCP 추가 → tools/list 발견' 흐름을
 우리 정책 모델에 맞게 옮긴 것).
 
-artex 와 다른 점(CLAUDE.md §7/§8 때문에):
-- stdio(명령 실행) 서버도 등록할 수 있지만(2026-11, artex 와 동일하게 지원), 별도 확인(`confirm_stdio`)이 항상 필요하고
+레퍼런스 프로젝트 와 다른 점(CLAUDE.md §7/§8 때문에):
+- stdio(명령 실행) 서버도 등록할 수 있지만(2026-11, 레퍼런스 프로젝트 와 동일하게 지원), 별도 확인(`confirm_stdio`)이 항상 필요하고
   env 는 raw 값이 아니라 `env_from`(호스트 환경변수 이름)으로만 받는다(비밀 값을 JSON 파일에 평문으로 안 둠). 등록은
-  이 로그인한 운영자만 할 수 있는 관리 API(단일 운영자 로컬 도구)라 artex 의 제한을 완화했지만, 실제 도구 '호출'은
+  이 로그인한 운영자만 할 수 있는 관리 API(단일 운영자 로컬 도구)라 레퍼런스 프로젝트 의 제한을 완화했지만, 실제 도구 '호출'은
   stdio 든 sse 든 똑같이 policy.decide() 를 통과해야 한다 — 이 변경은 '누가 서버를 등록할 수 있는지'만 바꾼다.
 - sse 주소는 루프백만(external_api.enabled 가 켜져 있을 때만 그 밖). 웹에서는 외부 허용 여부를 바꿀 수 없다.
 - 도구는 '발견'만 하고 자동 등록하지 않는다. 운영자가 고른 도구만, 위험도(기본 write)와 범위 검사 인자(scope_args)를 붙여
@@ -135,7 +135,7 @@ def _discover(srv: dict) -> dict:
 def _build_srv(cfg, transport: str, url: str, command: str, args: list[str], env_from: dict[str, str],
               timeout_s: int, confirm_stdio: bool) -> dict:
     """transport 에 맞는 mcp_client 용 srv dict 를 만든다. stdio 는 이 PC 에서 명령을 실행하게 되므로
-    항상 별도 확인(confirm_stdio)을 요구한다 — artex 처럼 그 확인 없이 등록되지 않게 막는다."""
+    항상 별도 확인(confirm_stdio)을 요구한다 — 레퍼런스 프로젝트 처럼 그 확인 없이 등록되지 않게 막는다."""
     timeout_s = max(5, min(int(timeout_s), 120))
     if transport == "stdio":
         if not confirm_stdio:

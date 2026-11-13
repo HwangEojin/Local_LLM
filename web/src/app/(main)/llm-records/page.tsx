@@ -1,6 +1,6 @@
 "use client";
 
-// LLM 호출 기록 전역 화면(artex llmrec 참고, UPGRADE_PLAN.md 재점검에서 찾은 갭 — 2026-11). 새 진단 로직
+// LLM 호출 기록 전역 화면(레퍼런스 프로젝트 llmrec 참고, UPGRADE_PLAN.md 재점검에서 찾은 갭 — 2026-11). 새 진단 로직
 // 없음: /api/llm-records(model_calls 를 runs 와 조인해 조회만 함)만 읽는다. 원문은 저장 시점에 이미 마스킹돼
 // 있다(explore.py 의 _ModelLog.record_model_call).
 import Link from "next/link";

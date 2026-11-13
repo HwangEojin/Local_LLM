@@ -147,7 +147,7 @@ _MAX_ZIP_BYTES = 2_000_000  # agentskills.io 배포본은 보통 수십~수백 K
 @router.post("/skills/import-zip")
 def import_skill_zip(file: UploadFile, confirm: bool = Form(False), conn=Depends(get_conn),
                      user: str = Depends(current_user)):
-    """agentskills.io 형식 ZIP(2026-11, artex 의 ZIP 업로드 참고)에서 **SKILL.md 하나만** 읽는다. 그 안의
+    """agentskills.io 형식 ZIP(2026-11, 레퍼런스 프로젝트 의 ZIP 업로드 참고)에서 **SKILL.md 하나만** 읽는다. 그 안의
     scripts/ 나 다른 파일은 열어보지도 않고 버린다 — 우리 스킬은 LLM 프롬프트에 끼워 넣는 지침 텍스트일
     뿐 실행되는 대상이 아니므로, 실행 파일을 저장·실행하는 경로 자체를 만들지 않는다(CLAUDE.md §8)."""
     _need_confirm(confirm)

@@ -65,7 +65,7 @@ export function SkeletonRows({ rows = 5 }: { rows?: number }) {
 }
 
 /**
- * 우측 드로어(artex의 Sheet 패턴 참고, 2026-11 — FindingPanel 이 쓰던 고정 패널 모양을 재사용 가능한
+ * 우측 드로어(레퍼런스 프로젝트의 Sheet 패턴 참고, 2026-11 — FindingPanel 이 쓰던 고정 패널 모양을 재사용 가능한
  * 컴포넌트로 뺐다). Esc 로 닫힌다. 폭은 widthClass 로 조절(기본 상세 패널 폭, 넓은 편집 화면은 더 크게).
  */
 export function Sheet({
