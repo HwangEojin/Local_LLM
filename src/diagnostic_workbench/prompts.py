@@ -136,8 +136,8 @@ def clear_role_default(conn, role: str) -> None:
 
 def catalog() -> list[dict]:
     """웹 '에이전트' 화면용: 역할별로 편집 가능한 프롬프트와 코드 기본값. 기본값이 각 모듈에 있어 순환 import 를
-    피하려고 호출 시점에 가져온다. analyst(체크리스트 분석)의 프롬프트는 audit.local_model 에 고정돼 있어
-    편집 대상이 아니다(빈 목록)."""
+    피하려고 호출 시점에 가져온다. analyst(체크리스트 분석) 자체의 프롬프트는 audit.local_model 에 고정돼
+    있어 편집 대상이 아니지만, G2(LLM 교차 검증)의 verifier_system 은 이 역할 그룹에서 편집한다."""
     from . import explore, reporting, runs, worker
     return [
         {"role": "planner", "prompts": [
