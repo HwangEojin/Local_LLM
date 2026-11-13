@@ -302,3 +302,438 @@ LLM 실패/허용 밖 응답이면 그 발동만 건너뛴다(새 정책 코드 
      숨기기(hidden_from)/스킬은 이미 role 배열 방식이라, 체크박스 두 목록(스킬/도구)이면 충분해서 탭을
      나눌 필요가 없었음. 새 백엔드 코드 없음 — 기존 `/api/admin/skills`·`/api/admin/tools` PUT 을 그대로
      재사용(다른 화면의 편집 로직과 중복 없음, 같은 API를 다른 화면에서도 부르는 것뿐).
+
+---
+
+## G. 발견 사항 품질·검토·이력 업그레이드 (2026-11-13 작성, 결정 D1~D7 확정, 미구현)
+
+외부 제안서(GPT 작성 "Local LLM Security Workbench" 개선안)를 커밋 `fbc353c` 기준 실제 코드와 대조해
+**이미 있는 것 / 원칙과 충돌하는 것 / 진짜 공백**으로 나눈 뒤, 진짜 공백만 작업 단위로 옮긴 계획이다.
+CLAUDE.md §14 절차(조사 → 비교 → 최소 수정 계획 → 점진적 구현)를 따르며, 아래 "조사 결과"는 실제로 코드를
+열어 확인한 것만 적었다.
+
+### G0. 제안서 대조 결과 (구현 대상 선정 근거)
+
+**이미 구현됨 — 다시 만들지 않음**
+
+| 제안 | 실제 위치 |
+|---|---|
+| 승인 만료 | `approvals.expires_at`(0001), `policy.py:107` 이 미만료 승인만 인정 |
+| Kill Switch UI | `admin.py` `/kill-switch/engage·release`, `data/STOP` |
+| Worker 장애 복구 | `lease_s` 만료 → READY, 시도 초과 → FAILED (`backlog.reclaim_expired`) |
+| 작업 재개 / 재시도 / 승인 | `run start`(PAUSED·COMPLETED 재개), `backlog/{id}/retry`, `retry-all`, `approve` |
+| 반복 실패 방지 | `worker.blocked_streak()` + Planner 전략 전환(§D) |
+| 보고서 승인 | `POST /runs/{run}/report/{filename}/approve` |
+| 내보내기 | `GET /runs/{run}/findings/export`, `GET /api/admin/audit/export` |
+| 재검증(retest) | `worker.create_retest()` + `_resolve_retest()` → `finding_review_history` 에 REPRODUCED/FIXED/INCONCLUSIVE |
+| 실행 단위 증적 뷰어 | `runs/[id]` Evidence 탭 `EvidenceViewer`, `/traffic` |
+| 모델 호출 지표 원천 | `model_calls`(duration_ms, ok, 토큰), 대시보드 `token_daily` |
+
+**원칙 충돌 — 채택 안 함(사유 기록)**
+
+- *자율 탐색 도구 호출·비용 하드 예산*: CLAUDE.md §5/§8-10 의 "자율 탐색은 하드리밋 없음" 결정과 정면 충돌.
+  로컬 Ollama 라 비용 개념도 없음. 무의미 반복은 `blocked_streak`·중복 감지·벽시계 타임아웃이 이미 담당.
+- *동시 실행 제한*: Worker 순차 실행이 설계 결정이라 해당 문제 자체가 없음.
+- *AI 진단 지식베이스(과거 판정 재사용)*: §3 "관찰과 추론 구분", §9 확정 조건과 충돌 위험이 커서 보류(G7).
+
+**진짜 공백 — 이번 계획의 대상**
+
+1. 탐색 finding 에 중복 방지 키가 없다. `findings.duplicate_of`(0001)는 `src/` 어디서도 쓰이지 않고,
+   `UNIQUE(run_id, run_checklist_item_id)` 는 체크리스트 항목이 NULL 인 탐색 finding 을 걸러내지 못한다
+   (`worker._create_finding`, `worker.create_llm_finding` 둘 다 무조건 INSERT). 같은 지점의 같은 SQLi 가
+   한 실행 안에서 여러 행이 될 수 있고, LLM finding 의 `title` 은 자유 문자열이라 비교 기준도 없다. → **G1**
+2. `create_llm_finding()` 은 모델 하나가 실존 증거 id 만 인용하면 바로 `status='CONFIRMED'` 를 쓴다.
+   현재 가드레일에서 가장 얇은 지점. → **G2**
+3. CLAUDE.md §10 이 요구하는 "설명/대응방안 수정"이 없다(심각도·영향도는 D5·D7 로 대상에서 빠짐) — `POST .../review` 는
+   `status` 만 바꾼다(`worker.set_finding_status`). → **G3**
+4. `web/src/app/(main)/runs/[id]/page.tsx` 가 1,444줄 단일 파일(탭 컴포넌트 13개 동거). → **G4**
+5. 증적→도구 호출→작업→탐색 노드→finding 의 출처 체인과, 실행을 가로지르는 자산 화면이 없다(데이터는 있음). → **G5**
+6. 같은 자산의 이전/현재 실행 비교가 없다. G1 의 fingerprint 가 전제. → **G6**
+
+### G-결정. 구현 전 사용자 확인 필요 사항
+
+**전부 사용자 확정(2026-11-13)** — 남은 미결 사항 없음. 각 행의 "결정"이 구현 기준이며, 바꾸려면 이 표부터
+고친 뒤 해당 단계를 수정한다.
+
+| ID | 질문 | 결정 | 영향 단계 |
+|---|---|---|---|
+| D1 | 경로를 어디까지 같은 것으로 볼지 | **확정: 정확한 경로** — 쿼리스트링만 제거하고 경로 문자열은 그대로 비교(ID 세그먼트 치환·소문자화·끝 `/` 제거 모두 하지 않음). `/api/user/123/profile` 과 `/api/user/456/profile` 은 다른 finding. 잘못 합쳐지는 일이 없는 대신 객체 ID 마다 중복이 남는 것은 감수한다(사용자 선택, 권장안은 ID 치환이었음) | G1 |
+| D2 | `vuln_class` 를 모르는 LLM finding(OTHER) 처리 | **확정: 중복 의심만 표시** — 자동 병합 없음(fingerprint NULL). 분류를 뺀 위치 해시 `locator_hash` 가 같은 finding 끼리 "중복 의심" 배지를 띄우고 사람이 한 번에 병합 | G1 |
+| D3 | 같은 실행에서 REJECTED 된 finding 이 다시 관찰되면 | **확정: 새 종류 근거일 때만 재검토** — 재관찰 근거의 종류(RULE / LLM)가 그 finding 에 이미 있던 근거 종류에 없으면 NEEDS_REVIEW 로 재오픈하고 알림. 같은 종류면 REJECTED 유지, 이력·감사 이벤트만 기록 | G1 |
+| D3b | **다른 실행**에서 기각된 것과 fingerprint 가 같은 finding 이 새 실행에서 나오면 | **확정: 아무것도 하지 않음** — 실행끼리 완전히 독립. 이전 기각 정보를 힌트로도 붙이지 않는다(권장안은 힌트 표시였음). G6 실행 비교 화면에서 기준 실행의 상태를 보여 주는 것은 이 결정과 별개로 유지 | G1, G6 |
+| D1+ | D2 "중복 의심" 표시에만 ID 세그먼트 치환 경로를 쓸지 | **확정: 쓰지 않음** — 의심 표시도 D1 과 같은 정확한 경로 기준. 객체 ID 만 다른 같은 취약점은 목록에서 사람이 찾는다 | G1 |
+| D4 | 교차 검증 모델 미지정 실행의 LLM finding 처리 | **확정: 현행 유지** — 검증 모델이 없으면 지금처럼 단일 모델이 `LLM_CONFIRMED`/`CONFIRMED`. 교차 검증은 실행별로 켜는 선택 기능. 알려진 위험(검증 모델을 지정하지 않으면 LLM 단독 확정이 그대로 남음)은 감수 — 대신 실행 생성 화면에 "교차 검증 없음" 안내 문구를 둔다(G2) | G2 |
+| D5 | "영향도(impact)" 필드 신설 여부 | **확정: 만들지 않음** — `pentest_report.py` 에 영향도 출력 자리가 없고 회사 템플릿도 저장소 밖이라 확인 불가. 템플릿에 칸이 생기면 그때 컬럼 1개 + 편집 필드 1개로 추가 | G3 |
+| D6 | 보고서 승인 후 finding 편집 허용 여부 | **확정: 편집 허용 + 보고서 경고** — 승인된 보고서에 "승인 이후 편집됨 — 재생성 필요" 표시 | G3 |
+| D7 | finding 심각도(severity) | **확정: finding 의 심각도 개념 자체를 제거** — 저장·표시·필터·알림 기준·LLM 스키마에서 모두 뺀다. 기존 DB 값은 보존하고 사용만 중단. 체크리스트 **항목**의 원문 위험도(`checklist_items.severity`, `risk-1..5`)는 공식 기준 원문 속성이라 유지(CLAUDE.md §13 원본 임의 수정 금지, A1 때 원문 위험도를 별개 개념으로 남긴 것과 같은 판단) → **G-S** | G-S, G1, G2, G3 |
+
+### G-S. Finding 심각도(severity) 제거 — P1, G1 보다 먼저 (D7)
+
+**목표**: finding 에서 심각도 개념을 없앤다. finding 은 "무엇이(분류·위치) 어떤 근거로(증거·판정 주체) 어떤
+상태인가"만 가진다. A1(도구 위험도 삭제)과 같은 방식으로 **강제·표시 로직은 지우고, 기존 데이터와 공식 기준
+원문은 보존**한다. G1 이 `vuln_class` 를 도입하므로 심각도가 하던 "분류·집계" 역할은 분류로 대체한다.
+
+**조사 결과(커밋 `fbc353c`)** — finding 심각도가 쓰이는 곳 전부:
+
+| 위치 | 현재 용도 | 처리 |
+|---|---|---|
+| `findings.severity`(0001, NOT NULL) | 저장 | NOT NULL 해제, 새 행은 쓰지 않음. 기존 값 보존 |
+| `worker._create_finding()`(worker.py:509-511) | `signals.SEVERITY[vclass]` 기록 | 컬럼 제외 |
+| `worker.create_llm_finding()`(worker.py:251-269) | 인자·INSERT | 인자·컬럼 제거 |
+| `worker._run_checklist()`(worker.py:456-459), `cli.py:392-396` | 체크리스트 FAIL → finding 에 항목 위험도 복사 | 복사 중단(원문 위험도는 `checklist_items` 에 그대로 있음) |
+| `audit/signals.py:286` `SEVERITY` | 신호 분류별 기본 심각도 | 삭제 |
+| `explore.py:45-47` `_FINDING_ITEM` | LLM 출력 스키마 required | 필드 제거 + 시스템 프롬프트 문구 정리 |
+| `explore.py:527,533` | LLM finding 생성·알림 | 인자 제거 |
+| `notify.py:47-69` `_SEVERITY_RANK`·`_passes_severity`·`notify_finding_confirmed(severity=)` | 채널별 최소 심각도 필터, 알림 본문 | 필터 폐지(확정 알림은 활성 채널 전부로), 본문에서 제거 → 본문에 `vuln_class` 추가 |
+| `schemas.py:296` `NOTIFY_CHANNEL.min_severity` | 알림 설정 검증 | **스키마에는 남기되 무시**(`additionalProperties: False` 라 지우면 기존 `notify.json` 이 검증 실패함). `doctor` 가 "min_severity 는 더 이상 쓰이지 않음" 경고 |
+| `admin_notify.py:26,62,93-105` | min_severity 조회·저장 | API 필드 제거, 저장 시 기존 키도 지움 |
+| `findings.py:20` `_EXPORT_COLS`, `findings.py:107` 알림 호출 | 내보내기 열, 알림 인자 | 열 제거(→ `vuln_class` 추가), 인자 제거 |
+| `global_views.py:16-28` | `?severity=` 필터 | 제거 → `?vuln_class=` 필터 |
+| `dashboard.py:21-23,45` `by_severity` | 확정 finding 심각도별 집계 | `by_vuln_class` 로 교체 |
+| `cli.py:517` `finding list` | `[severity]` 출력 | `[vuln_class]` 출력 |
+| `reporting.py:28` Reporter 다듬기 프롬프트 | "severity 를 추가하지 말 것" 문구 | 문구만 정리(동작 동일). 자율 탐색 보고서(`pentest_report`)는 원래 finding 심각도를 쓰지 않음 — 확인함 |
+| 웹: `lib/api.ts:103,239,466,472`, `findings/page.tsx`(필터·정렬·열), `runs/[id]/page.tsx:218,303,398-402,431,462,485`(요약·필터·정렬·열), `dashboard/page.tsx:74,104-137`, `FindingPanel.tsx:231`, `settings/NotificationsSection.tsx`(최소 심각도 선택·안내 문구), `lib/labels.ts:27-39`(`SEVERITY_ORDER`·라벨) | 표시·필터·정렬 | 심각도 열·필터·정렬 제거 → 분류(`vuln_class`) 열·필터, 정렬은 상태 → 최근 관찰 순. `SEVERITY_ORDER` 와 심각도 라벨 삭제 |
+
+**유지(지우지 않음)**
+- `checklist_items.severity` 와 `audit/importer.py:170`(`risk-1..5`), `audit/schemas.py:233` 체크리스트 항목 스키마,
+  `audit/report.py` 체크리스트 보고서의 "심각도" 열(18-19, 123, 154-155, 209, 222-227) — 전부 **공식 평가기준
+  원문 항목의 위험도**이고 finding 판정이 아니다. 체크리스트 보고서는 이 값을 `checklist_items` 에서 읽으므로
+  finding 쪽 변경과 무관하게 그대로 동작한다.
+- `findings.severity` 컬럼과 기존 값(삭제·백필 없음, 기존 데이터 보존 원칙 §11).
+
+**DB — `migrations/0028_finding_severity_retired.sql`**
+```sql
+-- D7: finding 심각도 개념 폐지. 값은 보존하고 새 행에는 쓰지 않는다(체크리스트 항목 원문 위험도는 별개, 유지).
+ALTER TABLE findings ALTER COLUMN severity DROP NOT NULL;
+COMMENT ON COLUMN findings.severity IS 'retired 2026-11 (D7): 읽기 전용 과거 값. 새 finding 은 NULL';
+```
+
+**문서**: CLAUDE.md §10 검토자 작업 목록에서 "심각도/영향도 수정" 삭제, README §4 의 `finding list` 설명·
+§2 의 `notify.json` 설명에서 심각도 언급 정리. PRODUCT.md 는 심각도 언급 없음(확인함).
+
+**테스트** — 기존 테스트 중 severity 를 쓰는 12개 파일 수정: `test_autonomous_run.py`, `test_dashboard_api.py`,
+`test_finding_review.py`, `test_findings_export.py`, `test_llm_finding.py`, `test_notify.py`(min_severity 필터 →
+"설정에 남아 있어도 무시되고 전 채널로 감" 으로 바뀜), `test_real_mcp_sqli.py`, `test_retest_verdict.py`,
+`test_rule_overlays.py`, `test_settings_menus.py`, `test_triggers.py`, fixture
+`tests/fixtures/checklist/versions/sample-local-config/0.1.0.json`(체크리스트 항목 severity 는 **유지** — 수정
+불필요할 수 있음, 확인 후 판단). 신규 `test_severity_retired.py`: 새 finding 3경로(규칙·LLM·체크리스트 FAIL)
+모두 severity NULL, 기존 행 값 보존, LLM 응답에 severity 필드가 들어 있으면 `_FINDING_ITEM` 스키마 위반으로
+거부되는지(`additionalProperties: False` 유지 확인), min_severity 가 남은 notify.json 이 검증을 통과하고 doctor
+가 경고를 내는지.
+
+**완료 기준**: `grep -rn "severity" src web/src` 결과가 체크리스트 항목 경로(`importer.py`, `report.py`,
+`schemas.py` 체크리스트·알림 deprecated 항목, `runs.py:117-120` 체크리스트 등록)만 남음 + 전체 테스트 통과 +
+브라우저에서 발견 사항 목록·실행 상세·대시보드·알림 설정에 심각도가 보이지 않는지 확인.
+
+### G1. Finding fingerprint 와 중복 제거 — P1
+
+**목표**: 같은 실행에서 같은 자산·같은 취약점 클래스·같은 주입 지점이 다시 관찰되면 새 finding 을 만들지 않고
+기존 finding 에 증거만 더한다. 실행을 가로질러서도 같은 식별자를 써서 G6 비교의 기준이 되게 한다.
+
+**fingerprint 정의**
+```
+fingerprint  = sha256( asset_id | vuln_class | METHOD | path | sorted(param_names) )   -- 자동 병합 기준
+locator_hash = sha256( asset_id |              METHOD | path | sorted(param_names) )   -- "중복 의심" 기준(D2)
+```
+- `path` 는 D1 에 따라 **쿼리스트링만 떼어 낸 원래 경로 문자열**이다. 퍼센트 인코딩도 풀지 않는다(풀면
+  `%2F` 와 `/` 가 같아지는 등 서로 다른 요청이 합쳐질 수 있음).
+- `fingerprint` 는 `vuln_class` 가 7개 신호 분류(`signals.SIGNALS`) 중 하나일 때만 만든다. `OTHER` 이거나
+  체크리스트 finding 이면 NULL.
+- `locator_hash` 는 분류와 무관하게 위치를 얻을 수 있으면 항상 만든다. 같은 위치에서 분류가 다른 finding
+  (예: OTHER 와 SQLI, 또는 OTHER 두 건)을 사람에게 "중복 의심"으로 보여 주는 용도이고, 자동 병합에는 쓰지 않는다.
+- `asset_id` 를 넣는 이유: `assets` 가 `UNIQUE(company, kind, value)`(0015)라 회사 격리가 자동으로 따라온다.
+  `run_id` 는 넣지 않는다 — 실행을 가로지르는 동일성 판단(G6)에 그대로 쓰기 위해.
+- `METHOD`/`path`/`param_names` 는 **Python 이 증거의 원 인자에서 추출**한다. LLM 이 적은
+  값은 쓰지 않는다(신뢰 경계 유지, §8-5).
+  - 원시 HTTP 요청이 있으면 `signals._raw_http_request(args)` 의 요청 줄에서 메서드·경로를 얻는다.
+  - 없으면 `args` 의 `url` 류 값에서 경로를 얻고 메서드는 `GET` 으로 둔다.
+  - `param_names` 는 `signals._INJECTION_PATTERNS` 에 걸리는 값을 가진 키 이름들(새 헬퍼, 아래).
+- 추출 실패(경로도 매개변수도 못 얻음) 시 fingerprint 는 NULL — 중복 제거 대상에서 빠지고 기존처럼 새 행.
+  "모르면 합치지 않는다"가 기본(잘못 합쳐 증거가 묻히는 쪽이 중복보다 나쁨).
+
+**DB — `migrations/0029_finding_fingerprint.sql`**
+```sql
+ALTER TABLE findings ADD COLUMN vuln_class       text;          -- SQLI/XSS/.../OTHER, 체크리스트 finding 은 NULL
+ALTER TABLE findings ADD COLUMN fingerprint      text;
+ALTER TABLE findings ADD COLUMN locator          jsonb NOT NULL DEFAULT '{}';  -- {method, path, params} 표시용
+ALTER TABLE findings ADD COLUMN occurrence_count integer NOT NULL DEFAULT 1;
+ALTER TABLE findings ADD COLUMN last_seen_at     timestamptz NOT NULL DEFAULT now();
+ALTER TABLE findings ADD COLUMN locator_hash     text;          -- D2 "중복 의심" 묶음
+-- D3: 이 finding 을 뒷받침한 근거 종류 집합. 'RULE'(결정론적 신호) | 'LLM'(LLM 주장). 사람 확정은 상태 이력에 이미 남음.
+ALTER TABLE findings ADD COLUMN evidence_kinds   text[] NOT NULL DEFAULT '{}';
+UPDATE findings SET evidence_kinds = CASE verification
+    WHEN 'RULE_CONFIRMED' THEN ARRAY['RULE'] WHEN 'LLM_CONFIRMED' THEN ARRAY['LLM'] ELSE '{}' END;
+
+-- 백필: _create_finding 이 남긴 제목 형식("탐색 기반 발견: <CLASS>")에서만 vuln_class 를 복원한다.
+-- fingerprint 는 백필하지 않는다 — 과거 행의 주입 지점을 확실히 복원할 수 없음(모르면 합치지 않음).
+UPDATE findings SET vuln_class = substring(title FROM '^탐색 기반 발견: (\w+)$')
+ WHERE run_checklist_item_id IS NULL AND title ~ '^탐색 기반 발견: \w+$';
+
+CREATE UNIQUE INDEX findings_run_fingerprint_live
+    ON findings (run_id, fingerprint) WHERE fingerprint IS NOT NULL AND duplicate_of IS NULL;
+CREATE INDEX ON findings (fingerprint) WHERE fingerprint IS NOT NULL;   -- G6 실행 간 조회용
+CREATE INDEX ON findings (run_id, locator_hash) WHERE locator_hash IS NOT NULL AND duplicate_of IS NULL;
+```
+기존 행 삭제 없음(추가 컬럼 + 제목 기반 vuln_class·verification 기반 evidence_kinds 백필만).
+`finding_evidence`/이력 테이블 무변경.
+
+**코드**
+- 새 모듈 `src/diagnostic_workbench/fingerprint.py` — DB·LLM 의존 없는 순수 함수만:
+  - `strip_query(path) -> str` (D1: 쿼리스트링 제거만, 나머지는 원문 유지)
+  - `locate(args: dict) -> dict | None` → `{"method", "path", "params"}`
+  - `compute(asset_id, vuln_class, args) -> tuple[str | None, str | None, dict]` → `(fingerprint, locator_hash, locator)`
+- `src/audit/signals.py` — `injection_params(args) -> list[str]` 추가(기존 `_INJECTION_PATTERNS`·
+  `_flatten_strings` 재사용). 기존 함수 동작 변경 없음.
+- `src/diagnostic_workbench/worker.py`
+  - 새 `upsert_exploration_finding(conn, run_id, asset_id, *, vuln_class, args, evidence_kind, insert_fn,
+    evidence_ids, actor)` (`evidence_kind` 는 `'RULE'` 또는 `'LLM'`):
+    `SELECT ... FOR UPDATE` 로 `(run_id, fingerprint, duplicate_of IS NULL)` 기존 행을 찾고,
+    - 있으면: `finding_evidence` 에 `ON CONFLICT DO NOTHING` 으로 증거 추가, `occurrence_count += 1`,
+      `last_seen_at = now()`, `finding_review_history` 에 `old=new=현재 상태`,
+      `reason='동일 지점 재관찰(증거 N건 추가, 근거 종류 <kind>)'`, `actor='system:dedup'` 1행.
+      REJECTED 가 아니면 **상태는 바꾸지 않는다.**
+    - 기존 행이 REJECTED 면 D3 규칙:
+      - `evidence_kind ∉ evidence_kinds` (사람이 기각할 때 없던 종류의 근거) → 기존
+        `set_finding_status(..., 'NEEDS_REVIEW', reason='기각 후 새 종류 근거(<kind>) 관찰 — 재검토 필요',
+        actor='system:dedup')` 로 재오픈(이력은 그 함수가 남김), 감사 이벤트 `finding_reopened_new_evidence_kind`,
+        새 `notify.notify_finding_reopened()`(기존 `notify_finding_confirmed` 와 같은 웹훅 채널 재사용. 심각도
+        필터는 G-S 로 폐지돼 활성 채널 전부로 감).
+      - `evidence_kind ∈ evidence_kinds` (사람이 이미 본 종류) → REJECTED 유지, 위 재관찰 이력 + 감사 이벤트
+        `finding_reobserved_after_reject` 만.
+      - 재오픈 뒤 다시 기각되면, 그때는 두 종류 모두 `evidence_kinds` 에 들어 있으므로 같은 근거로 또 열리지 않는다
+        (같은 오탐이 기각할 때마다 다시 열리는 루프 방지).
+    - 어느 분기든 끝에 `evidence_kinds = evidence_kinds ∪ {evidence_kind}`.
+    - D3b: 이 함수는 **같은 run_id 안에서만** 찾는다. 다른 실행의 같은 fingerprint 는 조회하지도 참조하지도 않는다.
+    - 없으면: 기존 INSERT 경로를 그대로 타고 새 컬럼만 채운다. 동시 삽입 경합은 부분 UNIQUE 인덱스가
+      막으므로 `UniqueViolation` 시 재조회 후 "있으면" 분기로 한 번만 재시도.
+  - `_create_finding()`: 위 함수 경유로 변경(`vuln_class` 는 이미 인자로 받음, args 는 `it` 의 호출 인자).
+  - `create_llm_finding()`: `vuln_class` 인자 추가. 주입 지점은 **인용한 첫 증거의 `evidence.args`** 에서
+    추출. `vuln_class == 'OTHER'` 면 D2 대로 fingerprint NULL(자동 병합 안 함) — 이때도 `locator_hash` 는 채운다.
+    G2(교차 검증)가 붙으면 이 경로의 `evidence_kind` 는 `'LLM'` 그대로다(교차 검증은 판정 상태만 바꿈).
+- 중복 의심 조회(D2) — `findings.py`
+  - 목록 응답에 finding 별 `suspected_duplicates`(같은 run·같은 `locator_hash`·`duplicate_of IS NULL`·자기 자신
+    제외 건수)를 붙인다. 자동 병합(fingerprint 일치)된 것은 이미 한 행이라 여기 나오지 않는다.
+  - `GET /runs/{run}/findings/{id}/similar` → 그 후보 목록(제목·분류·상태·증거 수).
+- `src/diagnostic_workbench/explore.py` — `_FINDING_ITEM` 스키마에 `"vuln_class": {"enum": [*signals.SIGNALS, "OTHER"]}`
+  를 required 로 추가, `_report_llm_finding()` 이 그대로 넘김. 시스템 프롬프트에 한 줄 설명 추가.
+- 수동 병합/해제 — `src/webapi/routers/findings.py`
+  - `POST /runs/{run}/findings/{id}/merge` `{into, reason}`: 같은 run, 대상이 자신이 아님, 대상이 이미
+    중복이 아님(체인 금지)을 확인. `duplicate_of=into` 설정, 원본의 증거를 대상에도 링크(원본 링크는
+    보존), 양쪽 `finding_review_history` 에 기록, 감사 이벤트 `finding_merged`.
+  - `POST /runs/{run}/findings/{id}/unmerge` `{reason}`: `duplicate_of=NULL`, 이력 기록. 증거 링크는 되돌리지
+    않는다(추가만 하는 원칙).
+- 목록·보고서에서 중복 제외: `findings.py` 목록과 `global_views.py` `/api/findings` 에 `include_duplicates`
+  (기본 false), `reporting._findings_for_pentest_report()`(reporting.py:259) 조건에 `AND f.duplicate_of IS NULL`.
+
+**UI** — `FindingPanel.tsx`: 위치(locator)·발생 횟수·최근 관찰 시각·근거 종류(규칙/LLM) 표시, "다른
+finding 으로 병합" 선택 상자(같은 `locator_hash` 후보를 맨 위에), 병합된 finding 은 목록에서 기본 숨김 +
+"중복 N건" 배지. 목록 행에 `suspected_duplicates > 0` 이면 "⚠ 중복 의심 N건" 배지(텍스트 포함, 색만으로
+구분하지 않음) — 클릭하면 후보 목록과 "이 finding 으로 병합" 버튼. D3 로 재오픈된 finding 은 "기각 후 재관찰"
+배지와 재오픈 사유를 상단에 표시.
+
+**테스트**
+- 신규 `tests/unit/test_finding_fingerprint.py`: 쿼리 제거, **경로는 원문 유지**(`/user/1` ≠ `/user/2`,
+  `/Admin` ≠ `/admin`, `/a/` ≠ `/a`, `%2F` 미해석), 원시 HTTP 요청·url 인자 양쪽, 매개변수 순서 무관성,
+  OTHER 면 fingerprint None·locator_hash 있음, 추출 실패 시 둘 다 None.
+- 신규 `tests/unit/test_finding_dedup_db.py`: 같은 신호 2회 → finding 1행·증거 2건·occurrence 2·이력 1행 추가;
+  다른 매개변수 → 2행; 다른 실행 → 각각 1행이지만 같은 fingerprint, 서로 참조 없음(D3b);
+  OTHER 두 건 같은 위치 → 2행·서로 `suspected_duplicates=1`; 병합/해제 API; 보고서 대상에서 중복 제외.
+- D3 전용 `tests/unit/test_finding_reject_reobserve.py`:
+  LLM 근거로 생긴 finding 기각 → RULE 신호 재관찰 → NEEDS_REVIEW·이력·감사 이벤트·알림 1회;
+  RULE finding 기각 → 같은 RULE 재관찰 → REJECTED 유지·알림 없음;
+  재오픈 후 다시 기각 → RULE·LLM 어느 쪽 재관찰에도 다시 열리지 않음.
+- 수정: `test_signal_promotion_db.py`, `test_sqli_boolean_diff_db.py`, `test_llm_finding.py`(vuln_class 인자).
+
+**완료 기준**: 위 테스트 PASS + 기존 전체 테스트 회귀 없음 + 실제 Burp/Playwright 로 같은 엔드포인트를 두 번
+찌르는 로컬 실행에서 finding 1건으로 남는지 브라우저로 확인.
+
+### G2. LLM 판정 교차 검증 게이트 — P1
+
+**목표**: LLM 이 제안한 finding 은 **다른 모델이 같은 증거를 독립적으로 보고 동의할 때만** `LLM_CONFIRMED`.
+의견이 갈리거나 검증 모델이 실패하면 `NEEDS_REVIEW` 로 사람에게 넘긴다. 정책 코드는 새로 만들지 않는다 —
+`create_llm_finding()` 의 상태 결정만 바꾼다.
+
+**DB — `migrations/0030_llm_cross_check.sql`**
+```sql
+-- 실행 생성 시 고정(autonomy·llm_profile_name 과 같은 방식). NULL = 교차 검증 안 함(D4: 현행 동작).
+ALTER TABLE runs ADD COLUMN verifier_model text;
+
+-- 단일 모델 제안 상태(사람 검토 대기)를 구분하는 판정 주체 값 추가.
+ALTER TABLE findings DROP CONSTRAINT findings_verification_check;
+ALTER TABLE findings ADD CONSTRAINT findings_verification_check CHECK (
+    verification IN ('RULE_CONFIRMED', 'REVIEWER_CONFIRMED', 'LLM_CONFIRMED', 'LLM_PROPOSED'));
+
+-- 모델별 판정 기록(추가 전용). LLM 성능 비교(판정 일치율)의 원천 데이터도 된다.
+CREATE TABLE finding_llm_votes (
+    id           bigserial PRIMARY KEY,
+    finding_id   uuid NOT NULL REFERENCES findings(id),
+    model        text NOT NULL,
+    stage        text NOT NULL CHECK (stage IN ('proposer', 'verifier')),
+    verdict      text NOT NULL CHECK (verdict IN ('CONFIRMS', 'REFUTES', 'INSUFFICIENT', 'ERROR')),
+    rationale    text NOT NULL DEFAULT '',
+    evidence_ids uuid[] NOT NULL DEFAULT '{}',
+    model_call_id bigint REFERENCES model_calls(id),
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE TRIGGER finding_llm_votes_append_only BEFORE UPDATE OR DELETE ON finding_llm_votes
+    FOR EACH ROW EXECUTE FUNCTION forbid_change();
+```
+
+**흐름 (`worker.create_llm_finding` 재구성)**
+1. 기존과 동일하게 인용 증거 실존 확인 → 하나도 없으면 기록 안 함.
+2. `run.verifier_model` 이 NULL 이면 현행 그대로(`LLM_CONFIRMED`/`CONFIRMED`) + proposer 표 1행만 기록.
+3. 있으면 finding 을 먼저 `LLM_PROPOSED`/`NEEDS_REVIEW` 로 INSERT(G1 upsert 경유) → proposer 표 기록 →
+   새 `explore.verify_llm_finding(ctx, finding, evidence_ids)` 호출:
+   - 모델: `explore.make_llm_for_spec(ctx, run.verifier_model)` 재사용(신규 클라이언트 코드 없음).
+   - 입력: 주장(`vuln_class`, `title`, 대상, locator)과 인용 증거 본문(`evidence.read_bytes`, 길이 제한,
+     `mask_secrets` 적용). **1차 모델의 rationale 은 주지 않는다** — 앵커링을 줄여 독립 판정에 가깝게.
+     증거 본문은 신뢰 불가 데이터로 감싸 전달(§8-5, 기존 프롬프트의 데이터 경계 표기 재사용).
+   - 출력 스키마 `LLM_VERIFY`: `{verdict: CONFIRMS|REFUTES|INSUFFICIENT, rationale, evidence_ids}`.
+     Python 이 `evidence_ids ⊆ 제공한 증거` 를 확인, 아니면 `INSUFFICIENT` 로 취급.
+   - `CONFIRMS` → `UPDATE ... verification='LLM_CONFIRMED', status='CONFIRMED'` + 이력
+     (`actor='llm:<proposer>+llm:<verifier>'`) + 기존 `notify_finding_confirmed`.
+   - 그 외/`LLMError` → 상태 유지(NEEDS_REVIEW), 이력에 사유. 알림 없음.
+4. 감사 이벤트 `llm_finding_cross_checked {finding_id, proposer, verifier, verdict}`.
+
+**제약 검증 (`src/webapi/routers/runs.py` 생성 API, `cli.py run create --verifier`)**: 검증 모델 spec 이
+proposer(planner 역할 모델)와 같으면 422 — 같은 모델 두 번은 교차 검증이 아니다. 모델 존재 여부는
+`llm-profiles --check` 와 같은 경로로 확인.
+
+**프롬프트**: `prompts.py` 의 analyst 역할 그룹(prompts.py:148)에 `verifier_system` 등록 → 기존 프롬프트
+편집·버전 이력(0021) 화면에서 그대로 수정 가능.
+
+**UI**: `runs/new` 에 "교차 검증 모델(선택)" 선택 상자(기존 역할별 모델 선택 컴포넌트 재사용). D4 에 따라
+비워 두면 막지는 않되, 선택 상자 아래에 "교차 검증 없음 — LLM 이 혼자 낸 finding 도 바로 확정됩니다"를
+텍스트로 표시하고, 실행 상세 요약에도 "교차 검증: 없음/모델명"을 보여 준다(선택 사실을 숨기지 않음).
+`FindingPanel.tsx` 에 모델별 표(제안/검증, 판정, 근거, 인용 증거) 표시. 상태 배지에 `LLM_PROPOSED` 를
+"단일 모델 제안"으로 표기(PRODUCT.md: 화면 용어 한국어 통일).
+
+**테스트**: 신규 `tests/unit/test_llm_cross_check.py` — 가짜 LLM 두 개로 동의/반박/불충분/예외/인용 위조
+각각의 상태·이력·표·알림 여부; verifier NULL 이면 기존 동작과 완전히 같음(기존 `test_llm_finding.py` 무변경
+통과로 확인); 같은 모델 지정 시 422.
+
+### G3. 검토자 편집(제목·근거·대응방안)과 수정 이력 — P1
+
+**목표**: CLAUDE.md §10 의 미구현 요구사항. 원문은 지우지 않고, 누가 언제 왜 무엇을 바꿨는지 모두 남긴다.
+편집 대상은 **제목·근거(rationale)·대응방안(remediation) 세 필드뿐**이다 — 심각도는 G-S(D7)로 개념이
+없어졌고, 영향도는 D5 로 만들지 않는다.
+"Report Studio"(브라우저 Word 미리보기·페이지 편집)는 docx 렌더링 비용 대비 효과가 낮아 채택하지 않고,
+**보고서에 들어갈 내용 자체를 DB 에서 고치는 것**으로 같은 목적을 달성한다.
+
+**DB — `migrations/0031_finding_revisions.sql`**
+```sql
+CREATE TABLE finding_revisions (
+    id          bigserial PRIMARY KEY,
+    finding_id  uuid NOT NULL REFERENCES findings(id),
+    field       text NOT NULL CHECK (field IN ('title', 'rationale', 'remediation')),
+    old_value   text NOT NULL,
+    new_value   text NOT NULL,
+    reason      text NOT NULL,
+    actor       text NOT NULL,
+    changed_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE TRIGGER finding_revisions_append_only BEFORE UPDATE OR DELETE ON finding_revisions
+    FOR EACH ROW EXECUTE FUNCTION forbid_change();
+ALTER TABLE findings ADD COLUMN human_edited boolean NOT NULL DEFAULT false;
+```
+(D5: 영향도는 만들지 않는다. 나중에 템플릿에 칸이 생기면 새 마이그레이션으로 `findings.impact` 컬럼과 CHECK
+값을 추가 — 적용된 이 파일은 고치지 않는다.)
+
+**코드**
+- `worker.py` 에 `edit_finding(conn, finding_id, changes: dict, reason, *, actor)`: 행 잠금 → 바뀐 필드만
+  `finding_revisions` 에 1행씩 → `findings` 갱신 + `human_edited=true` → 감사 이벤트 `finding_edited`.
+  `reason` 빈 문자열 거부. 값이 같으면 기록하지 않음.
+- `changes` 에 세 필드 외의 키(예: 과거 습관대로 보낸 `severity`)가 있으면 422 로 거부 — 조용히 무시하지 않는다.
+- API: `POST /runs/{run}/findings/{id}/edit` `{changes, reason}`, `GET .../revisions`.
+- CLI: `finding edit <run> <id> [--title ..] [--rationale-file ..] [--remediation-file ..] --reason .. --editor ..`
+  (CLI 단독 동작 유지).
+- 보고서: `reporting._polish_finding_text()`(Reporter 에이전트 다듬기)는 `human_edited=true` 인 finding 은
+  **건너뛴다** — 사람이 확정한 문장을 LLM 이 다시 바꾸지 않게. 보고서 notes 에 "검토자 수정 반영" 표기.
+- D6(편집 허용 + 경고): 승인된 보고서 파일마다, 그 승인 시각(`audit_events.event='report_approved'`,
+  runs.py:592-602 가 이미 읽는 값) 이후에 그 실행의 `finding_revisions` 가 있으면 `GET .../report` 응답에
+  `stale: true` 와 `edited_after_approval: <건수>`. 편집 자체는 막지 않는다. 승인 기록은 감사 이벤트라 지우거나
+  되돌리지 않는다(재생성한 새 파일을 다시 승인하는 흐름).
+  UI(`ReportTab`): 해당 파일 옆에 "⚠ 승인 이후 finding N건 편집됨 — 재생성 필요" 텍스트 배지.
+
+**UI**: `FindingPanel.tsx` 에 편집 모드(필드별 원문/현재값 비교, 사유 필수 입력), "수정 이력" 목록.
+PRODUCT.md 원칙 3 에 따라 편집 화면 옆에 연결된 증거 목록을 함께 둔다.
+
+**테스트**: 신규 `tests/unit/test_finding_edit.py` — 필드별 이력, 사유 누락 거부, 허용 밖 필드(`severity` 등)
+거부, 이력 테이블 UPDATE/DELETE 거부(트리거), 다듬기 건너뛰기, 승인 후 편집 시 편집은 성공하고 stale·건수 표시,
+승인 전 편집은 stale 아님. `test_report_api.py` 보강.
+
+### G4. 실행 상세 화면 분리(동작 변경 없음) — P2, G5 착수 전 선행
+
+- `web/src/app/(main)/runs/[id]/page.tsx`(1,444줄)의 탭 컴포넌트(`FindingsTab`, `BacklogTab`, `EvidenceTab`,
+  `AssetsTab`, `TriggersTab`+`NewTriggerForm`, `GraphTab`, `TrafficTab`, `ChatTab`, `ActivityTab`,
+  `ServerLogTab`, `ReportTab`)를 `runs/[id]/_tabs/<이름>.tsx` 로 옮기고, `RunControls`/`DeletedBanner`/
+  `Summary` 는 `runs/[id]/_parts/` 로. `page.tsx` 에는 탭 전환과 폴링만 남긴다.
+- 순수 이동만 한다 — 문구·스타일·폴링 주기(4초/2초)·API 호출 변경 금지. 이동과 기능 변경을 한 커밋에 섞지 않는다.
+- 완료 기준: `npm run lint`, `npm run build` 통과 + 브라우저로 탭 11개 각각 열어 이전과 같은지 확인.
+
+### G5. 증거 출처 체인과 전역 자산 화면 — P2
+
+**G5-a. 증거 출처 체인** — 새 마이그레이션 없음(기존 외래키로 모두 연결됨).
+- `GET /api/runs/{run}/evidence/{id}/provenance` → 한 응답에:
+  `evidence` ← `tool_invocations.evidence_id`(도구·마스킹된 인자·정책 판정·사유) ← `backlog_items`(작업 사유)
+  ← `exploration_nodes`(+`exploration_edges` 를 goal 까지 거슬러 올라감, 노드별 origin: llm/trigger/enrich/worker)
+  → `finding_evidence` → `findings`(+ G2 의 표). 노드마다 `kind: "observed" | "inferred"` 를 붙인다:
+  증거·도구 호출·규칙 판정 = observed, LLM 제안 rationale·LLM finding = inferred.
+- UI: 증거 뷰어 옆 패널에 세로 체인으로 표시. observed/inferred 를 색과 **텍스트 라벨 둘 다**로 구분
+  (PRODUCT.md 원칙 1, 접근성: 색에만 의존하지 않음).
+- 테스트: `test_evidence_provenance_api.py` — 탐색 경로/트리거 경로/재검증 경로 각각 체인이 끊기지 않는지.
+
+**G5-b. 전역 자산 화면** — 새 마이그레이션 없음.
+- `GET /api/assets?company=&kind=&q=` : 자산별 관찰 실행 수(`run_assets`), 상태별 finding 수(중복 제외),
+  최근 관찰 시각, `verification`(SCOPE_DECLARED/OBSERVED/UNVERIFIED).
+- `GET /api/assets/{id}` : `asset_edges` 양방향, 실행 이력, 실행별 finding 목록(fingerprint 기준 묶음).
+- 프론트: `/assets`(표 + 필터), `/assets/[id]`(상세 + 관계 목록). 기존 `GraphTab` 그래프 컴포넌트를 재사용해
+  자산 중심 1-hop 그래프. 사이드바 "작업" 그룹에 "자산" 추가.
+- 범위 밖(이번에 안 함): OS·기술 스택 구조화 저장 — 현재 담을 구조화된 자리가 없어 별도 설계가 필요.
+
+### G6. 실행 간 비교(신규·지속·미재현) — P2, G1 의존
+
+- `GET /api/compare?base=<run>&head=<run>` — 두 실행의 자산 company 가 다르면 422.
+  `fingerprint` 로 묶어 분류:
+  | 분류 | 조건 |
+  |---|---|
+  | 신규 | head 에만 있음 |
+  | 지속 | 양쪽에 있음(중복 제외 행 기준) |
+  | 미재현(조치 추정) | base 에만 있고, head 에 같은 locator 를 겨눈 **실제 증거**가 있으며 신호가 뜨지 않았거나 재검증 결과가 FIXED |
+  | 이번 실행에서 미확인 | base 에만 있고, head 에 그 locator 를 겨눈 증거가 없음 |
+  | 재발 | base 에서 REJECTED 가 아니라 FIXED 재검증 이력이 있었는데 head 에서 다시 관찰 |
+- **"조치 완료"라고 단정하지 않는다** — 관찰되지 않음은 고쳐졌다는 증거가 아니다(`_resolve_retest` docstring 과
+  같은 원칙, CLAUDE.md §15 "확인하지 않은 것을 확인했다고 하지 않음"). 그래서 "미재현(조치 추정)"과
+  "미확인"을 반드시 분리한다.
+- fingerprint 가 NULL 인 finding(과거 행, OTHER)은 "비교 불가" 묶음으로 따로 보여 주고 자동 분류하지 않는다.
+- 프론트: `/runs/compare`(실행 2개 선택 → 분류별 표), 자산 상세(G5-b)에서 "이 자산의 실행 비교" 바로가기.
+- 보고서 연계(선택, 후속): 재진단 보고서에 분류 표를 넣는 것은 회사 템플릿 확인 후 별도 결정.
+- 테스트: `test_run_compare_api.py` — 분류 5종, 회사 불일치 거부, NULL fingerprint 처리.
+
+### G7. 보류 항목 (사유 기록)
+
+| 항목 | 보류 사유 | 재검토 조건 |
+|---|---|---|
+| AI 진단 지식베이스 | 과거 사실이 Planner 입력에 섞이면 관찰/추론·현재/과거 구분이 흐려짐(§3, §9) | 출처 꼬리표("과거 실행 X 의 관찰") + finding 인용 금지를 Python 에서 강제하는 설계가 먼저 나올 때 |
+| 보고서 WYSIWYG(브라우저 Word 편집) | docx 렌더링 비용 큼, G3 로 내용 편집 목적 대부분 충족 | 템플릿이 여러 회사로 늘어 서식 선택이 실제 병목이 될 때 |
+| LLM 성능 센터(별도 메뉴) | 원천(`model_calls`)이 이미 있어 대시보드 카드로 충분. 판정 일치율은 G2 의 `finding_llm_votes` 이후에야 측정 가능 | G2 운영 데이터가 쌓인 뒤 대시보드에 모델별 지연·실패율·일치율 카드 추가 |
+| 자율 탐색 하드 예산 | §5/§8-10 결정과 충돌 | 사용자가 정책을 바꿀 때만. 필요 시 기본 꺼짐 소프트 경고로만 |
+| 명령 팔레트·저장된 검색·진단 템플릿 | 1~소수 사용자 로컬 도구에서 체감 효과 작음 | 사용 중 반복 불편이 실제로 보고될 때 |
+| 메뉴 26개 재편 | 화면 수만 늘림. 현재 사이드바(B1)에 G5/G6 항목만 추가 | — |
+
+### G8. 작업 순서
+
+| 순서 | 작업 | 마이그레이션 | 선행 조건 |
+|---|---|---|---|
+| 0 | G-결정 D1~D7 전부 확정 — **완료(2026-11-13)** | — | — |
+| 1 | G-S finding 심각도 제거 | 0028 | 0 |
+| 2 | G1 fingerprint·중복 제거 | 0029 | 1(새 INSERT 경로에 severity 를 넣지 않도록) |
+| 3 | G2 교차 검증 게이트 | 0030 | 2(upsert 경유) |
+| 4 | G3 검토자 편집 | 0031 | 1 (2·3 과 병렬 가능, FindingPanel 충돌만 주의) |
+| 5 | G4 실행 상세 분리 | — | 1 이후 권장(심각도 UI 제거가 같은 파일을 크게 건드림) |
+| 6 | G5 출처 체인·전역 자산 | — | 4, 5 |
+| 7 | G6 실행 비교 | — | 2 |
+
+각 단계는 CLAUDE.md §16 형식(PASS/FAIL/NOT CHECKED/BLOCKED/PARTIAL)으로 보고하고, 이 섹션의 해당 항목에
+"구현 완료(날짜)"와 실제로 바뀐 점(계획과 달라진 부분 포함)을 덧붙인다. 적용된 마이그레이션은 수정하지 않고
+번호를 새로 추가한다(README §8).
