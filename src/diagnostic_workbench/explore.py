@@ -239,6 +239,24 @@ def make_llm_for_spec(ctx, spec: str | None):
     return llm
 
 
+def _tools_text(tools: dict, dump, limit: int = 6000) -> str:
+    """TOOLS 블록을 글자수 예산 안에서 도구 단위로 자른다(문자열 중간 절단 대신). mcp:* 도구는
+    로컬에 등록된 외부 MCP 서버 수에 따라 args_schema 가 매우 커질 수 있어(§8 하드리밋) 내장 도구
+    (shell.*, tls.*, net.* 등)를 항상 먼저 넣고, 남는 예산만큼만 mcp:* 도구를 채운다 — 그래야
+    예산을 넘겼을 때도 shell.* 처럼 승인 경로가 걸린 핵심 도구가 통째로 안 보이는 일이 없다."""
+    ordered = sorted(tools.items(), key=lambda kv: kv[0].startswith("mcp:"))
+    included: dict = {}
+    omitted = 0
+    for name, spec in ordered:
+        candidate = {**included, name: spec}
+        if len(dump(candidate)) > limit and included:
+            omitted += 1
+            continue
+        included = candidate
+    text = dump(included)
+    return text if not omitted else text[:-1] + f', "...": "{omitted}개 도구 생략(글자수 예산 초과)"}}'
+
+
 def _context(ctx) -> tuple[str, set[str]]:
     conn, run_id = ctx.conn, ctx.run["id"]
     results = conn.execute(
@@ -291,7 +309,7 @@ def _context(ctx) -> tuple[str, set[str]]:
         "GOAL: " + dump(goals[0]["payload"].get("text", "") if len(goals) == 1
                         else [g["payload"] for g in goals] if goals else ""),
         "TARGETS: " + dump({ctx.target_ids[a]: f"{t.type}:{t.value}" for a, t in ctx.targets.items()}),
-        "TOOLS: " + dump(tools)[:6000],
+        "TOOLS: " + _tools_text(tools, dump),
         "QUESTIONS (OPEN = 아직 답변 없음 — 새로 묻지 말 것, ANSWERED = 사람이 답변함 — 참고해서 진행): " +
         dump([{"id": str(q["id"]), "state": q["state"], **q["payload"]} for q in questions]),
         # 가장 최근 사실을 맨 앞에 따로 둔다 — 이게 이번 라운드를 깨운 이유이므로 우선 인용 대상이다
