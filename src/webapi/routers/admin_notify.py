@@ -23,7 +23,6 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 class ChannelBody(BaseModel):
     url: str | None = None
     enabled: bool | None = None
-    min_severity: str | None = None  # "" 를 보내면 필터 지움(전부 보냄), None 이면 그대로 둠
     confirm: bool = False
     confirm_external: bool = False
 
@@ -58,8 +57,7 @@ def _check_url(url: str) -> str:
 
 def _channel_rows(cfg) -> list[dict]:
     return [{"name": c["name"], "kind": c["kind"], "enabled": c.get("enabled", True), "source": c["source"],
-             "url_masked": _mask(c["url"]), "external": not _is_internal(c["url"]),
-             "min_severity": c.get("min_severity")}
+             "url_masked": _mask(c["url"]), "external": not _is_internal(c["url"])}
             for c in notify.load_all_channels(_file(cfg, "notify.json"))]
 
 
@@ -90,10 +88,7 @@ def put_notification(name: str, body: ChannelBody, cfg=Depends(get_cfg), conn=De
     changes_target = (cur is None) or (body.url is not None and url != cur["url"]) or (enabled and not cur.get("enabled", True))
     if enabled and changes_target and not _is_internal(url) and not body.confirm_external:
         raise HTTPException(400, "외부 주소로 진단 결과 알림이 전송됩니다. 별도 확인(confirm_external)이 필요합니다")
-    min_severity = (cur or {}).get("min_severity") if body.min_severity is None else (body.min_severity or None)
-    entry = {"name": name, "kind": "webhook", "url": url, "enabled": enabled}
-    if min_severity:
-        entry["min_severity"] = min_severity
+    entry = {"name": name, "kind": "webhook", "url": url, "enabled": enabled}  # min_severity 폐지(D7) — 저장 시 지움
     doc = _local_doc(cfg)
     doc["channels"] = [c for c in doc["channels"] if c["name"] != name] + [entry]
     errs = schemas.validate(doc, schemas.NOTIFY_CHANNELS)
@@ -102,7 +97,7 @@ def put_notification(name: str, body: ChannelBody, cfg=Depends(get_cfg), conn=De
     _write_json(cfg, _file(cfg, "notify.local.json"), doc)
     # 주소 자체는 비밀이라 감사 로그에는 마스킹한 값만 남긴다
     _audit(conn, user, "admin_notification_changed", {"channel": name, "enabled": enabled, "url": _mask(url),
-                                                       "min_severity": min_severity, "created": cur is None})
+                                                       "created": cur is None})
     return _channel_rows(get_cfg())
 
 

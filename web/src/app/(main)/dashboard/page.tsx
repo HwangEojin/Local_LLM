@@ -6,7 +6,7 @@ import Link from "next/link";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Banner, Card, Empty, SkeletonRows } from "@/components/ui";
 import { api, AuditEvent, DashboardData, FindingWithRun } from "@/lib/api";
-import { describe, formatTime, SEVERITY_ORDER } from "@/lib/labels";
+import { describe, formatTime } from "@/lib/labels";
 import { usePolling } from "@/lib/usePolling";
 
 const TOTAL_LABEL: Record<keyof DashboardData["totals"], string> = {
@@ -71,7 +71,6 @@ function NeedsReviewPanel({ items }: { items: FindingWithRun[] | null }) {
         <li key={f.id}>
           <Link href="/findings" className="flex items-center gap-3 px-1 py-2 hover:bg-raised">
             <span className="truncate">{f.title}</span>
-            <StatusBadge value={f.severity} />
             <span className="ml-auto shrink-0 font-mono text-xs text-faint">{f.run_code}</span>
           </Link>
         </li>
@@ -101,8 +100,6 @@ function DashboardBody() {
   if (!data) return <main className="mx-auto w-full max-w-6xl p-6"><SkeletonRows rows={4} /></main>;
 
   const statusMax = Math.max(1, ...data.by_status.map((r) => r.n));
-  const severityMax = Math.max(1, ...data.by_severity.map((r) => r.n));
-  const severityByKey = Object.fromEntries(data.by_severity.map((r) => [r.severity, r.n]));
 
   return (
     <main className="mx-auto w-full max-w-6xl space-y-6 p-6">
@@ -117,28 +114,16 @@ function DashboardBody() {
         ))}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card className="space-y-3 p-4">
-          <h2 className="text-sm font-medium text-ink">실행 상태별</h2>
-          {data.by_status.length === 0 ? (
-            <Empty title="실행 기록이 없습니다" />
-          ) : (
-            data.by_status.map((r) => (
-              <Bar key={r.status} label={describe(r.status).label} n={r.n} max={statusMax} tone="var(--accent)" />
-            ))
-          )}
-        </Card>
-        <Card className="space-y-3 p-4">
-          <h2 className="text-sm font-medium text-ink">확정 발견 사항(심각도별)</h2>
-          {data.by_severity.length === 0 ? (
-            <Empty title="확정된 발견 사항이 없습니다" />
-          ) : (
-            SEVERITY_ORDER.filter((s) => severityByKey[s]).map((s) => (
-              <Bar key={s} label={describe(s).label} n={severityByKey[s] ?? 0} max={severityMax} tone="var(--danger)" />
-            ))
-          )}
-        </Card>
-      </div>
+      <Card className="space-y-3 p-4">
+        <h2 className="text-sm font-medium text-ink">실행 상태별</h2>
+        {data.by_status.length === 0 ? (
+          <Empty title="실행 기록이 없습니다" />
+        ) : (
+          data.by_status.map((r) => (
+            <Bar key={r.status} label={describe(r.status).label} n={r.n} max={statusMax} tone="var(--accent)" />
+          ))
+        )}
+      </Card>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Card className="space-y-3 p-4">

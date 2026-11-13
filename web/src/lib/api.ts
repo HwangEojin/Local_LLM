@@ -100,7 +100,6 @@ export type Finding = {
   run_id: string;
   asset_id: string;
   title: string;
-  severity: string;
   status: string;
   rationale: string;
   remediation: string;
@@ -236,7 +235,6 @@ export type Question = {
 
 export type DashboardData = {
   by_status: { status: string; n: number }[];
-  by_severity: { severity: string; n: number }[];
   totals: { runs: number; evidence: number; findings: number; assets: number };
   recent_runs: { id: string; run_code: string; status: string; operator: string; created_at: string; findings_count: number }[];
   token_daily: { day: string; tokens: number; calls: number }[];
@@ -463,13 +461,12 @@ export type NotificationChannel = {
   source: "shared" | "local";
   url_masked: string;
   external: boolean;
-  min_severity: string | null;
 };
 export type NotificationHistoryEntry = {
   id: number;
   ts: string;
   event: "notification_sent" | "notification_failed";
-  details: { channel?: string; finding_id?: string; detail?: string; severity?: string };
+  details: { channel?: string; finding_id?: string; detail?: string };
   run_code: string | null;
 };
 

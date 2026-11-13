@@ -95,8 +95,8 @@ class CreateRunWithoutChecklist(unittest.TestCase):
                               checklist_id=None, use_llm=True)
         asset_id = self.conn.execute("SELECT asset_id FROM run_assets WHERE run_id=%s", (run["id"],)).fetchone()["asset_id"]
         self.conn.execute(
-            "INSERT INTO findings (run_id, asset_id, title, severity, rationale, remediation, verification) "
-            "VALUES (%s,%s,'테스트 발견 사항','high','신호 일치로 확정됨','패치 적용','RULE_CONFIRMED')",
+            "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification) "
+            "VALUES (%s,%s,'테스트 발견 사항','신호 일치로 확정됨','패치 적용','RULE_CONFIRMED')",
             (run["id"], asset_id))
         self.conn.execute("UPDATE runs SET status='COMPLETED', ended_at=now() WHERE id=%s", (run["id"],))
         self.conn.commit()

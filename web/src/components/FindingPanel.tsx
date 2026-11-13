@@ -228,7 +228,6 @@ export function FindingPanel({
         <div>
           <h2 className="text-base font-semibold leading-snug">{f.title}</h2>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <StatusBadge value={f.severity} />
             <StatusBadge value={f.status} />
             <span className="text-xs text-muted">{VERIFICATION_LABEL[f.verification] ?? f.verification}</span>
           </div>

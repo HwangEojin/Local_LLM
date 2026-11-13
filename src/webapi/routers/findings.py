@@ -17,7 +17,7 @@ from ..deps import current_user, get_cfg, get_conn
 router = APIRouter(prefix="/api/runs/{run_ref}/findings", tags=["findings"])
 
 _load_run = deps.load_run
-_EXPORT_COLS = ("title", "severity", "status", "verification", "asset_id", "rationale", "remediation",
+_EXPORT_COLS = ("title", "status", "verification", "asset_id", "rationale", "remediation",
                 "reviewed_by", "reviewed_at", "review_reason", "created_at")
 
 
@@ -104,7 +104,7 @@ def review_finding(run_ref: str, finding_ref: str, body: ReviewBody,
     wb_db.audit(conn, run["id"], "finding_status_changed",
                {"finding_id": str(f["id"]), "old": old_status, "new": body.status, "reviewer": user})
     if body.status == "CONFIRMED":
-        notify.notify_finding_confirmed(conn, cfg, run["id"], f["id"], title=f["title"], severity=f["severity"],
+        notify.notify_finding_confirmed(conn, cfg, run["id"], f["id"], title=f["title"],
                                         actor=f"reviewer:{user}")
     conn.commit()
     return {"id": str(f["id"]), "old_status": old_status, "new_status": body.status}

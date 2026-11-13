@@ -18,9 +18,6 @@ _SCOPE = "r.deleted_at IS NULL AND r.operator NOT ILIKE 'pytest%%'"
 def get_dashboard(conn=Depends(get_conn), user: str = Depends(current_user)):
     by_status = conn.execute(
         f"SELECT status, count(*) AS n FROM runs r WHERE {_SCOPE} GROUP BY status").fetchall()
-    by_severity = conn.execute(
-        f"SELECT f.severity, count(*) AS n FROM findings f JOIN runs r ON r.id=f.run_id "
-        f"WHERE {_SCOPE} AND f.status='CONFIRMED' GROUP BY f.severity").fetchall()
     totals_and_recent = conn.execute(
         f"SELECT (SELECT count(*) FROM runs r WHERE {_SCOPE}) AS runs, "
         f"(SELECT count(*) FROM evidence e JOIN runs r ON r.id=e.run_id WHERE {_SCOPE} AND e.success) AS evidence, "
@@ -42,5 +39,5 @@ def get_dashboard(conn=Depends(get_conn), user: str = Depends(current_user)):
         f"SELECT count(*) AS calls, sum(coalesce(mc.prompt_tokens,0) + coalesce(mc.completion_tokens,0)) AS tokens, "
         f"count(*) FILTER (WHERE NOT mc.ok) AS failed FROM model_calls mc JOIN runs r ON r.id=mc.run_id "
         f"WHERE {_SCOPE}").fetchone()
-    return {"by_status": by_status, "by_severity": by_severity, "totals": totals_and_recent,
+    return {"by_status": by_status, "totals": totals_and_recent,
             "recent_runs": recent_runs, "token_daily": token_daily, "token_totals": token_totals}

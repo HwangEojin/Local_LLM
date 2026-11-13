@@ -45,7 +45,6 @@ import {
   describe,
   formatBytes,
   formatTime,
-  SEVERITY_ORDER,
   VERIFICATION_LABEL,
   AGENT_ROLE_LABEL,
 } from "@/lib/labels";
@@ -68,8 +67,8 @@ const TAB_LABEL: Record<TabKey, string> = {
   report: "보고서",
 };
 
-type FindingFilter = { statuses: string[]; severities: string[]; q: string };
-const NO_FILTER: FindingFilter = { statuses: [], severities: [], q: "" };
+type FindingFilter = { statuses: string[]; q: string };
+const NO_FILTER: FindingFilter = { statuses: [], q: "" };
 const REVIEW_PENDING = ["CANDIDATE", "NEEDS_REVIEW"];
 
 const needsApproval = (it: BacklogItem) => it.status === "BLOCKED" && it.policy_class === "ALLOW_WITH_APPROVAL";
@@ -213,11 +212,6 @@ function Summary({
   const { run, usage, coverage, loop_running } = detail;
   const toast = useToast();
 
-  const bySeverity = useMemo(() => {
-    const m: Record<string, number> = {};
-    (findings ?? []).forEach((f) => (m[f.severity] = (m[f.severity] ?? 0) + 1));
-    return m;
-  }, [findings]);
   const pendingReview = (findings ?? []).filter((f) => REVIEW_PENDING.includes(f.status)).length;
   const approvals = (backlog ?? []).filter(needsApproval).length;
 
@@ -300,30 +294,14 @@ function Summary({
 
       <div className="mt-4 grid gap-4 border-t border-line pt-4 md:grid-cols-3">
         <div>
-          <div className="mb-2 text-xs font-medium text-muted">발견 사항 · 심각도별</div>
-          <div className="flex flex-wrap gap-1.5">
-            {SEVERITY_ORDER.map((s) => (
-              <button
-                key={s}
-                disabled={!bySeverity[s]}
-                onClick={() => {
-                  onFilterFindings({ ...NO_FILTER, severities: [s] });
-                  onShowTab("findings");
-                }}
-                className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-xs transition-colors hover:bg-raised disabled:opacity-40 disabled:hover:bg-transparent"
-              >
-                <StatusBadge value={s} />
-                <span className="tabular font-medium">{bySeverity[s] ?? 0}</span>
-              </button>
-            ))}
-          </div>
+          <div className="mb-2 text-xs font-medium text-muted">발견 사항 · 검토 대기 {pendingReview}건</div>
           <button
             disabled={pendingReview === 0}
             onClick={() => {
               onFilterFindings({ ...NO_FILTER, statuses: REVIEW_PENDING });
               onShowTab("findings");
             }}
-            className="mt-2 text-xs text-accent hover:underline disabled:text-faint disabled:no-underline"
+            className="text-xs text-accent hover:underline disabled:text-faint disabled:no-underline"
           >
             검토 대기 {pendingReview}건 보기
           </button>
@@ -387,7 +365,7 @@ function FindingsTab({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const toggle = (key: "statuses" | "severities", v: string) =>
+  const toggle = (key: "statuses", v: string) =>
     setFilter({ ...filter, [key]: filter[key].includes(v) ? filter[key].filter((x) => x !== v) : [...filter[key], v] });
 
   const rows = useMemo(() => {
@@ -395,19 +373,14 @@ function FindingsTab({
     const q = filter.q.trim().toLowerCase();
     return findings
       .filter((f) => !filter.statuses.length || filter.statuses.includes(f.status))
-      .filter((f) => !filter.severities.length || filter.severities.includes(f.severity))
       .filter((f) => !q || f.title.toLowerCase().includes(q) || f.rationale.toLowerCase().includes(q))
-      .sort((a, b) => {
-        const sa = SEVERITY_ORDER.indexOf(a.severity as (typeof SEVERITY_ORDER)[number]);
-        const sb = SEVERITY_ORDER.indexOf(b.severity as (typeof SEVERITY_ORDER)[number]);
-        return (sa < 0 ? 99 : sa) - (sb < 0 ? 99 : sb) || b.created_at.localeCompare(a.created_at);
-      });
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }, [findings, filter]);
 
   if (!findings) return <SkeletonRows />;
   if (findings.length === 0) return <Empty title="아직 발견 사항이 없습니다" hint="진단이 진행되면 취약점 후보가 여기에 쌓입니다." />;
 
-  const filtering = filter.statuses.length > 0 || filter.severities.length > 0 || filter.q !== "";
+  const filtering = filter.statuses.length > 0 || filter.q !== "";
 
   return (
     <div>
@@ -428,12 +401,7 @@ function FindingsTab({
             ))}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="심각도 필터">
-          {SEVERITY_ORDER.map((s) => (
-            <button key={s} aria-pressed={filter.severities.includes(s)} onClick={() => toggle("severities", s)} className={chip(filter.severities.includes(s))}>
-              {describe(s).label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-1.5">
           {filtering && (
             <button onClick={() => setFilter(NO_FILTER)} className={btnGhost}>
               필터 초기화
@@ -459,7 +427,6 @@ function FindingsTab({
             <thead className="bg-raised text-left text-muted">
               <tr>
                 <th scope="col" className={th}>제목</th>
-                <th scope="col" className={th}>심각도</th>
                 <th scope="col" className={th}>판정</th>
                 <th scope="col" className={th}>검증 방식</th>
                 <th scope="col" className={th}>검토자</th>
@@ -482,7 +449,6 @@ function FindingsTab({
                   className={`cursor-pointer border-t border-line transition-colors hover:bg-raised/60 ${selectedId === f.id ? "bg-raised" : ""}`}
                 >
                   <td className="px-4 py-2 font-medium">{f.title}</td>
-                  <td className="px-4 py-2"><StatusBadge value={f.severity} /></td>
                   <td className="px-4 py-2"><StatusBadge value={f.status} /></td>
                   <td className="px-4 py-2 text-muted">{VERIFICATION_LABEL[f.verification] ?? f.verification}</td>
                   <td className="px-4 py-2 text-muted">{f.reviewed_by ?? "검토 전"}</td>

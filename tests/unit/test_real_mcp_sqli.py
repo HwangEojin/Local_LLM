@@ -114,11 +114,10 @@ class RealMcpSqliPromotion(unittest.TestCase):
         fact_true = self._promote(self._request("zzz' OR '1'='1' -- "))
 
         finding = self.conn.execute(
-            "SELECT f.id, f.severity FROM exploration_edges e "
+            "SELECT f.id FROM exploration_edges e "
             "JOIN exploration_anchors a ON a.node_id = e.dst_id JOIN findings f ON f.id = a.finding_id "
             "WHERE e.src_id = %s AND e.rel = 'proves'", (fact_true,)).fetchone()
         self.assertIsNotNone(finding, "실제 대상의 실제 SQLi 가 finding 으로 승격되지 않음")
-        self.assertEqual(finding["severity"], "high")
 
 
 if __name__ == "__main__":
