@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urldefrag, urljoin
 
+from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
 from audit import schemas, signals
@@ -22,7 +23,7 @@ from audit.models import AuditError, PolicyDenied, ToolError, ToolOutput
 from audit.policy import mask_secrets, redact, secret_values
 from audit.verdict import decide, evaluate_rule
 
-from . import backlog, db, evidence, policy, prompts, tools
+from . import backlog, db, evidence, fingerprint, notify, policy, prompts, tools
 
 _LEGACY_TO_DB = {"MANUAL_REVIEW": "NEEDS_REVIEW"}
 _WORKER_PICK_SCHEMA = {
@@ -204,6 +205,79 @@ def set_finding_status(conn, finding_id, status, reason, *, actor, evidence_ids=
         "VALUES (%s,%s,%s,%s,%s,%s)", (finding_id, f["status"], status, reason, actor, list(evidence_ids)))
 
 
+def upsert_exploration_finding(conn, cfg, run_id, asset_id, *, vuln_class, args, evidence_kind, insert_fn,
+                               evidence_ids, actor) -> tuple[str, bool]:
+    """RULE/LLM 이 만든 finding 을 fingerprint 기준으로 합친다(UPGRADE_PLAN.md G1). 같은 지점(asset·분류·
+    메서드·경로·매개변수)이 이미 있으면 새 finding 을 만들지 않고 증거만 더한다 — "모르면 합치지 않는다"가
+    기본이라 위치를 못 뽑으면(fingerprint None) 항상 새로 만든다. REJECTED 였던 finding 이 새 종류의 근거로
+    다시 관찰되면 NEEDS_REVIEW 로 재오픈한다(D3) — **같은 run_id 안에서만** 찾는다(D3b, 실행을 가로지르지 않음).
+
+    `insert_fn(conn) -> finding_id` 는 호출자별 findings INSERT(제목·근거·검증방식 등)만 책임진다. 동시
+    삽입 경합(두 호출이 같은 fingerprint 를 동시에 새로 만들려 함)은 부분 UNIQUE 인덱스가 막으므로,
+    insert_fn 을 savepoint 안에서 실행해 실패하면 롤백하고 재조회해 병합 경로로 한 번만 재시도한다.
+
+    반환: (finding_id, 이번 호출에서 새로 만들었는지 여부). 호출자는 새로 만든 경우에만 자기 쪽 마무리
+    작업(검토 이력 최초 기록, 탐색 그래프 노드 생성 등)을 한다 — 병합된 경우 이미 다 돼 있다.
+    """
+    fp, loc_hash, locator = fingerprint.compute(asset_id, vuln_class, args)
+
+    def find_existing():
+        if fp is None:
+            return None
+        return conn.execute(
+            "SELECT id, status, evidence_kinds, title FROM findings WHERE run_id=%s AND fingerprint=%s "
+            "AND duplicate_of IS NULL FOR UPDATE", (run_id, fp)).fetchone()
+
+    existing = find_existing()
+    if existing is None:
+        try:
+            with conn.transaction():
+                fid = insert_fn(conn)
+                conn.execute(
+                    "UPDATE findings SET vuln_class=%s, fingerprint=%s, locator=%s, locator_hash=%s, "
+                    "evidence_kinds=%s WHERE id=%s",
+                    (vuln_class, fp, Jsonb(locator), loc_hash, [evidence_kind], fid))
+        except UniqueViolation:
+            existing = find_existing()
+            if existing is None:
+                raise  # 유니크 위반인데 다시 봐도 없으면 다른 원인 — 숨기지 않는다
+        else:
+            for eid in evidence_ids:
+                conn.execute("INSERT INTO finding_evidence VALUES (%s,%s) ON CONFLICT DO NOTHING", (fid, eid))
+            return fid, True
+
+    fid = existing["id"]
+    for eid in evidence_ids:
+        conn.execute("INSERT INTO finding_evidence VALUES (%s,%s) ON CONFLICT DO NOTHING", (fid, eid))
+    conn.execute("UPDATE findings SET occurrence_count = occurrence_count + 1, last_seen_at = now() WHERE id=%s",
+                (fid,))
+    kinds = set(existing["evidence_kinds"] or [])
+    if existing["status"] == "REJECTED":
+        if evidence_kind not in kinds:
+            reason = f"기각 후 새 종류 근거({evidence_kind}) 관찰 — 재검토 필요"
+            set_finding_status(conn, fid, "NEEDS_REVIEW", reason, actor="system:dedup", evidence_ids=[])
+            db.audit(conn, run_id, "finding_reopened_new_evidence_kind",
+                     {"finding_id": str(fid), "evidence_kind": evidence_kind, "observed_by": actor})
+            notify.notify_finding_reopened(conn, cfg, run_id, fid, title=existing["title"], actor="system:dedup")
+        else:
+            conn.execute(
+                "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, "
+                "evidence_ids) VALUES (%s,'REJECTED','REJECTED',%s,'system:dedup',%s)",
+                (fid, f"동일 지점 재관찰(이미 본 근거 종류 {evidence_kind}) — 기각 유지", list(evidence_ids)))
+            db.audit(conn, run_id, "finding_reobserved_after_reject",
+                     {"finding_id": str(fid), "evidence_kind": evidence_kind, "observed_by": actor})
+    else:
+        conn.execute(
+            "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, "
+            "evidence_ids) VALUES (%s,%s,%s,%s,'system:dedup',%s)",
+            (fid, existing["status"], existing["status"],
+             f"동일 지점 재관찰(증거 {len(evidence_ids)}건 추가, 근거 종류 {evidence_kind})", list(evidence_ids)))
+    conn.execute(
+        "UPDATE findings SET evidence_kinds = array(SELECT DISTINCT unnest(evidence_kinds || %s::text[])) "
+        "WHERE id=%s", ([evidence_kind], fid))
+    return fid, False
+
+
 def create_retest(conn, run_id, finding_id, *, operator, reason) -> list:
     """사람이 Finding 의 추가 검증(재검증)을 요청한다(CLAUDE.md §10 "추가 검증 요청").
 
@@ -248,31 +322,43 @@ def create_retest(conn, run_id, finding_id, *, operator, reason) -> list:
     return item_ids
 
 
-def create_llm_finding(conn, run_id, asset_id, *, title, rationale, remediation, evidence_ids, model):
+def create_llm_finding(conn, cfg, run_id, asset_id, *, title, vuln_class, rationale, remediation, evidence_ids, model):
     """LLM이 자신이 인용한 실존 증거를 근거로 finding을 직접 CONFIRMED로 기록한다(CLAUDE.md §1/§7/§9).
     인용한 증거 id가 이 실행(run)에 실제로 존재하는지만 확인하는
     최소한의 데이터 무결성 검사이고, 주장(취약점이 실제로 있는지)의 실체는 검증하지 않는다 — 그게 이
     정책의 요지다. finding_review_history 에 actor='llm:<model>' 로 남아 추적 가능하고, 사람은 이후에도
     finding review 로 재검토·기각할 수 있다(그 이력도 보존됨).
 
-    인용한 증거가 하나도 실존하지 않으면 아무것도 기록하지 않고 None 을 돌려준다.
+    인용한 증거가 하나도 실존하지 않으면 아무것도 기록하지 않고 (None, False) 를 돌려준다.
+
+    G1: 같은 지점(asset·분류·메서드·경로·매개변수)이 이미 있으면 새로 만들지 않고 기존 finding 에 합친다
+    (upsert_exploration_finding). 주입 지점은 **인용한 첫 증거(id 정렬 기준)의 evidence.args** 에서
+    Python 이 뽑는다 — LLM 이 적은 target_id/title 류 값은 신뢰 경계상 쓰지 않는다(§8-5).
+
+    반환: (finding_id, 새로 만들었는지). 호출자는 새로 만들었을 때만 "방금 확정됨" 알림을 보내야 한다 —
+    병합된 경우 이미 전에 알렸거나(기존 CONFIRMED) upsert 가 스스로 재오픈 알림을 보냈다(D3).
     """
     real = sorted({r["id"] for r in conn.execute(
         "SELECT id FROM evidence WHERE run_id=%s AND id = ANY(%s::uuid[])", (run_id, list(evidence_ids))).fetchall()})
     if not real:
-        return None
+        return None, False
     actor = f"llm:{model}"
-    f = conn.execute(
-        "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification, status, "
-        "reviewed_by, reviewed_at, review_reason) "
-        "VALUES (%s,%s,%s,%s,%s,'LLM_CONFIRMED','CONFIRMED',%s,now(),%s) RETURNING id",
-        (run_id, asset_id, title, rationale, remediation, actor, rationale)).fetchone()
-    for eid in real:
-        conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], eid))
-    conn.execute(
-        "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
-        "VALUES (%s,NULL,'CONFIRMED',%s,%s,%s)", (f["id"], rationale, actor, real))
-    return f["id"]
+    first_args = conn.execute("SELECT args FROM evidence WHERE id=%s", (real[0],)).fetchone()["args"]
+
+    def insert(c):
+        return c.execute(
+            "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification, status, "
+            "reviewed_by, reviewed_at, review_reason) "
+            "VALUES (%s,%s,%s,%s,%s,'LLM_CONFIRMED','CONFIRMED',%s,now(),%s) RETURNING id",
+            (run_id, asset_id, title, rationale, remediation, actor, rationale)).fetchone()["id"]
+
+    fid, created = upsert_exploration_finding(conn, cfg, run_id, asset_id, vuln_class=vuln_class, args=first_args,
+                                              evidence_kind="LLM", insert_fn=insert, evidence_ids=real, actor=actor)
+    if created:
+        conn.execute(
+            "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
+            "VALUES (%s,NULL,'CONFIRMED',%s,%s,%s)", (fid, rationale, actor, real))
+    return fid, created
 
 
 def _tool_calls_used(ctx, kind: str) -> int:
@@ -504,22 +590,32 @@ def _check_sqli_boolean_diff(ctx, it, evidence_id, args, data: bytes):
     return [evidence_id, sibling["id"]], outcome
 
 
-def _create_finding(ctx, it, fact_id, evidence_ids, vclass, outcome):
-    f = ctx.conn.execute(
-        "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification) "
-        "VALUES (%s,%s,%s,%s,%s,'RULE_CONFIRMED') RETURNING id",
-        (ctx.run["id"], it["asset_id"], f"탐색 기반 발견: {vclass}", outcome.reason,
-         signals.REMEDIATION[vclass])).fetchone()
-    for eid in evidence_ids:
-        ctx.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (f["id"], eid))
+def _create_finding(ctx, it, fact_id, evidence_ids, vclass, outcome, args):
+    def insert(conn):
+        return conn.execute(
+            "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification) "
+            "VALUES (%s,%s,%s,%s,%s,'RULE_CONFIRMED') RETURNING id",
+            (ctx.run["id"], it["asset_id"], f"탐색 기반 발견: {vclass}", outcome.reason,
+             signals.REMEDIATION[vclass])).fetchone()["id"]
+
+    fid, _created = upsert_exploration_finding(ctx.conn, ctx.cfg, ctx.run["id"], it["asset_id"], vuln_class=vclass,
+                                               args=args, evidence_kind="RULE", insert_fn=insert,
+                                               evidence_ids=evidence_ids, actor="worker")
     # exploration_edges 는 양쪽 다 exploration_nodes 를 참조하므로(findings.id 를 직접 못 넣음) finding 을
     # 가리키는 전용 노드를 만들고, 그 노드만 exploration_anchors.finding_id 로 실제 findings 행과 연결한다.
-    finding_node = ctx.conn.execute(
-        "INSERT INTO exploration_nodes (run_id, kind, state, origin, payload) VALUES "
-        "(%s,'finding','RECORDED','worker',%s) RETURNING id",
-        (ctx.run["id"], Jsonb({"vuln_class": vclass, "finding_id": str(f["id"])}))).fetchone()["id"]
-    ctx.conn.execute("INSERT INTO exploration_anchors (node_id, finding_id) VALUES (%s,%s)", (finding_node, f["id"]))
-    ctx.conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'proves')", (fact_id, finding_node))
+    # G1 로 같은 finding 에 합쳐진 경우(_created=False)도 이 fact 가 그 finding 을 뒷받침한다는 사실은
+    # 새로 남겨야 하므로, 이미 있는 노드를 찾아 거기로 새 엣지만 긋는다(노드를 두 번 만들지 않음).
+    anchor = ctx.conn.execute("SELECT node_id FROM exploration_anchors WHERE finding_id=%s", (fid,)).fetchone()
+    if anchor is None:
+        finding_node = ctx.conn.execute(
+            "INSERT INTO exploration_nodes (run_id, kind, state, origin, payload) VALUES "
+            "(%s,'finding','RECORDED','worker',%s) RETURNING id",
+            (ctx.run["id"], Jsonb({"vuln_class": vclass, "finding_id": str(fid)}))).fetchone()["id"]
+        ctx.conn.execute("INSERT INTO exploration_anchors (node_id, finding_id) VALUES (%s,%s)", (finding_node, fid))
+    else:
+        finding_node = anchor["node_id"]
+    ctx.conn.execute("INSERT INTO exploration_edges VALUES (%s,%s,'proves') ON CONFLICT DO NOTHING",
+                     (fact_id, finding_node))
 
 
 def _promote_exploration_finding(ctx, it, fact_id, evidence_id, args, data: bytes):
@@ -535,7 +631,7 @@ def _promote_exploration_finding(ctx, it, fact_id, evidence_id, args, data: byte
                  {"fact": str(fact_id), "vuln_class": "SQLI", "matched": outcome.matched, "reason": outcome.reason,
                   "method": "boolean_diff"})
         if outcome.matched:
-            _create_finding(ctx, it, fact_id, evidence_ids, "SQLI", outcome)
+            _create_finding(ctx, it, fact_id, evidence_ids, "SQLI", outcome, args)
             return
     result = signals.check(args, data)
     if result is None:
@@ -545,7 +641,7 @@ def _promote_exploration_finding(ctx, it, fact_id, evidence_id, args, data: byte
              {"fact": str(fact_id), "vuln_class": vclass, "matched": outcome.matched, "reason": outcome.reason})
     if not outcome.matched:
         return
-    _create_finding(ctx, it, fact_id, [evidence_id], vclass, outcome)
+    _create_finding(ctx, it, fact_id, [evidence_id], vclass, outcome, args)
 
 
 def _resolve_retest(ctx, it, eid, args, out) -> None:

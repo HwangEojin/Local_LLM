@@ -258,7 +258,8 @@ def _findings_for_pentest_report(conn, evidence_dir: Path, run: dict, meta: dict
     rows = conn.execute(
         "SELECT f.*, ra.target_id FROM findings f "
         "JOIN run_assets ra ON ra.run_id = f.run_id AND ra.asset_id = f.asset_id "
-        "WHERE f.run_id=%s AND f.status <> 'REJECTED' ORDER BY f.created_at", (run["id"],)).fetchall()
+        "WHERE f.run_id=%s AND f.status <> 'REJECTED' AND f.duplicate_of IS NULL "  # G1: 병합된 중복은 본문에서 뺀다
+        "ORDER BY f.created_at", (run["id"],)).fetchall()
     status_counts: dict[str, int] = {}
     out = []
     profile = (run.get("agent_profile_names") or {}).get("reporter")

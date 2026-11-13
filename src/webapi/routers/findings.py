@@ -29,9 +29,33 @@ def _load_finding(conn, run_id, finding_ref: str) -> dict:
 
 
 @router.get("")
-def list_findings(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+def list_findings(run_ref: str, include_duplicates: bool = False, conn=Depends(get_conn),
+                  user: str = Depends(current_user)):
+    """G1: 기본적으로 병합된(duplicate_of 가 있는) finding 은 숨긴다. 자기 자신을 뺀 같은 run·같은
+    locator_hash 건수를 suspected_duplicates 로 붙인다(D2 "중복 의심" — 자동 병합된 건 fingerprint 가
+    같아 이미 한 행이라 여기 안 잡힘)."""
     run = _load_run(conn, run_ref)
-    return conn.execute("SELECT * FROM findings WHERE run_id=%s ORDER BY created_at DESC", (run["id"],)).fetchall()
+    where = "run_id=%s" if include_duplicates else "run_id=%s AND duplicate_of IS NULL"
+    return conn.execute(
+        f"SELECT f.*, "
+        f"  (SELECT count(*) FROM findings d WHERE d.run_id=f.run_id AND d.locator_hash=f.locator_hash "
+        f"   AND d.locator_hash IS NOT NULL AND d.duplicate_of IS NULL AND d.id<>f.id) AS suspected_duplicates, "
+        f"  (SELECT count(*) FROM findings m WHERE m.duplicate_of=f.id) AS merged_count "
+        f"FROM findings f WHERE {where} ORDER BY created_at DESC", (run["id"],)).fetchall()
+
+
+@router.get("/{finding_ref}/similar")
+def similar_findings(run_ref: str, finding_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """D2 중복 의심 후보: 같은 run·같은 locator_hash·자기 자신 제외·아직 병합 안 된 finding."""
+    run = _load_run(conn, run_ref)
+    f = _load_finding(conn, run["id"], finding_ref)
+    if not f["locator_hash"]:
+        return []
+    return conn.execute(
+        "SELECT id, title, vuln_class, status, "
+        "(SELECT count(*) FROM finding_evidence fe WHERE fe.finding_id=findings.id) AS evidence_count "
+        "FROM findings WHERE run_id=%s AND locator_hash=%s AND duplicate_of IS NULL AND id<>%s "
+        "ORDER BY created_at", (run["id"], f["locator_hash"], f["id"])).fetchall()
 
 
 @router.get("/export")
@@ -108,6 +132,67 @@ def review_finding(run_ref: str, finding_ref: str, body: ReviewBody,
                                         actor=f"reviewer:{user}")
     conn.commit()
     return {"id": str(f["id"]), "old_status": old_status, "new_status": body.status}
+
+
+class MergeBody(BaseModel):
+    into: str
+    reason: str
+
+
+class UnmergeBody(BaseModel):
+    reason: str
+
+
+@router.post("/{finding_ref}/merge")
+def merge_finding(run_ref: str, finding_ref: str, body: MergeBody,
+                  conn=Depends(get_conn), user: str = Depends(current_user)):
+    """G1 D2 수동 병합: 사람이 '중복 의심' 후보 중 진짜 중복인 걸 하나로 합친다. 원본 행·증거 링크는
+    보존하고(§11 기존 데이터 보존) duplicate_of 만 세운다 — 대상(into)에도 원본 증거를 링크해 목록·보고서가
+    대상 쪽만 봐도 전부 보이게 한다."""
+    run = _load_run(conn, run_ref)
+    f = _load_finding(conn, run["id"], finding_ref)
+    into = _load_finding(conn, run["id"], body.into)
+    if into["id"] == f["id"]:
+        raise HTTPException(422, "자기 자신으로는 병합할 수 없습니다")
+    if into["duplicate_of"] is not None:
+        raise HTTPException(422, "병합 대상이 이미 다른 finding 의 중복입니다(체인 금지) — 그 원본으로 병합하세요")
+    evidence_ids = [r["evidence_id"] for r in
+                    conn.execute("SELECT evidence_id FROM finding_evidence WHERE finding_id=%s", (f["id"],))]
+    for eid in evidence_ids:
+        conn.execute("INSERT INTO finding_evidence VALUES (%s,%s) ON CONFLICT DO NOTHING", (into["id"], eid))
+    conn.execute("UPDATE findings SET duplicate_of=%s WHERE id=%s", (into["id"], f["id"]))
+    for fid, status, other, direction in ((f["id"], f["status"], into["id"], "다음으로 병합됨"),
+                                          (into["id"], into["status"], f["id"], "다음을 병합함")):
+        conn.execute(
+            "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
+            "VALUES (%s,%s,%s,%s,%s,%s)",
+            (fid, status, status, f"{direction}: {other}. {body.reason}", f"reviewer:{user}", evidence_ids))
+    wb_db.audit(conn, run["id"], "finding_merged",
+               {"finding_id": str(f["id"]), "into": str(into["id"]), "reviewer": user, "reason": body.reason})
+    conn.commit()
+    return {"id": str(f["id"]), "duplicate_of": str(into["id"])}
+
+
+@router.post("/{finding_ref}/unmerge")
+def unmerge_finding(run_ref: str, finding_ref: str, body: UnmergeBody,
+                    conn=Depends(get_conn), user: str = Depends(current_user)):
+    """병합을 되돌린다. 증거 링크는 추가만 하는 원칙이라 되돌리지 않는다 — 병합 중 대상에 걸린 링크는 그대로
+    남는다(지워지는 게 더 위험함, §11)."""
+    run = _load_run(conn, run_ref)
+    f = _load_finding(conn, run["id"], finding_ref)
+    if f["duplicate_of"] is None:
+        raise HTTPException(422, "이 finding 은 병합된 상태가 아닙니다")
+    old_into = f["duplicate_of"]
+    conn.execute("UPDATE findings SET duplicate_of=NULL WHERE id=%s", (f["id"],))
+    conn.execute(
+        "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
+        "VALUES (%s,%s,%s,%s,%s,%s)",
+        (f["id"], f["status"], f["status"], f"병합 해제(이전 대상: {old_into}). {body.reason}",
+         f"reviewer:{user}", []))
+    wb_db.audit(conn, run["id"], "finding_unmerged",
+               {"finding_id": str(f["id"]), "was_duplicate_of": str(old_into), "reviewer": user, "reason": body.reason})
+    conn.commit()
+    return {"id": str(f["id"])}
 
 
 class RetestBody(BaseModel):

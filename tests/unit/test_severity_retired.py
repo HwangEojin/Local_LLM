@@ -15,13 +15,13 @@ from diagnostic_workbench import config, db, explore, runs, worker
 
 class FindingItemSchemaRejectsSeverity(unittest.TestCase):
     def test_severity_field_is_rejected(self):
-        payload = {"target_id": "x", "title": "t", "severity": "high",
+        payload = {"target_id": "x", "title": "t", "severity": "high", "vuln_class": "OTHER",
                   "rationale": "r", "remediation": "m", "evidence_ids": ["00000000-0000-0000-0000-000000000000"]}
         errs = schemas.validate(payload, explore._FINDING_ITEM)
         self.assertTrue(errs, "severity 필드가 있어도 받아들여짐 — additionalProperties:False 가 깨짐")
 
     def test_without_severity_is_accepted(self):
-        payload = {"target_id": "x", "title": "t",
+        payload = {"target_id": "x", "title": "t", "vuln_class": "OTHER",
                   "rationale": "r", "remediation": "m", "evidence_ids": ["00000000-0000-0000-0000-000000000000"]}
         self.assertEqual(schemas.validate(payload, explore._FINDING_ITEM), [])
 
@@ -66,8 +66,9 @@ class NewFindingsHaveNoSeverityDB(unittest.TestCase):
             "INSERT INTO evidence (run_id, asset_id, requirement_id, tool, args, success, rel_path, sha256, size) "
             "VALUES (%s,%s,'TEST-SEV','test.manual','{}',true,'test/fake.txt',repeat('a',64),0) RETURNING id",
             (run["id"], asset_id)).fetchone()["id"]
-        fid = worker.create_llm_finding(self.conn, run["id"], asset_id, title="심각도 폐지 확인",
-                                        rationale="근거", remediation="조치", evidence_ids=[eid], model="fake")
+        fid, _created = worker.create_llm_finding(self.conn, self.cfg, run["id"], asset_id, title="심각도 폐지 확인",
+                                                  vuln_class="OTHER",
+                                                  rationale="근거", remediation="조치", evidence_ids=[eid], model="fake")
         row = self.conn.execute("SELECT severity FROM findings WHERE id=%s", (fid,)).fetchone()
         self.assertIsNone(row["severity"])
 

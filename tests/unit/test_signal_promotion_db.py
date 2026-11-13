@@ -30,9 +30,9 @@ class SignalPromotionDB(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            cfg = config.load(None)
-            cls.conn = db.connect(cfg.dsn)
-            db.require_migrated(cls.conn, cfg.migrations_dir)
+            cls.cfg = config.load(None)
+            cls.conn = db.connect(cls.cfg.dsn)
+            db.require_migrated(cls.conn, cls.cfg.migrations_dir)
         except ConfigError as e:
             raise unittest.SkipTest(f"DB 연결/마이그레이션 불가: {e}") from None
         cv = cls.conn.execute("SELECT id FROM checklist_versions LIMIT 1").fetchone()
@@ -63,7 +63,7 @@ class SignalPromotionDB(unittest.TestCase):
             "INSERT INTO evidence (run_id, asset_id, requirement_id, tool, args, success, rel_path, sha256, size) "
             "VALUES (%s,%s,'test','test.tool','{}',true,'x','0', 0) RETURNING id",
             (self.run_id, self.asset)).fetchone()["id"]
-        ctx = types.SimpleNamespace(conn=self.conn, run={"id": self.run_id})
+        ctx = types.SimpleNamespace(conn=self.conn, run={"id": self.run_id}, cfg=self.cfg)
         it = {"asset_id": self.asset}
         worker._promote_exploration_finding(ctx, it, fact, eid, args, body)
         return fact

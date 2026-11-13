@@ -71,6 +71,25 @@ def classify_csrf(args: dict) -> bool:
     return origin_host.lower() != target_host.lower()
 
 
+def injection_params(args: dict) -> list[str]:
+    """_INJECTION_PATTERNS 중 하나라도 매치하는 값을 가진 키 이름들(G1 fingerprint 의 param_names). dict 가
+    아닌 인자(리스트 원소 등)는 이름이 없어 뺀다. CSRF 는 패턴이 아니라 구조로 판정하므로 여기엔 안 걸린다."""
+    names = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            for k, v in value.items():
+                if isinstance(v, str) and any(p.search(v) for p in _INJECTION_PATTERNS.values()):
+                    names.add(k)
+                walk(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                walk(v)
+
+    walk(args)
+    return sorted(names)
+
+
 def classify_payload(args: dict) -> str | None:
     """도구 호출 인자에서 알려진 공격 페이로드 시그니처를 찾는다. 모르면 None(이 메커니즘을 쓰지 않는다)."""
     for value in _flatten_strings(args):
