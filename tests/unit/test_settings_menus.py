@@ -66,7 +66,9 @@ class SettingsMenusTest(unittest.TestCase):
     def test_agents_lists_roles_with_defaults(self):
         rows = {r["role"]: r for r in self.client.get("/api/admin/agents").json()}
         self.assertEqual(set(rows), {"planner", "worker", "analyst", "goals", "reporter"})
-        self.assertEqual(rows["analyst"]["prompts"], [])  # 체크리스트 분석 프롬프트는 편집 대상 아님
+        # 체크리스트 분석 자체의 프롬프트는 편집 대상 아니지만(audit.local_model 고정), G2(LLM 교차 검증)의
+        # verifier_system 은 analyst 역할 그룹에 등록돼 있다(prompts.py:148) — 그 하나만 있어야 함.
+        self.assertEqual([p["name"] for p in rows["analyst"]["prompts"]], ["verifier_system"])
         p = rows["worker"]["prompts"][0]
         self.assertEqual(p["name"], "worker_agent_system")
         self.assertFalse(p["overridden"])
