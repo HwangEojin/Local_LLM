@@ -28,7 +28,7 @@ class Decision:
 
 
 def frame_block_message(reason: str) -> str:
-    """정책 거부/승인대기 사유를 LLM 에게 보여줄 때만 씌우는 프레이밍(artex guard.go 의 systemBlockMessage 참고,
+    """정책 거부/승인대기 사유를 LLM 에게 보여줄 때만 씌우는 프레이밍(레퍼런스 프로젝트 guard.go 의 systemBlockMessage 참고,
     CLAUDE.md §8, 2026-11 적용). 차단이 '이 워크벤치의 정책 통제'이고 대상(target)의 방어 기전이 아님을
     LLM 에게 명시해, 우회를 시도하지 말고 다른 가설·도구로 전환하도록 유도한다.
 

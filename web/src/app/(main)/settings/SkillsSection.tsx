@@ -185,7 +185,7 @@ export function SkillsSection() {
   const [error, setError] = useState<string | null>(null);
   const [fresh, setFresh] = useState<Draft | null>(null);
   const [edits, setEdits] = useState<Record<string, Draft>>({});
-  const [selected, setSelected] = useState<string | null>(null); // 파일트리에서 고른 스킬 이름(artex 레이아웃 참고, 2026-11)
+  const [selected, setSelected] = useState<string | null>(null); // 파일트리에서 고른 스킬 이름(레퍼런스 프로젝트 레이아웃 참고, 2026-11)
   const [importing, setImporting] = useState(false);
   const [del, setDel] = useState<string | null>(null);
   const [saving, setSaving] = useState<Draft | null>(null);

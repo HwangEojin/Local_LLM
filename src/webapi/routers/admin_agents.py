@@ -169,7 +169,7 @@ def delete_profile(profile_id: int, body: ConfirmBody, conn=Depends(get_conn), u
     return {"deleted": profile_id}
 
 
-# ── 커스텀 에이전트(ARTEX 스타일 자유 에이전트 생성, 2026-11-13) ──
+# ── 커스텀 에이전트(레퍼런스 프로젝트 스타일 자유 에이전트 생성, 2026-11-13) ──
 # 5개 고정 역할(planner/worker/analyst/goals/reporter)과 별개. 자기 실행 경로는 없다 — run_triggers 에
 # 연결됐을 때(TriggerBody.custom_agent_id, runs.py) triggers.py::_agent_decide 가 이 정의로 LLM 을 부른다.
 

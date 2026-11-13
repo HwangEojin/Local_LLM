@@ -1,7 +1,7 @@
 -- 0018: 스킬 가져오기(SKILL.md/ZIP) 메타데이터와 사용 기록.
 -- license/source 는 가져온 SKILL.md 의 frontmatter 와 출처를 남기는 표시용 컬럼이다(동작에는 영향 없음).
 -- skill_usage 는 어떤 스킬이 어느 진단·역할의 프롬프트에 실제로 덧붙었는지 센다(진단·스킬·역할당 한 행, 호출 수 누적).
--- artex 의 skill_usage 처럼 외래 키를 걸지 않는다 — 진단이나 스킬이 지워져도 기록은 남는다.
+-- 레퍼런스 프로젝트 의 skill_usage 처럼 외래 키를 걸지 않는다 — 진단이나 스킬이 지워져도 기록은 남는다.
 
 ALTER TABLE agent_skills ADD COLUMN license text NOT NULL DEFAULT '';
 ALTER TABLE agent_skills ADD COLUMN source  text NOT NULL DEFAULT 'manual';

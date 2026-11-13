@@ -37,7 +37,7 @@ def list_findings(run_ref: str, conn=Depends(get_conn), user: str = Depends(curr
 @router.get("/export")
 def export_findings(run_ref: str, format: str = "csv", status: str | None = None, conn=Depends(get_conn),
                     user: str = Depends(current_user)):
-    """발견 사항을 CSV/JSON 으로 내려받는다(artex 의 findings export 참고). 새 진단 로직 없음 — findings 테이블을
+    """발견 사항을 CSV/JSON 으로 내려받는다(레퍼런스 프로젝트 의 findings export 참고). 새 진단 로직 없음 — findings 테이블을
     그대로 읽어 모양만 바꾼다. status 를 안 주면 REJECTED 도 포함한다(여기서는 조회·보관 목적이라 §3.3 의
     '기각된 후보를 발견처럼 싣지 않는다'는 Word 보고서 본문에만 적용 — CSV 는 기각 사유까지 감사용으로 남긴다)."""
     if format not in ("csv", "json"):

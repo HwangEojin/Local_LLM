@@ -129,7 +129,7 @@ class McpRegisterTest(unittest.TestCase):
         self.assertNotIn("fake-test", [r["name"] for r in self.client.post("/api/admin/mcp/fake-test/delete", json={"confirm": True}).json()])
         self.assertEqual(self.client.post("/api/admin/mcp/burp/delete", json={"confirm": True}).status_code, 404)  # 이 PC 전용이 아님
 
-    # ── stdio(명령 실행) 등록, 2026-11: artex 처럼 웹에서도 지원하되 confirm_stdio 를 항상 요구한다 ──
+    # ── stdio(명령 실행) 등록, 2026-11: 레퍼런스 프로젝트 처럼 웹에서도 지원하되 confirm_stdio 를 항상 요구한다 ──
     def _stdio_body(self, **kw):
         import sys
         return {"transport": "stdio", "command": sys.executable,

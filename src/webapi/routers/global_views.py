@@ -38,7 +38,7 @@ def list_all_findings(q: str = "", status: str | None = None, severity: str | No
 @router.get("/api/llm-records")
 def list_llm_records(run: str = "", purpose: str = "", limit: int = 50, offset: int = 0,
                      conn=Depends(get_conn), user: str = Depends(current_user)):
-    """LLM 호출 원문 기록(artex llmrec 참고, migrations/0020) 을 전체 진단 범위로 모은 목록. 새 진단 로직
+    """LLM 호출 원문 기록(레퍼런스 프로젝트 llmrec 참고, migrations/0020) 을 전체 진단 범위로 모은 목록. 새 진단 로직
     없음 — model_calls 를 runs 와 조인해 조회만 한다. request_text/response_text 는 저장 시점에 이미
     마스킹됐다(explore.py 의 _ModelLog.record_model_call)."""
     limit, offset = max(1, min(limit, 200)), max(0, offset)

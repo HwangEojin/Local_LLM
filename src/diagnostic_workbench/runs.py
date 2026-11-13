@@ -36,7 +36,7 @@ _GOAL_DECOMPOSE_SYSTEM = (
 
 
 def _decompose_goal(conn, cfg, run: dict, goal_text: str, targets: list[tuple[str, Target]]) -> list[tuple[str, list[str]]]:
-    """목표를 대상별 하위 목표로 선택적으로 나눈다(멀티에이전트 2단계 — artex 의 DecomposeGoals 참고).
+    """목표를 대상별 하위 목표로 선택적으로 나눈다(멀티에이전트 2단계 — 레퍼런스 프로젝트 의 DecomposeGoals 참고).
 
     실행 권한에는 영향이 없다 — 하위 목표도 explore.propose 의 제안 → policy.decide 검증을 그대로 거치는 입력일
     뿐이다. LLM 이 없거나 실패/엉뚱한 응답이면 원래 목표 하나로 조용히 폴백한다(CLAUDE.md §7).

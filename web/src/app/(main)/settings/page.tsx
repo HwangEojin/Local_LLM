@@ -471,7 +471,7 @@ function LlmSection() {
   );
 }
 
-// ── MCP 서버 상세(artex 의 카드+Sheet 드로어 레이아웃, 2026-11. §설정/도구 탭 — 설정 탭은 읽기 전용 표시
+// ── MCP 서버 상세(레퍼런스 프로젝트 의 카드+Sheet 드로어 레이아웃, 2026-11. §설정/도구 탭 — 설정 탭은 읽기 전용 표시
 // + 켜기끄기·삭제뿐이다: 등록된 서버의 명령·주소·허용 도구는 웹에서 못 바꾼다(기존 제약 그대로).
 function McpDetailSheet({ server, onClose, onChanged }: { server: McpServer; onClose: () => void; onChanged: (list: McpServer[]) => void }) {
   const toast = useToast();
