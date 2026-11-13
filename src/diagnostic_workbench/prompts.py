@@ -145,7 +145,8 @@ def catalog() -> list[dict]:
             {"name": "explore_probe_system", "label": "최초 정찰 프로브", "default": explore.PROBE_SYSTEM}]},
         {"role": "worker", "prompts": [
             {"name": "worker_agent_system", "label": "도구 선택", "default": worker._WORKER_AGENT_SYSTEM}]},
-        {"role": "analyst", "prompts": []},
+        {"role": "analyst", "prompts": [
+            {"name": "verifier_system", "label": "LLM 교차 검증(G2)", "default": explore.VERIFY_SYSTEM}]},
         {"role": "goals", "prompts": [
             {"name": "goals_system", "label": "목표 분해", "default": runs._GOAL_DECOMPOSE_SYSTEM}]},
         {"role": "reporter", "prompts": [

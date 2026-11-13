@@ -102,7 +102,11 @@ def get_finding(run_ref: str, finding_ref: str, conn=Depends(get_conn), user: st
         "SELECT old_status, new_status, reason, actor, evidence_ids, changed_at "
         "FROM finding_review_history WHERE finding_id=%s ORDER BY changed_at DESC", (f["id"],)
     ).fetchall()
-    return {"finding": f, "evidence": evidence, "history": history}
+    votes = conn.execute(  # G2: 제안/검증 모델별 판정
+        "SELECT model, stage, verdict, rationale, evidence_ids, created_at "
+        "FROM finding_llm_votes WHERE finding_id=%s ORDER BY created_at", (f["id"],)
+    ).fetchall()
+    return {"finding": f, "evidence": evidence, "history": history, "llm_votes": votes}
 
 
 class ReviewBody(BaseModel):

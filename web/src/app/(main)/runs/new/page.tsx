@@ -74,6 +74,7 @@ function NewRunForm() {
   const [refreshing, setRefreshing] = useState(false);
   const [agentModels, setAgentModels] = useState<Record<string, string>>({});
   const [agentProfiles, setAgentProfiles] = useState<Record<string, string>>({});
+  const [verifierModel, setVerifierModel] = useState("");
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [goal, setGoal] = useState("");
   const [tools, setTools] = useState<string[]>([]);
@@ -100,6 +101,7 @@ function NewRunForm() {
         setLlmProvider(r.llm_provider as string);
         setAgentModels((r.llm_agent_models ?? {}) as Record<string, string>);
         setAgentProfiles((r.agent_profile_names ?? {}) as Record<string, string>);
+        setVerifierModel((r.verifier_model as string) ?? "");
         if (Array.isArray(r.allowed_tools)) setTools(r.allowed_tools as string[]);
         const b = (r.budget ?? {}) as Record<string, number>;
         if (b.max_tasks) setMaxTasks(String(b.max_tasks));
@@ -151,6 +153,7 @@ function NewRunForm() {
         llm_provider: llmProvider,
         agent_models: useLlm && Object.keys(agentModels).length ? agentModels : null,
         agent_profile_names: useLlm && Object.keys(agentProfiles).length ? agentProfiles : null,
+        verifier_model: useLlm && verifierModel ? verifierModel : null,
         goal: goal.trim() || null,
         tools: tools.length ? tools : null,
         max_tasks: toNum(maxTasks),
@@ -358,6 +361,30 @@ function NewRunForm() {
                       </div>
                     ))}
                   </div>
+                </fieldset>
+              )}
+
+              {useLlm && (
+                <fieldset>
+                  <legend className={labelCls}>교차 검증 모델 (선택)</legend>
+                  <select
+                    className={`${inputCls} max-w-[16rem]`}
+                    value={verifierModel}
+                    onChange={(e) => setVerifierModel(e.target.value)}
+                  >
+                    <option value="">(교차 검증 없음)</option>
+                    {(env.ollama_models ?? []).map((m) => (
+                      <option key={m} value={`ollama:${m}`}>Ollama · {m}</option>
+                    ))}
+                    {(env.llm_profiles ?? []).map((p) => (
+                      <option key={p.name} value={p.name}>프로파일 · {p.name}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-faint">
+                    {verifierModel
+                      ? "LLM 이 낸 발견 사항을 이 모델이 독립적으로 다시 보고 동의할 때만 확정합니다. 의견이 갈리면 사람 검토로 넘깁니다."
+                      : "교차 검증 없음 — LLM 이 혼자 낸 finding 도 바로 확정됩니다."}
+                  </p>
                 </fieldset>
               )}
 
