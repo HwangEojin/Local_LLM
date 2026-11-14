@@ -205,6 +205,35 @@ def set_finding_status(conn, finding_id, status, reason, *, actor, evidence_ids=
         "VALUES (%s,%s,%s,%s,%s,%s)", (finding_id, f["status"], status, reason, actor, list(evidence_ids)))
 
 
+FINDING_EDITABLE_FIELDS = ("title", "rationale", "remediation")
+
+
+def edit_finding(conn, finding_id, changes: dict, reason: str, *, actor: str) -> list[str]:
+    """G3(검토자 편집, CLAUDE.md §10): title/rationale/remediation 만 고칠 수 있다 — 심각도는 개념이 없고
+    (G-S), 영향도는 만들지 않음(D5). 원문은 지우지 않고 바뀐 필드마다 finding_revisions 에 한 행씩 남긴다.
+    값이 같은 필드는 기록하지 않는다. 반환: 실제로 바뀐 필드 이름 목록(빈 리스트면 아무것도 안 바뀜).
+    """
+    unknown = sorted(set(changes) - set(FINDING_EDITABLE_FIELDS))
+    if unknown:
+        raise AuditError(f"편집할 수 없는 필드: {unknown} (가능: {list(FINDING_EDITABLE_FIELDS)})")
+    if not reason.strip():
+        raise AuditError("편집 사유(reason)를 입력해야 함")
+    f = conn.execute("SELECT * FROM findings WHERE id=%s FOR UPDATE", (finding_id,)).fetchone()
+    if f is None:
+        raise AuditError(f"finding {finding_id} 를 찾을 수 없음")
+    changed = [field for field, new in changes.items() if new != f[field]]
+    if not changed:
+        return []
+    for field in changed:
+        conn.execute(
+            "INSERT INTO finding_revisions (finding_id, field, old_value, new_value, reason, actor) "
+            "VALUES (%s,%s,%s,%s,%s,%s)", (finding_id, field, f[field], changes[field], reason, actor))
+    set_clause = ", ".join(f"{field}=%s" for field in changed)
+    conn.execute(f"UPDATE findings SET {set_clause}, human_edited=true WHERE id=%s",
+                (*[changes[field] for field in changed], finding_id))
+    return changed
+
+
 def upsert_exploration_finding(conn, cfg, run_id, asset_id, *, vuln_class, args, evidence_kind, insert_fn,
                                evidence_ids, actor) -> tuple[str, bool]:
     """RULE/LLM 이 만든 finding 을 fingerprint 기준으로 합친다(UPGRADE_PLAN.md G1). 같은 지점(asset·분류·

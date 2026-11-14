@@ -218,3 +218,37 @@ def retest_finding(run_ref: str, finding_ref: str, body: RetestBody,
     wb_db.notify_change(conn, run["id"], "fact")
     conn.commit()
     return {"id": str(f["id"]), "backlog_items": [str(i) for i in item_ids]}
+
+
+class EditBody(BaseModel):
+    changes: dict[str, str]
+    reason: str
+
+
+@router.post("/{finding_ref}/edit")
+def edit_finding(run_ref: str, finding_ref: str, body: EditBody,
+                 conn=Depends(get_conn), user: str = Depends(current_user)):
+    """G3(검토자 편집, CLAUDE.md §10): title/rationale/remediation 만 고칠 수 있다. 바뀐 필드마다
+    finding_revisions 에 이력이 남고(원문 보존), human_edited=true 가 되면 보고서 생성 시 Reporter 가
+    다시 다듬지 않는다(reporting._polish_finding_text)."""
+    run = _load_run(conn, run_ref)
+    f = _load_finding(conn, run["id"], finding_ref)
+    try:
+        changed = worker.edit_finding(conn, f["id"], body.changes, body.reason, actor=f"reviewer:{user}")
+    except AuditError as e:
+        conn.rollback()
+        raise HTTPException(422, str(e)) from None
+    if changed:
+        wb_db.audit(conn, run["id"], "finding_edited",
+                   {"finding_id": str(f["id"]), "fields": changed, "reviewer": user, "reason": body.reason})
+    conn.commit()
+    return {"id": str(f["id"]), "changed_fields": changed}
+
+
+@router.get("/{finding_ref}/revisions")
+def list_finding_revisions(run_ref: str, finding_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    run = _load_run(conn, run_ref)
+    f = _load_finding(conn, run["id"], finding_ref)
+    return conn.execute(
+        "SELECT field, old_value, new_value, reason, actor, changed_at FROM finding_revisions "
+        "WHERE finding_id=%s ORDER BY changed_at DESC", (f["id"],)).fetchall()
