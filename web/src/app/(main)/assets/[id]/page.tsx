@@ -78,7 +78,17 @@ export default function AssetDetailPage() {
       </section>
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold">관찰한 실행 ({runs.length})</h2>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">관찰한 실행 ({runs.length})</h2>
+          {runs.length >= 2 && (
+            <Link
+              href={`/runs/compare?base=${encodeURIComponent(runs[1].run_code)}&head=${encodeURIComponent(runs[0].run_code)}`}
+              className="text-xs text-accent hover:underline"
+            >
+              이 자산의 실행 비교 →
+            </Link>
+          )}
+        </div>
         {runs.length === 0 ? (
           <Empty title="이 자산을 관찰한 실행이 없습니다" />
         ) : (

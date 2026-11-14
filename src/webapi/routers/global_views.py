@@ -1,4 +1,5 @@
-"""진단을 가로지르는 조회 전용 화면: 발견 사항/트래픽/자산(UPGRADE_PLAN.md B2, G5-b — commands.py 와 같은 원칙).
+"""진단을 가로지르는 조회 전용 화면: 발견 사항/트래픽/자산/실행 비교(UPGRADE_PLAN.md B2, G5-b, G6 —
+commands.py 와 같은 원칙).
 
 새 진단 로직 없음 — 기존 테이블(findings/evidence/assets)을 runs 와 조인해 전체 범위로 보여줄 뿐이다. 상세·검토·
 재검증 같은 쓰기 동작은 여전히 run 범위 엔드포인트(/api/runs/{run_ref}/findings/{id} 등)를 그대로 쓴다
@@ -7,7 +8,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..deps import current_user, get_conn
+from diagnostic_workbench import compare as wb_compare
+
+from ..deps import current_user, get_conn, load_run
 
 router = APIRouter(tags=["findings", "traffic"])
 
@@ -143,3 +146,20 @@ def get_asset_detail(asset_ref: str, conn=Depends(get_conn), user: str = Depends
         "WHERE f.asset_id = %s AND f.duplicate_of IS NULL AND r.deleted_at IS NULL "
         "ORDER BY f.created_at DESC", (asset["id"],)).fetchall()
     return {"asset": asset, "edges": edges, "runs": runs, "findings": findings}
+
+
+@router.get("/api/compare")
+def compare_runs(base: str, head: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """실행 간 비교(G6, UPGRADE_PLAN.md) — 신규/지속/재발/미재현(조치 추정)/미확인/비교 불가.
+    새 진단 로직 없음(compare.compare_runs 가 기존 findings/evidence/finding_review_history 만 읽음)."""
+    base_run, head_run = load_run(conn, base), load_run(conn, head)
+    base_companies, head_companies = (wb_compare.run_companies(conn, base_run["id"]),
+                                      wb_compare.run_companies(conn, head_run["id"]))
+    if base_companies and head_companies and not (base_companies & head_companies):
+        raise HTTPException(422, "두 실행의 자산 company 가 달라 비교할 수 없음")
+    result = wb_compare.compare_runs(conn, base_run["id"], head_run["id"])
+    return {
+        "base_run": {"id": base_run["id"], "run_code": base_run["run_code"]},
+        "head_run": {"id": head_run["id"], "run_code": head_run["run_code"]},
+        **result,
+    }
