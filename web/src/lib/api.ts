@@ -201,6 +201,75 @@ export type Evidence = {
   integrity_detail: string | null;
 };
 
+// G5-a(증거 출처 체인, UPGRADE_PLAN.md) — observed: 증거·도구 호출·규칙/사람 판정. inferred: LLM 의 rationale·
+// LLM 이 내거나 확정한 finding. 색만이 아니라 라벨로도 구분한다(PRODUCT.md 원칙 1).
+export type ProvenanceNodeKind = "observed" | "inferred";
+
+export type ExplorationPathNode = {
+  id: string;
+  kind: string; // goal | intent | fact | ...
+  state: string;
+  origin: string; // operator | llm | trigger | enrich | worker | retest
+  origin_label: string;
+  summary: string;
+  rationale?: string; // origin=llm 일 때만, inferred
+  created_at: string;
+  node_kind: ProvenanceNodeKind;
+};
+
+export type EvidenceProvenance = {
+  evidence: Evidence & { node_kind: ProvenanceNodeKind };
+  tool_invocation: {
+    tool: string;
+    args: unknown;
+    policy_decision: string;
+    policy_reason: string;
+    status: string;
+    error: string | null;
+    node_kind: ProvenanceNodeKind;
+  } | null;
+  backlog_item: { id: string; kind: string; status: string; reason: string; node_kind: ProvenanceNodeKind } | null;
+  exploration_path: ExplorationPathNode[];
+  findings: (Finding & {
+    node_kind: ProvenanceNodeKind;
+    llm_votes: { model: string; stage: string; verdict: string; rationale: string; node_kind: ProvenanceNodeKind }[];
+  })[];
+};
+
+// 전역 자산 화면(/assets, UPGRADE_PLAN.md G5-b)
+export type GlobalAsset = {
+  id: string;
+  kind: string;
+  value: string;
+  platform: string | null;
+  source: string;
+  verification: "SCOPE_DECLARED" | "OBSERVED" | "UNVERIFIED";
+  company: string;
+  created_at: string;
+  observed_runs: number;
+  finding_count: number;
+  last_observed_at: string | null;
+};
+
+export type AssetEdgeRef = {
+  id: string;
+  direction: "in" | "out";
+  rel: string;
+  other_id: string;
+  other_kind: string;
+  other_value: string;
+  source: string;
+};
+
+export type AssetRunRef = { id: string; run_code: string; status: string; created_at: string; target_id: string };
+
+export type AssetDetail = {
+  asset: GlobalAsset;
+  edges: AssetEdgeRef[];
+  runs: AssetRunRef[];
+  findings: FindingWithRun[];
+};
+
 export type ActivityEntry = {
   id: string;
   run_id: string;
