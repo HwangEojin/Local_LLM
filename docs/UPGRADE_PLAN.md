@@ -700,6 +700,14 @@ PRODUCT.md 원칙 3 에 따라 편집 화면 옆에 연결된 증거 목록을 �
 - 순수 이동만 한다 — 문구·스타일·폴링 주기(4초/2초)·API 호출 변경 금지. 이동과 기능 변경을 한 커밋에 섞지 않는다.
 - 완료 기준: `npm run lint`, `npm run build` 통과 + 브라우저로 탭 11개 각각 열어 이전과 같은지 확인.
 
+**구현 완료(2026-11-14)** — 계획대로 순수 이동만 수행. `page.tsx`(1,432줄)를 `_shared.ts`(공용 타입·상수·
+`useAssets`/`parseJsonOr`), `_parts/{RunControls,DeletedBanner,Summary}.tsx`, `_tabs/{FindingsTab,
+BacklogTab,EvidenceTab,AssetsTab,TriggersTab,GraphTab,TrafficTab,ChatTab,ActivityTab,ServerLogTab,
+ReportTab}.tsx` 로 분리하고 `page.tsx` 에는 `RunDetailBody`/`RunDetailPage`(탭 전환·폴링)만 남김.
+`npx tsc --noEmit`·`npm run build` 모두 오류 없이 통과, 실제 실행을 하나 만들어 탭 11개를 모두 열어
+문구·빈 상태·폴링이 이전과 동일함을 확인 후 테스트용 실행은 소프트 삭제로 정리. 문구·스타일·폴링 주기·
+API 호출 변경 없음(순수 이동). 백엔드(Python) 변경이 없어 전체 테스트는 재실행하지 않음.
+
 ### G5. 증거 출처 체인과 전역 자산 화면 — P2
 
 **G5-a. 증거 출처 체인** — 새 마이그레이션 없음(기존 외래키로 모두 연결됨).
