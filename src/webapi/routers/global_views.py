@@ -1,11 +1,11 @@
-"""진단을 가로지르는 조회 전용 화면: 발견 사항/트래픽(UPGRADE_PLAN.md B2 — commands.py 와 같은 원칙).
+"""진단을 가로지르는 조회 전용 화면: 발견 사항/트래픽/자산(UPGRADE_PLAN.md B2, G5-b — commands.py 와 같은 원칙).
 
-새 진단 로직 없음 — 기존 테이블(findings/evidence)을 runs 와 조인해 전체 범위로 보여줄 뿐이다. 상세·검토·
+새 진단 로직 없음 — 기존 테이블(findings/evidence/assets)을 runs 와 조인해 전체 범위로 보여줄 뿐이다. 상세·검토·
 재검증 같은 쓰기 동작은 여전히 run 범위 엔드포인트(/api/runs/{run_ref}/findings/{id} 등)를 그대로 쓴다
 (각 행이 들고 있는 run_id 로 호출 — 새 쓰기 경로 없음)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..deps import current_user, get_conn
 
@@ -81,3 +81,65 @@ def list_all_traffic(run: str = "", limit: int = 100, offset: int = 0, conn=Depe
         f"FROM evidence e JOIN runs r ON r.id = e.run_id WHERE {sql_where} "
         "ORDER BY e.collected_at DESC LIMIT %s OFFSET %s", params + [limit, offset]).fetchall()
     return {"items": rows, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/api/assets")
+def list_all_assets(company: str = "", kind: str = "", q: str = "", limit: int = 100, offset: int = 0,
+                    conn=Depends(get_conn), user: str = Depends(current_user)):
+    """전역 자산 화면(G5-b, UPGRADE_PLAN.md) 목록 — 자산별 관찰 실행 수·중복 제외 finding 수·최근 관찰
+    시각. 새 진단 로직 없음(기존 assets/run_assets/evidence/findings 를 조인해 집계만 함)."""
+    limit, offset = max(1, min(limit, 500)), max(0, offset)
+    where, params = ["1=1"], []
+    if company.strip():
+        where.append("a.company = %s")
+        params.append(company.strip())
+    if kind.strip():
+        where.append("a.kind = %s")
+        params.append(kind.strip())
+    if q.strip():
+        where.append("a.value ILIKE %s")
+        params.append(f"%{q.strip()}%")
+    sql_where = " AND ".join(where)
+    total = conn.execute(f"SELECT count(*) AS n FROM assets a WHERE {sql_where}", params).fetchone()["n"]
+    rows = conn.execute(
+        "SELECT a.*, "
+        "  (SELECT count(DISTINCT ra.run_id) FROM run_assets ra JOIN runs r ON r.id = ra.run_id "
+        "   WHERE ra.asset_id=a.id AND r.deleted_at IS NULL) AS observed_runs, "
+        "  (SELECT count(*) FROM findings f JOIN runs r ON r.id = f.run_id "
+        "   WHERE f.asset_id=a.id AND f.duplicate_of IS NULL AND r.deleted_at IS NULL) AS finding_count, "
+        "  (SELECT max(e.collected_at) FROM evidence e JOIN runs r ON r.id = e.run_id "
+        "   WHERE e.asset_id=a.id AND r.deleted_at IS NULL) AS last_observed_at "
+        f"FROM assets a WHERE {sql_where} ORDER BY a.value LIMIT %s OFFSET %s",
+        params + [limit, offset]).fetchall()
+    return {"items": rows, "total": total, "limit": limit, "offset": offset}
+
+
+def _load_asset(conn, asset_ref: str) -> dict:
+    row = conn.execute("SELECT * FROM assets WHERE id::text = %s", (asset_ref,)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"자산 '{asset_ref}' 을(를) 찾을 수 없음")
+    return row
+
+
+@router.get("/api/assets/{asset_ref}")
+def get_asset_detail(asset_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
+    """자산 상세: 양방향 관계, 관찰한 실행 이력, 실행별 finding(중복 제외, fingerprint 로 분류 가능)."""
+    asset = _load_asset(conn, asset_ref)
+    edges = conn.execute(
+        "SELECT e.id, 'out' AS direction, e.rel, d.id AS other_id, d.kind AS other_kind, "
+        "  d.value AS other_value, e.source "
+        "FROM asset_edges e JOIN assets d ON d.id = e.dst_id WHERE e.src_id = %(id)s "
+        "UNION ALL "
+        "SELECT e.id, 'in' AS direction, e.rel, s.id AS other_id, s.kind AS other_kind, "
+        "  s.value AS other_value, e.source "
+        "FROM asset_edges e JOIN assets s ON s.id = e.src_id WHERE e.dst_id = %(id)s "
+        "ORDER BY other_value", {"id": asset["id"]}).fetchall()
+    runs = conn.execute(
+        "SELECT r.id, r.run_code, r.status, r.created_at, ra.target_id FROM run_assets ra "
+        "JOIN runs r ON r.id = ra.run_id WHERE ra.asset_id = %s AND r.deleted_at IS NULL "
+        "ORDER BY r.created_at DESC", (asset["id"],)).fetchall()
+    findings = conn.execute(
+        "SELECT f.*, r.run_code FROM findings f JOIN runs r ON r.id = f.run_id "
+        "WHERE f.asset_id = %s AND f.duplicate_of IS NULL AND r.deleted_at IS NULL "
+        "ORDER BY f.created_at DESC", (asset["id"],)).fetchall()
+    return {"asset": asset, "edges": edges, "runs": runs, "findings": findings}

@@ -728,6 +728,32 @@ API 호출 변경 없음(순수 이동). 백엔드(Python) 변경이 없어 전�
   자산 중심 1-hop 그래프. 사이드바 "작업" 그룹에 "자산" 추가.
 - 범위 밖(이번에 안 함): OS·기술 스택 구조화 저장 — 현재 담을 구조화된 자리가 없어 별도 설계가 필요.
 
+**구현 완료(2026-11-14)** — 계획대로 두 읽기 전용 API + 프론트 화면만 추가, 마이그레이션 없음.
+- G5-a: `traces.get_evidence_provenance()`(`src/diagnostic_workbench/traces.py`) + `GET /api/runs/{run}/evidence/{id}/provenance`
+  (`src/webapi/routers/runs.py`). `run_tool()`/`record_invocation()`이 탐색·트리거·자동보강·재검증 모든
+  경로에서 `tool_invocations.backlog_item_id` 를 항상 채운다는 점을 이용해 evidence → tool_invocation →
+  backlog_item → exploration_node(goal 까지) 체인 하나로 네 경로를 모두 커버함(계획에 적었던
+  exploration_anchors 역방향 조회는 실제로 도달 불가능한 경로라 구현 중 제거). origin=llm 노드만 rationale
+  을 inferred 로 분리 표시, 나머지(목표·트리거·자동보강·재검증)는 observed. finding 은 verification 이
+  LLM_PROPOSED/LLM_CONFIRMED 면 inferred, 그 외는 observed. 프록시로 받은 트래픽처럼 탐색 결정과 무관한
+  증거는 빈 체인으로 돌아옴(오류 아님). UI는 `FindingPanel.tsx`의 `EvidenceViewer`에 "출처 보기" 토글을
+  추가해 세로 체인으로 표시, observed/inferred 를 색+텍스트 라벨(관찰됨/LLM 추론) 둘 다로 구분.
+  `tests/unit/test_evidence_provenance_api.py`(6개, 탐색/트리거/재검증 경로·finding 분류·빈 체인·미존재
+  증거 각각 확인) 전체 통과.
+- G5-b: `GET /api/assets`, `GET /api/assets/{id}`(`src/webapi/routers/global_views.py`) — 둘 다
+  소프트 삭제된 실행은 집계에서 제외(`r.deleted_at IS NULL`). 프론트 `/assets`(목록+필터),
+  `/assets/{id}`(상세+관계+실행 이력+finding). RunDetail 의 `GraphTab` 원형 레이아웃 렌더링을
+  `components/AssetGraph.tsx`(`AssetGraphSvg`)로 뽑아 자산 상세의 1-hop 그래프와 공유(계획대로 재사용,
+  `GraphTab` 자체의 동작은 바꾸지 않음). 사이드바 "작업" 그룹에 "자산" 추가.
+  `tests/unit/test_global_assets_api.py`(4개) 전체 통과. 계획에 없던 테스트지만(G5-b 는 테스트 파일이
+  명시되지 않았음) 검증 없이 완료로 보고하지 않기 위해 추가(CLAUDE.md §15).
+- `npx tsc --noEmit`·`npm run build` 통과. 실제 실행에 수동으로 탐색(origin=llm) 체인·finding 을 만들어
+  브라우저에서 "출처 보기" 렌더링을 확인(체인 끊김 없음, 라벨 중복 없음 — 첫 구현에서 요약과 rationale 이
+  중복 표시되던 걸 요약 로직에서 rationale 을 빼 수정)하고 테스트용 실행은 소프트 삭제로 정리. `/assets`
+  목록·상세의 자산(localhost)도 실제 데이터로 확인. 전체 백엔드 테스트 332 통과, 1건
+  실패(`test_autonomous_run.py::test_explore_propose_bootstraps_without_prior_evidence`)는 이 세션
+  이전부터 있던 인코딩 문제로 G5 와 무관 — 수정하지 않음(범위 밖).
+
 ### G6. 실행 간 비교(신규·지속·미재현) — P2, G1 의존
 
 - `GET /api/compare?base=<run>&head=<run>` — 두 실행의 자산 company 가 다르면 422.

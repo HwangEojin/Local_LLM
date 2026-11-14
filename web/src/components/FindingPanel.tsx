@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Check, Download, Eye, EyeOff, Pencil, RotateCw, X } from "lucide-react";
+import { Check, Download, Eye, EyeOff, GitBranch, Pencil, RotateCw, X } from "lucide-react";
 
 import { StatusBadge } from "@/components/StatusBadge";
 import { Banner, btnGhost, btnPrimary, btnSecondary, inputCls, SkeletonRows, useToast } from "@/components/ui";
@@ -9,13 +9,84 @@ import {
   api,
   ApiError,
   downloadUrl,
+  EvidenceProvenance,
   Finding,
   FINDING_STATUSES,
   FindingDetail,
   FindingRevision,
+  ProvenanceNodeKind,
   SimilarFinding,
 } from "@/lib/api";
 import { describe, formatBytes, formatTime, VERIFICATION_LABEL } from "@/lib/labels";
+
+/** observed/inferred 를 색과 텍스트 라벨 둘 다로 구분한다(PRODUCT.md 원칙 1, 색만으로 구분하지 않음). */
+function NodeKindTag({ kind }: { kind: ProvenanceNodeKind }) {
+  const isObserved = kind === "observed";
+  return (
+    <span
+      className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+        isObserved ? "border-ok/40 text-ok" : "border-warn/40 text-warn"
+      }`}
+    >
+      {isObserved ? "관찰됨" : "LLM 추론"}
+    </span>
+  );
+}
+
+/** 증거 하나의 출처 체인(G5-a, UPGRADE_PLAN.md) — 목표부터 증거·finding 까지 세로로 보여 준다. */
+function ProvenancePanel({ runId, evidenceId }: { runId: string; evidenceId: string }) {
+  const [data, setData] = useState<EvidenceProvenance | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .get<EvidenceProvenance>(`/api/runs/${runId}/evidence/${evidenceId}/provenance`)
+      .then(setData)
+      .catch((e) => setError(e instanceof Error ? e.message : "출처를 불러오지 못했습니다"));
+  }, [runId, evidenceId]);
+
+  if (error) return <p className="mt-1 text-xs text-danger">{error}</p>;
+  if (!data) return <p className="mt-1 text-xs text-faint">불러오는 중…</p>;
+
+  const steps: { label: string; summary: string; kind: ProvenanceNodeKind; detail?: string }[] = [
+    ...data.exploration_path.map((n) => ({
+      label: n.kind === "goal" ? "목표" : `의도(${n.origin_label})`,
+      summary: n.summary || "(요약 없음)",
+      kind: n.node_kind,
+      detail: n.rationale,
+    })),
+    ...(data.backlog_item ? [{ label: "작업 사유", summary: data.backlog_item.reason, kind: data.backlog_item.node_kind }] : []),
+    ...(data.tool_invocation
+      ? [{
+          label: "도구 호출",
+          summary: `${data.tool_invocation.tool} · 정책 ${data.tool_invocation.policy_decision}`,
+          kind: data.tool_invocation.node_kind,
+          detail: data.tool_invocation.policy_reason || undefined,
+        }]
+      : []),
+    { label: "증거", summary: `${data.evidence.tool} (${data.evidence.success ? "성공" : "실패"})`, kind: data.evidence.node_kind },
+    ...data.findings.map((f) => ({ label: "발견 사항", summary: f.title, kind: f.node_kind, detail: f.verification })),
+  ];
+
+  if (steps.length <= 1) {
+    return <p className="mt-1 text-xs text-faint">이 증거는 탐색 결정과 연결된 체인이 없습니다(예: 프록시로 받은 트래픽).</p>;
+  }
+
+  return (
+    <ol className="mt-2 space-y-2 border-l border-line pl-3">
+      {steps.map((s, i) => (
+        <li key={i} className="text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="font-medium text-ink">{s.label}</span>
+            <NodeKindTag kind={s.kind} />
+          </div>
+          <div className="text-muted">{s.summary}</div>
+          {s.detail && <div className="mt-0.5 text-faint">{s.detail}</div>}
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 const EVIDENCE_KIND_LABEL: Record<string, string> = { RULE: "규칙", LLM: "AI" };
 const VOTE_STAGE_LABEL: Record<string, string> = { proposer: "제안", verifier: "검증" };
@@ -43,6 +114,7 @@ export function EvidenceViewer({
   const [open, setOpen] = useState(false);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showProvenance, setShowProvenance] = useState(false);
   const isText = !mediaType || TEXT_TYPE.test(mediaType);
 
   async function toggle() {
@@ -64,15 +136,26 @@ export function EvidenceViewer({
 
   return (
     <div>
-      <button onClick={toggle} className="inline-flex items-center gap-1 text-xs text-accent hover:underline" aria-expanded={open}>
-        {open ? <EyeOff className="h-3.5 w-3.5" aria-hidden /> : <Eye className="h-3.5 w-3.5" aria-hidden />}
-        {open ? "미리보기 접기" : "미리보기"}
-      </button>
+      <div className="flex items-center gap-3">
+        <button onClick={toggle} className="inline-flex items-center gap-1 text-xs text-accent hover:underline" aria-expanded={open}>
+          {open ? <EyeOff className="h-3.5 w-3.5" aria-hidden /> : <Eye className="h-3.5 w-3.5" aria-hidden />}
+          {open ? "미리보기 접기" : "미리보기"}
+        </button>
+        <button
+          onClick={() => setShowProvenance((v) => !v)}
+          className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
+          aria-expanded={showProvenance}
+        >
+          <GitBranch className="h-3.5 w-3.5" aria-hidden />
+          {showProvenance ? "출처 접기" : "출처 보기"}
+        </button>
+      </div>
       {open && (
         <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-canvas p-2 font-mono text-[11px] text-muted">
           {error ?? text ?? "불러오는 중…"}
         </pre>
       )}
+      {showProvenance && <ProvenancePanel runId={runId} evidenceId={evidenceId} />}
     </div>
   );
 }

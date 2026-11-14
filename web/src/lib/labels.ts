@@ -42,6 +42,13 @@ export const VERIFICATION_LABEL: Record<string, string> = {
   RULE: "규칙 확정",
 };
 
+// 자산 verification(G5-b, UPGRADE_PLAN.md) — Finding.verification 과는 다른 값 집합
+export const ASSET_VERIFICATION_LABEL: Record<string, string> = {
+  SCOPE_DECLARED: "범위에 선언됨",
+  OBSERVED: "실제 관찰됨",
+  UNVERIFIED: "미확인",
+};
+
 export const DOCTOR_LABEL: Record<string, string> = {
   OK: "정상",
   WARN: "주의",

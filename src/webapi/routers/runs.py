@@ -391,6 +391,17 @@ def download_evidence(run_ref: str, evidence_ref: str,
     return FileResponse(path, media_type=e["media_type"] or "application/octet-stream", filename=filename)
 
 
+@router.get("/{run_ref}/evidence/{evidence_ref}/provenance")
+def get_evidence_provenance(run_ref: str, evidence_ref: str, conn=Depends(get_conn),
+                            user: str = Depends(current_user)):
+    run = _load_run(conn, run_ref)
+    e = _evidence_row(conn, run, evidence_ref)
+    result = traces.get_evidence_provenance(conn, run["id"], e["id"])
+    if result is None:
+        raise HTTPException(404, f"증적 '{evidence_ref}' 을(를) 찾을 수 없음")
+    return result
+
+
 @router.get("/{run_ref}/assets")
 def get_assets(run_ref: str, conn=Depends(get_conn), user: str = Depends(current_user)):
     """자산 그래프(이 실행의 대상 + 관찰된 관계). 웹 UI 자산 화면용 — 새 진단 로직 없음(cli.cmd_graph 와

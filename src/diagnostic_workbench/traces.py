@@ -66,6 +66,91 @@ def get_worker_trace(conn, backlog_item_id, step_nos=None):
         "ORDER BY ti.started_at, ti.step_no", (backlog_item_id, step_nos, step_nos)).fetchall()
 
 
+_ORIGIN_LABEL = {"operator": "운영자", "llm": "LLM 제안", "trigger": "트리거", "enrich": "자동 보강",
+                 "worker": "실행 도구", "retest": "재검증 요청"}
+
+
+def _node_entry(node) -> dict:
+    """탐색 노드 하나를 체인 표시용으로 요약한다. origin='llm' 인 노드의 rationale 은 LLM 의 주장일 뿐이라
+    inferred, 그 외(운영자 목표·트리거 조건·자동 보강·실행 도구 결과)는 observed(CLAUDE.md §3/§9)."""
+    payload = node["payload"] or {}
+    inferred = node["origin"] == "llm"
+    # origin=llm 인 노드는 rationale 을 summary 가 아니라 별도 "rationale" 필드로만 보여 준다(중복 표시 방지) —
+    # summary 는 어떤 도구를 왜 골랐는지가 아니라 무엇을 했는지(관찰 가능한 사실)를 나타낸다.
+    summary = payload.get("text") or payload.get("trigger_name") or payload.get("tool") or ""
+    entry = {"id": node["id"], "kind": node["kind"], "state": node["state"], "origin": node["origin"],
+             "origin_label": _ORIGIN_LABEL.get(node["origin"], node["origin"]), "summary": summary,
+             "created_at": node["created_at"], "node_kind": "inferred" if inferred else "observed"}
+    if inferred and payload.get("rationale"):
+        entry["rationale"] = payload["rationale"]
+    return entry
+
+
+def get_evidence_provenance(conn, run_id, evidence_id) -> dict | None:
+    """증거 하나의 출처 체인(G5-a, UPGRADE_PLAN.md): evidence ← tool_invocation ← backlog_item
+    ← exploration_node(들, goal 까지 거슬러 올라감) → finding_evidence → findings(+ G2 투표).
+
+    탐색/트리거/자동보강/재검증 경로 모두 run_tool()이 tool_invocations.backlog_item_id 를 늘 채우고,
+    그 backlog_item.exploration_node_id 가 작업을 낳은 intent 노드를 직접 가리킨다 — worker._run_exploration
+    이 따로 만드는 fact 노드도 같은 backlog_item 을 거치므로 별도 처리가 필요 없다. 프록시로 수집된 트래픽
+    (backlog_item_id 없음)처럼 탐색 결정과 무관한 증거는 exploration_path 가 빈 목록으로 돌아온다."""
+    evidence = conn.execute("SELECT * FROM evidence WHERE id=%s AND run_id=%s", (evidence_id, run_id)).fetchone()
+    if evidence is None:
+        return None
+    ti = conn.execute(
+        "SELECT tool, tool_version, args, policy_decision, policy_reason, status, error, backlog_item_id "
+        "FROM tool_invocations WHERE evidence_id=%s ORDER BY started_at LIMIT 1", (evidence_id,)).fetchone()
+
+    backlog_item_id = ti["backlog_item_id"] if ti else evidence["backlog_item_id"]
+    backlog_item = None
+    node_id = None
+    if backlog_item_id:
+        backlog_item = conn.execute(
+            "SELECT id, kind, status, reason, exploration_node_id FROM backlog_items WHERE id=%s",
+            (backlog_item_id,)).fetchone()
+        if backlog_item:
+            node_id = backlog_item["exploration_node_id"]
+
+    path = []
+    seen = set()
+    current = node_id
+    for _ in range(10):  # 실제로는 goal 까지 늘 1홉 — 방어적으로 상한만 둠, 끝없이 돌지 않게
+        if current is None or current in seen:
+            break
+        seen.add(current)
+        node = conn.execute("SELECT id, kind, state, origin, payload, created_at FROM exploration_nodes "
+                            "WHERE id=%s", (current,)).fetchone()
+        if node is None:
+            break
+        path.append(_node_entry(node))
+        if node["kind"] == "goal":
+            break
+        parent = conn.execute("SELECT src_id FROM exploration_edges WHERE dst_id=%s AND rel='spawns' LIMIT 1",
+                              (current,)).fetchone()
+        current = parent["src_id"] if parent else None
+    path.reverse()
+
+    findings = conn.execute(
+        "SELECT f.* FROM finding_evidence fe JOIN findings f ON f.id = fe.finding_id "
+        "WHERE fe.evidence_id=%s ORDER BY f.created_at", (evidence_id,)).fetchall()
+    finding_out = []
+    for f in findings:
+        votes = conn.execute(
+            "SELECT model, stage, verdict, rationale, created_at FROM finding_llm_votes "
+            "WHERE finding_id=%s ORDER BY id", (f["id"],)).fetchall()
+        inferred = f["verification"] in ("LLM_PROPOSED", "LLM_CONFIRMED")
+        finding_out.append({**f, "node_kind": "inferred" if inferred else "observed",
+                            "llm_votes": [{**v, "node_kind": "inferred"} for v in votes]})
+
+    return {
+        "evidence": {**evidence, "node_kind": "observed"},
+        "tool_invocation": {**ti, "node_kind": "observed"} if ti else None,
+        "backlog_item": {**backlog_item, "node_kind": "observed"} if backlog_item else None,
+        "exploration_path": path,
+        "findings": finding_out,
+    }
+
+
 def tag_node(conn, run, node_ref: str, check_id: str) -> dict:
     """탐색 노드(보통 검증된 fact 를 낳은 intent)에 체크리스트 check_id 를 사후 매핑한다(CLAUDE.md §7B.3).
 
