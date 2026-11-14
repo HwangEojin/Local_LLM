@@ -270,6 +270,19 @@ export type AssetDetail = {
   findings: FindingWithRun[];
 };
 
+// 실행 간 비교(/runs/compare, UPGRADE_PLAN.md G6) — "관찰되지 않음"을 "고쳐짐"의 증거로 단정하지 않으므로
+// mitigated_presumed(미재현·조치 추정)와 unconfirmed(이번 실행에서 미확인)를 반드시 구분해서 받는다.
+export type RunCompareResult = {
+  base_run: { id: string; run_code: string };
+  head_run: { id: string; run_code: string };
+  new: Finding[];
+  persistent: { base: Finding; head: Finding }[];
+  recurred: { base: Finding; head: Finding }[];
+  mitigated_presumed: Finding[];
+  unconfirmed: Finding[];
+  incomparable: Finding[];
+};
+
 export type ActivityEntry = {
   id: string;
   run_id: string;

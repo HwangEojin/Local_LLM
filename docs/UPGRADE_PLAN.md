@@ -773,6 +773,28 @@ API 호출 변경 없음(순수 이동). 백엔드(Python) 변경이 없어 전�
 - 보고서 연계(선택, 후속): 재진단 보고서에 분류 표를 넣는 것은 회사 템플릿 확인 후 별도 결정.
 - 테스트: `test_run_compare_api.py` — 분류 5종, 회사 불일치 거부, NULL fingerprint 처리.
 
+**구현 완료(2026-11-14)** — 계획대로 마이그레이션 없음. `src/diagnostic_workbench/compare.py`(순수 분류
+함수 `compare_runs()`, `run_companies()`) + `GET /api/compare?base=&head=`(`global_views.py`, 회사
+불일치 시 422). fingerprint 가 `asset_id`를 포함해 계산되고(G1, `fingerprint.py`) 자산이 실행을 가로질러
+공유되는 전역 행이라, 서로 다른 실행의 finding 을 fingerprint 값으로 직접 맞출 수 있었음(계획에 적지
+않았던 세부 — 비교가 왜 가능한지의 전제).
+- "미재현(조치 추정)" 판정은 계획 문구의 두 조건("head 증거 있음+신호 없음" 또는 "재검증 결과 FIXED")을
+  **OR**로 구현 — 재검증은 `worker.create_retest()`가 항상 그 finding 이 속한 실행 안에서만 만들어
+  (findings.py `/retest` 라우터가 `run["id"]`를 그대로 씀) head 실행과 무관하게 base 쪽에 독립적으로
+  존재하는 신호이기 때문. `finding_review_history.reason`에 `"재검증 결과: FIXED — ..."` 문자열로만
+  남고 별도 판정 컬럼이 없어 `LIKE` 매칭으로 찾음.
+- "재발"은 지속(양쪽에 같은 fingerprint)인 쌍 중 base 가 REJECTED 가 아니면서 FIXED 재검증 이력이 있는
+  경우만 지속에서 떼어 재분류 — base 가 REJECTED 인데 FIXED 이력이 있는 쌍은 스펙 문구 그대로 지속에 남김.
+- `tests/unit/test_run_compare_api.py`(9개: 분류 5종 + REJECTED 예외 + NULL fingerprint + 회사 불일치)
+  전체 통과.
+- 프론트: `/runs/compare`(기준/대상 셀렉트 + 비교 버튼, `?base=&head=` 쿼리로 바로 결과 표시), 자산
+  상세(G5-b)에 "이 자산의 실행 비교" 바로가기(가장 최근 실행 2개를 자동으로 base/head 에 넣음, 실행이
+  2개 미만이면 숨김). `npx tsc --noEmit`·`npm run build` 통과. 실제 실행 2개에 분류 5종을 전부 만드는
+  finding/증거를 넣어 브라우저에서 5개 구간(신규/지속/재발/미재현/미확인)과 자산 상세의 바로가기 링크가
+  올바른 실행 쌍을 가리키는지 확인 후 테스트용 실행은 소프트 삭제로 정리. 전체 백엔드 테스트 341 통과,
+  G5 때부터 있던 무관한 인코딩 테스트 실패 1건은 그대로(범위 밖).
+- 보고서 연계는 계획대로 이번에 하지 않음(범위 밖, 후속 과제로 남김).
+
 ### G7. 보류 항목 (사유 기록)
 
 | 항목 | 보류 사유 | 재검토 조건 |
