@@ -117,6 +117,17 @@ export type Finding = {
   duplicate_of: string | null;
   suspected_duplicates?: number; // 목록 조회에만 붙는다(상세에는 없음)
   merged_count?: number; // 이 finding 으로 병합된 다른 finding 수(목록 조회에만 붙음)
+  human_edited: boolean; // G3: 검토자가 title/rationale/remediation 을 고쳤으면 true(보고서 다듬기 건너뜀)
+};
+
+// G3(검토자 편집, UPGRADE_PLAN.md)
+export type FindingRevision = {
+  field: "title" | "rationale" | "remediation";
+  old_value: string;
+  new_value: string;
+  reason: string;
+  actor: string;
+  changed_at: string;
 };
 
 // 전역 발견 사항 화면(/findings, UPGRADE_PLAN.md B2)용 — run_code 만 추가된다.
@@ -435,6 +446,8 @@ export type ReportFile = {
   modified_at: string;
   approved_by: string | null;
   approved_at: string | null;
+  stale: boolean; // G3 D6: 승인 이후 finding 이 편집됐으면 true — 재생성 필요
+  edited_after_approval: number;
 };
 
 export type ToolInfo = {

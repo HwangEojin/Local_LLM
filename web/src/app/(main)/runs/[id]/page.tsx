@@ -1301,6 +1301,11 @@ function ReportTab({ runId, completed }: { runId: string; completed: boolean }) 
                   {formatBytes(f.size)} · {formatTime(f.modified_at)}
                   {f.approved_by && <> · 승인: {f.approved_by} ({formatTime(f.approved_at as string)})</>}
                 </div>
+                {f.stale && (
+                  <div className="mt-1 text-xs font-medium text-warn">
+                    ⚠ 승인 이후 finding {f.edited_after_approval}건 편집됨 — 재생성 필요
+                  </div>
+                )}
               </div>
               <div className="flex shrink-0 gap-2">
                 <a href={reportDownloadUrl(runId, f.file)} className={btnGhost} download>

@@ -1,11 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Check, Download, Eye, EyeOff, RotateCw, X } from "lucide-react";
+import { Check, Download, Eye, EyeOff, Pencil, RotateCw, X } from "lucide-react";
 
 import { StatusBadge } from "@/components/StatusBadge";
 import { Banner, btnGhost, btnPrimary, btnSecondary, inputCls, SkeletonRows, useToast } from "@/components/ui";
-import { api, ApiError, downloadUrl, Finding, FINDING_STATUSES, FindingDetail, SimilarFinding } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  downloadUrl,
+  Finding,
+  FINDING_STATUSES,
+  FindingDetail,
+  FindingRevision,
+  SimilarFinding,
+} from "@/lib/api";
 import { describe, formatBytes, formatTime, VERIFICATION_LABEL } from "@/lib/labels";
 
 const EVIDENCE_KIND_LABEL: Record<string, string> = { RULE: "규칙", LLM: "AI" };
@@ -194,6 +203,126 @@ function ReviewForm({
   );
 }
 
+/** G3(검토자 편집, UPGRADE_PLAN.md): title/rationale/remediation 만 고칠 수 있다 — 심각도는 개념이
+ * 없고(G-S), 영향도는 만들지 않음(D5). 저장하면 바뀐 필드만 이력에 남고(원문 보존), 사람이 고친
+ * finding은 보고서 생성 시 Reporter가 다시 다듬지 않는다. */
+function EditSection({
+  runId,
+  finding,
+  onDone,
+}: {
+  runId: string;
+  finding: Finding;
+  onDone: () => void;
+}) {
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(finding.title);
+  const [rationale, setRationale] = useState(finding.rationale);
+  const [remediation, setRemediation] = useState(finding.remediation);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    if (!reason.trim()) {
+      setError("수정 사유를 입력하세요");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.post<{ changed_fields: string[] }>(`/api/runs/${runId}/findings/${finding.id}/edit`, {
+        changes: { title, rationale, remediation }, reason,
+      });
+      toast("ok", r.changed_fields.length > 0 ? `수정했습니다 (${r.changed_fields.join(", ")})` : "바뀐 내용이 없습니다");
+      setEditing(false);
+      setReason("");
+      onDone();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "수정에 실패했습니다");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openEdit() {
+    setTitle(finding.title);
+    setRationale(finding.rationale);
+    setRemediation(finding.remediation);
+    setEditing(true);
+  }
+
+  if (!editing) {
+    return (
+      <button onClick={openEdit} className={btnGhost}>
+        <Pencil className="h-4 w-4" aria-hidden /> 제목·근거·대응방안 수정
+      </button>
+    );
+  }
+
+  return (
+    <section aria-label="발견 사항 수정" className="space-y-2 rounded-md border border-line p-3">
+      {error && <Banner onClose={() => setError(null)}>{error}</Banner>}
+      <div>
+        <label className="mb-1 block text-xs text-muted">제목</label>
+        <input className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-muted">근거(rationale)</label>
+        <textarea rows={3} className={inputCls} value={rationale} onChange={(e) => setRationale(e.target.value)} />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-muted">대응방안(remediation)</label>
+        <textarea rows={2} className={inputCls} value={remediation} onChange={(e) => setRemediation(e.target.value)} />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-muted">수정 사유 (필수)</label>
+        <input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="왜 이렇게 고치는지" />
+      </div>
+      <div className="flex gap-2">
+        <button disabled={busy} onClick={save} className={btnPrimary}>
+          <Check className="h-4 w-4" aria-hidden /> 저장
+        </button>
+        <button disabled={busy} onClick={() => setEditing(false)} className={btnGhost}>취소</button>
+      </div>
+      <p className="text-xs text-faint">
+        바뀐 필드만 아래 수정 이력에 남고 원문(DB)은 지우지 않습니다. 수정된 finding은 보고서 생성 시
+        Reporter가 다시 다듬지 않습니다 — 이 문장이 그대로 보고서에 들어갑니다.
+      </p>
+    </section>
+  );
+}
+
+function RevisionHistory({ revisions }: { revisions: FindingRevision[] }) {
+  const FIELD_LABEL: Record<string, string> = { title: "제목", rationale: "근거", remediation: "대응방안" };
+  if (revisions.length === 0) return null;
+  return (
+    <section aria-label="수정 이력">
+      <h3 className="mb-2 text-sm font-semibold">
+        수정 이력 <span className="font-normal text-faint">({revisions.length})</span>
+      </h3>
+      <ol className="space-y-3 border-l border-line pl-4">
+        {revisions.map((r, i) => (
+          <li key={i} className="text-sm">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
+              <span className="font-medium text-ink">{r.actor}</span>
+              <span>·</span>
+              <span>{formatTime(r.changed_at)}</span>
+              <span className="rounded-full bg-raised px-1.5 py-0.5 text-[10px] font-medium text-muted">
+                {FIELD_LABEL[r.field] ?? r.field}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-faint">사유: {r.reason}</p>
+            <p className="mt-1 whitespace-pre-wrap text-muted line-through opacity-60">{r.old_value}</p>
+            <p className="mt-1 whitespace-pre-wrap text-ink">{r.new_value}</p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function MergeSection({
   runId,
   finding,
@@ -303,6 +432,7 @@ export function FindingPanel({
   onChanged: () => void;
 }) {
   const [detail, setDetail] = useState<FindingDetail | null>(null);
+  const [revisions, setRevisions] = useState<FindingRevision[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -310,6 +440,10 @@ export function FindingPanel({
       .get<FindingDetail>(`/api/runs/${runId}/findings/${finding.id}`)
       .then(setDetail)
       .catch((e) => setError(e.message));
+    api
+      .get<FindingRevision[]>(`/api/runs/${runId}/findings/${finding.id}/revisions`)
+      .then(setRevisions)
+      .catch(() => {});
   }, [runId, finding.id]);
 
   useEffect(load, [load]); // 다른 finding 으로 바뀌면 부모가 key 로 패널을 새로 만든다
@@ -339,6 +473,11 @@ export function FindingPanel({
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <StatusBadge value={f.status} />
             <span className="text-xs text-muted">{VERIFICATION_LABEL[f.verification] ?? f.verification}</span>
+            {f.human_edited && (
+              <span className="rounded-full bg-raised px-2 py-0.5 text-xs font-medium text-muted" title="검토자가 제목·근거·대응방안을 수정함">
+                사람이 수정함
+              </span>
+            )}
           </div>
         </div>
         <button onClick={onClose} className={btnGhost} aria-label="패널 닫기 (Esc)" title="닫기 (Esc)">
@@ -380,6 +519,10 @@ export function FindingPanel({
             </>
           )}
         </section>
+
+        <EditSection runId={runId} finding={f} onDone={() => { load(); onChanged(); }} />
+
+        <RevisionHistory revisions={revisions} />
 
         <MergeSection runId={runId} finding={f} onDone={() => { load(); onChanged(); }} />
 

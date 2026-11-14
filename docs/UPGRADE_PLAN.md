@@ -631,7 +631,17 @@ proposer(planner 역할 모델)와 같으면 422 — 같은 모델 두 번은 �
 각각의 상태·이력·표·알림 여부; verifier NULL 이면 기존 동작과 완전히 같음(기존 `test_llm_finding.py` 무변경
 통과로 확인); 같은 모델 지정 시 422.
 
-### G3. 검토자 편집(제목·근거·대응방안)과 수정 이력 — P1
+### G3. 검토자 편집(제목·근거·대응방안)과 수정 이력 — P1 — **구현 완료(2026-11-14)**
+
+계획대로 구현. `migrations/0031_finding_revisions.sql`(`finding_revisions` 추가전용 테이블 + `findings.
+human_edited`), `worker.edit_finding()`(허용 밖 필드·빈 사유 거부, 값이 같으면 기록 안 함), 웹 API
+`POST .../edit`·`GET .../revisions`, `reporting._findings_for_pentest_report()`가 `human_edited=true`
+finding 은 `llm=None`과 같은 경로로 Reporter 다듬기를 건너뜀, `GET .../report` 응답에 D6의 `stale`/
+`edited_after_approval`(승인 시각 이후 `finding_revisions` 건수). UI: `FindingPanel.tsx`에 편집
+폼(`EditSection`)·수정 이력(`RevisionHistory`)·"사람이 수정함" 배지, `ReportTab`에 stale 경고 배지.
+테스트: `test_finding_edit.py`(6건: 필드별 이력, 무변경 무기록, 사유 누락 거부, 허용 밖 필드 거부, 추가전용
+트리거, Reporter 다듬기 건너뛰기), `test_report_api.py`에 stale 라운드트립 1건 추가(회사 템플릿 필요,
+이 환경은 skip). 전체 347건 통과(기존 무관 실패 1건 제외). 브라우저로 생성→수정→이력 표시까지 실제 확인.
 
 **목표**: CLAUDE.md §10 의 미구현 요구사항. 원문은 지우지 않고, 누가 언제 왜 무엇을 바꿨는지 모두 남긴다.
 편집 대상은 **제목·근거(rationale)·대응방안(remediation) 세 필드뿐**이다 — 심각도는 G-S(D7)로 개념이

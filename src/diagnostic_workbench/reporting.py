@@ -269,11 +269,15 @@ def _findings_for_pentest_report(conn, evidence_dir: Path, run: dict, meta: dict
         tinfo = targets.get(r["target_id"]) or {"name": r["target_id"], "url": "", "kind": "WEB"}
         notes = (f"검토 확정(reviewer): {r['reviewed_by']}" if r["status"] == "CONFIRMED" and r["reviewed_by"]
                  else f"검증: {r['verification']} ({r['status']}, 사람 최종 검토 전 — CLAUDE.md §9/§10)")
+        if r["human_edited"]:
+            notes += " · 검토자 수정 반영(G3) — Reporter 다듬기 건너뜀"
         images = _finding_images(conn, evidence_dir, r["id"])
         cases = [{"title": "증적 스크린샷", "steps": [
             {"text": f"증적 {i + 1}/{len(images)}", "image": str(p)} for i, p in enumerate(images)]}] if images else []
-        result, recommendation = _polish_finding_text(llm, r["title"], mask_secrets(r["rationale"]), r["remediation"] or "",
-                                                 polish_system)
+        # G3: 사람이 고친 finding 은 Reporter 가 다시 다듬지 않는다(llm=None 과 같은 경로 — 원문 그대로 사용).
+        result, recommendation = _polish_finding_text(
+            None if r["human_edited"] else llm, r["title"], mask_secrets(r["rationale"]), r["remediation"] or "",
+            polish_system)
         out.append({
             "check_id": str(r["id"])[:8], "target_id": r["target_id"], "target_name": tinfo["name"],
             "url": tinfo.get("url", ""), "kind": tinfo.get("kind", "WEB"), "name": r["title"],
