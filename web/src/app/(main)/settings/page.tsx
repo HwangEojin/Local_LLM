@@ -321,20 +321,24 @@ function LlmSection() {
   const [models, setModels] = useState<string[] | null | undefined>(undefined);
   const [profiles, setProfiles] = useState<LlmProfileRef[]>([]);
   const [tests, setTests] = useState<Record<string, { busy: boolean; ok?: boolean; text?: string }>>({});
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState(true); // 마운트하자마자 불러오므로 처음엔 갱신 중
 
-  const loadModels = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const r = await api.get<{ models: string[] | null; profiles: LlmProfileRef[] }>("/api/environment/ollama-models");
-      setModels(r.models);
-      setProfiles(r.profiles ?? []);
-    } catch {
-      setModels(null);
-    } finally {
-      setRefreshing(false);
-    }
+  // 설치된 모델 목록 요청 — 상태는 .then/.catch/.finally 콜백(비동기)에서만 바꾼다(효과에서 불러도 안전).
+  const requestModels = useCallback(() => {
+    api
+      .get<{ models: string[] | null; profiles: LlmProfileRef[] }>("/api/environment/ollama-models")
+      .then((r) => {
+        setModels(r.models);
+        setProfiles(r.profiles ?? []);
+      })
+      .catch(() => setModels(null))
+      .finally(() => setRefreshing(false));
   }, []);
+
+  const loadModels = useCallback(() => {
+    setRefreshing(true);
+    requestModels();
+  }, [requestModels]);
 
   async function runTest(key: string, spec: string | null, provider = "ollama") {
     setTests((t) => ({ ...t, [key]: { busy: true } }));
@@ -343,7 +347,7 @@ function LlmSection() {
   }
 
   useEffect(() => {
-    loadModels();
+    requestModels();
     api
       .get<LlmSettings>("/api/admin/settings")
       .then((s) => {

@@ -29,6 +29,13 @@ def _with_params(dsn: str) -> str:
     return f"{dsn} options='-c search_path={SCHEMA}' application_name={APP_NAME}"
 
 
+def _warn(reason: str) -> None:
+    """H7: DB 를 못 쓰면 DB 테스트가 실패가 아니라 '건너뜀'으로 끝난다 — 통과 개수만 보고 놓치지 않게 한 줄 알린다."""
+    import sys
+    print(f"[tests] PostgreSQL 격리 스키마를 만들지 못함 — DB 테스트는 건너뜀으로 끝납니다 "
+          f"(결과의 skipped 수를 확인하세요): {reason}", file=sys.stderr)
+
+
 def _isolate() -> None:
     if os.environ.get("WORKBENCH_TEST_USE_REAL_DB") == "1":
         return
@@ -37,6 +44,7 @@ def _isolate() -> None:
         config._load_dotenv(ROOT / ".env")  # DSN·PGPASSWORD 를 .env 에서 읽는다(임시 홈에는 .env 가 없으므로 먼저)
         real_dsn = os.environ.get(config.DSN_ENV, "").strip()
         if not real_dsn:
+            _warn(f"{config.DSN_ENV} 가 없음")
             return
         admin = db.connect(real_dsn)
         admin.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
@@ -53,7 +61,8 @@ def _isolate() -> None:
             seed.execute(f"INSERT INTO {SCHEMA}.{table} SELECT * FROM public.{table}")
         seed.commit()
         seed.close()
-    except Exception:  # DB/설정 문제: 격리하지 않고 두면 각 테스트가 기존 방식대로 건너뛴다
+    except Exception as e:  # DB/설정 문제: 격리하지 않고 두면 각 테스트가 기존 방식대로 건너뛴다
+        _warn(f"{type(e).__name__}: {e}")
         return
 
     home = Path(tempfile.mkdtemp(prefix="workbench-test-home-"))

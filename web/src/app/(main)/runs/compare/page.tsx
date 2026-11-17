@@ -46,10 +46,19 @@ export default function RunComparePage() {
   const [head, setHead] = useState(params.get("head") ?? "");
   const [result, setResult] = useState<RunCompareResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // URL 에 base/head 가 이미 있으면 첫 렌더부터 비교 중으로 둔다(아래 효과가 곧바로 불러옴).
+  const [busy, setBusy] = useState(() => Boolean(params.get("base") && params.get("head")));
 
   useEffect(() => {
     api.get<RunList>("/api/runs?limit=200").then((r) => setRuns(r.runs)).catch(() => {});
+  }, []);
+
+  const fetchCompare = useCallback((b: string, h: string) => {
+    api
+      .get<RunCompareResult>(`/api/compare?base=${encodeURIComponent(b)}&head=${encodeURIComponent(h)}`)
+      .then(setResult)
+      .catch((e) => setError(e instanceof ApiError ? e.message : "비교에 실패했습니다"))
+      .finally(() => setBusy(false));
   }, []);
 
   const compare = useCallback(() => {
@@ -57,16 +66,14 @@ export default function RunComparePage() {
     setBusy(true);
     setError(null);
     setResult(null);
-    api
-      .get<RunCompareResult>(`/api/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`)
-      .then(setResult)
-      .catch((e) => setError(e instanceof ApiError ? e.message : "비교에 실패했습니다"))
-      .finally(() => setBusy(false));
-  }, [base, head]);
+    fetchCompare(base, head);
+  }, [base, head, fetchCompare]);
 
   // URL 에 base/head 가 이미 있으면(자산 상세의 "이 자산의 실행 비교" 바로가기) 바로 비교를 돌린다.
   useEffect(() => {
-    if (params.get("base") && params.get("head")) compare();
+    const b = params.get("base");
+    const h = params.get("head");
+    if (b && h) fetchCompare(b, h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

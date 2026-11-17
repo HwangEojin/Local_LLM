@@ -825,7 +825,7 @@ API 호출 변경 없음(순수 이동). 백엔드(Python) 변경이 없어 전�
 
 ---
 
-## H. G 구현 점검 결과와 결함 수정 계획 (2026-11-17 작성, 미구현)
+## H. G 구현 점검 결과와 결함 수정 계획 (2026-11-17 작성, H1~H7 전부 구현 완료)
 
 `ebca5bb` 기준으로 G-S~G6 구현을 계획서와 한 줄씩 대조하고, 실제 PostgreSQL 16 로 전체 테스트를 돌려 확인했다.
 G 의 단계는 모두 구현됐고 결정 D1~D7 도 반영됐지만, **G1·G2·G6 이 막으려던 문제를 다시 만드는 결함**과,
@@ -1084,7 +1084,7 @@ G 계획서가 범위를 좁게 잡은 탓이다.
 - 미검증: 실제 Burp/Playwright 클라이언트가 3xx 를 받아 Location 을 프록시로 재요청하는 흐름(NOT CHECKED — 로컬
   MCP 없음). Windows 실 PC 실행(NOT CHECKED).
 
-### H7. 품질 정리 — 낮음
+### H7. 품질 정리 — 낮음 — **구현 완료(2026-11-17)**
 
 - `web/package.json` `next` 16.4.2 → **16.4.6 이상**(GHSA-mfr8-8qww-v76h). `npm run build` 가 통과하는지 확인.
 - lint 오류 6건: `commands/page.tsx:58`, `runs/compare/page.tsx:69`(G6 신규), `settings/AgentsSection.tsx:89`
@@ -1094,6 +1094,18 @@ G 계획서가 범위를 좁게 잡은 탓이다.
   가짜 LLM 이 제안하는 도구를 내장 도구(`net.http_head` 등)로 바꾸거나, 도구가 없으면 SkipTest.
 - 결과 보고 규칙: 테스트 결과는 "실행/통과/건너뜀" 세 숫자를 함께 적는다(DB 미연결 시 DB 테스트가 조용히
   건너뛰므로). `tests/unit/__init__.py` 가 격리 스키마를 못 만들면 stderr 에 한 줄 경고를 내게 한다.
+
+**구현 결과(2026-11-17)**
+- `next`·`eslint-config-next` 16.4.2 → **16.4.6**(`npm audit --omit=dev` 0건). `npm run build` 통과(16 페이지).
+- lint 오류 6 → 0(경고 10 은 기존과 같은 수, 범위 밖): `commands`·`AgentsSection` 은 효과 대신 렌더 중 상태 조정
+  (React "props 변화에 맞춰 state 조정" 패턴), `runs/compare`·`settings` 는 효과 안에서 `.then` 콜백에서만 상태 변경,
+  `AgentsSection` 따옴표는 `&quot;`. 화면 동작 변경 없음(목록 필터 변경 시 첫 페이지 이동은 이전엔 요청 2번, 이제 1번).
+- `test_autonomous_run` 부트스트랩 테스트는 frida MCP 대신 내장 `net.dns_resolve` 로 — 설치 환경과 무관하게 통과.
+- `tests/unit/__init__.py`: 격리 스키마를 못 만들면 stderr 에 "[tests] … DB 테스트는 건너뜀으로 끝납니다" 한 줄 경고.
+- **H 전체 최종 검증**: Python 383 실행·실패 0·건너뜀 30(회사 템플릿·가져온 체크리스트 22, Ollama 3, testssl 1 등 환경
+  전제), `tsc` 통과, lint 오류 0, `npm run build` 통과. 이 샌드박스의 프록시 환경 변수가 그대로 있는 상태에서 통과.
+- 미검증(NOT CHECKED): 화면 렌더링(`/runs/compare` 기각 묶음, 보고서 탭 배지, 설정 화면) — 타입 검사·빌드만 통과.
+  Windows 실 PC 실행. 실제 Burp/Playwright MCP 연동 흐름.
 
 ### H-결정. 구현 전 사용자 확인 필요
 

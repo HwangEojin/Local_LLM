@@ -78,8 +78,11 @@ class CreateRunWithoutChecklist(unittest.TestCase):
                               checklist_id=None, use_llm=True)
         ctx = runs.build_context(self.cfg, self.conn, run)
         ctx.llm = _FakeLLM([{
-            "rationale": "최초 정찰", "target_id": "baseline-demo", "tool": "mcp:frida/list_processes",
-            "args": {}, "risk": "read", "expected_evidence": "프로세스 목록",
+            # H7: 내장 도구를 쓴다 — MCP 도구(예: frida)는 그 PC 에 설치돼 있어야 등록되므로, 설치 여부에 따라
+            # "등록되지 않은 도구"로 거부돼 결과가 달라졌다. 이 테스트의 관심사는 "증거 없이도 첫 제안이 큐에
+            # 들어가는가"뿐이다.
+            "rationale": "최초 정찰", "target_id": "baseline-demo", "tool": "net.dns_resolve",
+            "args": {"host": "localhost"}, "risk": "read", "expected_evidence": "주소 조회 결과",
             "stop_condition": "목록 확인", "based_on_evidence_ids": [],
         }])
         accepted = explore.propose(ctx)

@@ -54,8 +54,14 @@ function CommandsBody() {
       })
       .catch((e) => setError(e.message));
   }, [debouncedQ, tool, status, offset]);
+  // 필터가 바뀌면 첫 페이지로 — 효과에서 setState 하지 않고 렌더 중에 조정한다(이전 필터 값과 비교).
+  const filterKey = `${debouncedQ}\u0000${tool}\u0000${status}`;
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
+  if (prevFilterKey !== filterKey) {
+    setPrevFilterKey(filterKey);
+    setOffset(0);
+  }
   useEffect(load, [load]);
-  useEffect(() => setOffset(0), [debouncedQ, tool, status]);
 
   const page = Math.floor(offset / PAGE) + 1;
   const pages = Math.max(1, Math.ceil(total / PAGE));

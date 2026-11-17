@@ -86,7 +86,12 @@ function PromptEditor({ prompt, onChanged }: { prompt: AgentPrompt; onChanged: (
   const [showHistory, setShowHistory] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => setText(prompt.text), [prompt.text]);
+  // 서버의 프롬프트 원문이 바뀌면 편집 칸도 그 값으로 — 효과 대신 렌더 중에 조정한다.
+  const [prevPromptText, setPrevPromptText] = useState(prompt.text);
+  if (prevPromptText !== prompt.text) {
+    setPrevPromptText(prompt.text);
+    setText(prompt.text);
+  }
 
   async function run(kind: "save" | "reset") {
     setBusy(true);
@@ -647,7 +652,7 @@ export function AgentsSection() {
       <div>
         <p className="mb-2 text-xs text-faint">
           커스텀 에이전트(레퍼런스 프로젝트 의 자유 에이전트 생성 재현) — 이름·프롬프트·모델·허용 도구를 자유롭게 정의해
-          무제한 만들 수 있습니다. 자기 실행 경로는 없고, 진단 상세의 "트리거" 탭에서 트리거의 담당으로 고르면
+          무제한 만들 수 있습니다. 자기 실행 경로는 없고, 진단 상세의 &quot;트리거&quot; 탭에서 트리거의 담당으로 고르면
           그 트리거가 발동할 때만 이 정의로 LLM 이 tool/args 를 고릅니다(실행은 여전히 policy.decide() 가 판정).
         </p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
