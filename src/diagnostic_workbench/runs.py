@@ -204,6 +204,39 @@ def _check_model_spec(cfg, label: str, spec: str, profiles: dict, installed_cach
                           f"(등록된 프로파일: {sorted(profiles) or '없음'})")
 
 
+def _resolved_model(cfg, spec: str | None, llm_provider: str, llm_profile: str | None) -> tuple[str, str | None]:
+    """H3: 모델 지정 문자열을 실제로 쓰일 (종류, 모델 이름)으로 해석한다 — make_llm()/make_llm_for_spec() 과 같은
+    규칙. spec 이 없으면 실행 기본(llm_profile → 프로파일, 없으면 llm_provider 의 settings.json 블록).
+    Ollama 모델명은 ':latest' 를 붙인 것과 안 붙인 것을 같게 본다. 모델 이름을 알 수 없으면(예: claude_cli 의
+    CLI 기본 모델) None — 비교는 _same_model_or_unclear 가 한다."""
+    profile = None
+    if spec and spec.startswith("ollama:"):
+        profile = {"kind": "ollama", "model": spec[len("ollama:"):]}
+    else:
+        name = spec or llm_profile
+        if name:
+            profile = audit_config.load_llm_profiles(cfg.home).get(name)
+            if profile is None:
+                raise ConfigError(f"모델 지정 '{name}' 을(를) llm_profiles.json 에서 찾을 수 없음")
+    kind = profile["kind"] if profile else llm_provider
+    base = cfg.settings.raw.get("claude_cli", {}) if kind == "claude_cli" else cfg.settings.ollama
+    model = (profile or {}).get("model") or base.get("model")
+    if not model:
+        return kind, None
+    model = str(model)
+    if kind == "ollama" and model.endswith(":latest"):
+        model = model[: -len(":latest")]
+    return kind, model
+
+
+def _same_model_or_unclear(a: tuple[str, str | None], b: tuple[str, str | None]) -> bool:
+    """종류가 다르면 다른 모델. 종류가 같은데 한쪽이라도 모델 이름을 모르면 같은지 판단할 수 없으므로
+    같다고 본다(교차 검증으로 인정하지 않음, §8-4)."""
+    if a[0] != b[0]:
+        return False
+    return a[1] is None or b[1] is None or a[1] == b[1]
+
+
 def _check_agent_models(cfg, agent_models: dict[str, str], use_llm: bool) -> dict[str, str]:
     """역할별 모델 지정을 검증한다(지정은 운영자가 실행 생성 시에만 하고(LLM 이 바꾸지 못함) 이후 고정된다)."""
     if not agent_models:
@@ -247,9 +280,8 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
 
     verifier_model 을 주면(G2) LLM 이 낸 finding 을 그 모델이 독립적으로 다시 봐서 동의할 때만 확정한다
     (D4: 안 주면 현행처럼 단일 모델이 바로 확정). planner 역할이 실제로 쓸 모델과 같은 spec 문자열이면
-    거부한다 — 같은 모델 두 번은 교차 검증이 아니다. planner 가 역할별 지정 없이 run 기본 모델(llm_profile/
-    llm_provider)을 쓸 때는 그 기본 spec 과 비교한다(ollama 기본 모델처럼 spec 문자열이 없는 경우는 비교
-    불가라 통과시킨다 — 실제로 같은 모델이면 사람이 알아챌 수 있는 수준의 보조 장치일 뿐).
+    거부한다 — 같은 모델 두 번은 교차 검증이 아니다. H3 부터는 spec 문자열이 아니라 실제로 쓰일 (종류, 모델)로
+    해석해 비교한다(_resolved_model). 해석할 수 없으면 거부한다.
     """
     if autonomy not in AUTONOMY_LEVELS:
         raise ConfigError(f"autonomy 는 {AUTONOMY_LEVELS} 중 하나여야 함: {autonomy}")
@@ -276,9 +308,14 @@ def create_run(conn, cfg, target_ids: list[str], operator: str, *, checklist_id:
         if not use_llm:
             raise ConfigError("교차 검증 모델은 --llm 과 함께만 쓸 수 있음")
         _check_model_spec(cfg, "verifier_model", verifier_model, audit_config.load_llm_profiles(cfg.home), [None])
-        proposer_spec = agent_models.get("planner") or llm_profile
-        if proposer_spec and proposer_spec == verifier_model:
-            raise ConfigError("교차 검증 모델이 제안 모델(planner)과 같음 — 같은 모델 두 번은 교차 검증이 아님")
+        # H3: 문자열이 아니라 실제로 쓰일 모델로 비교한다(프로파일 이름과 'ollama:<모델>' 처럼 표기만 다른 경우,
+        # planner 가 기본 모델을 쓰는 경우까지). 해석할 수 없으면 _resolved_model 이 거부한다.
+        proposer = _resolved_model(cfg, agent_models.get("planner"), llm_provider, llm_profile)
+        verifier = _resolved_model(cfg, verifier_model, llm_provider, llm_profile)
+        if _same_model_or_unclear(proposer, verifier):
+            raise ConfigError(f"교차 검증 모델이 제안 모델(planner)과 같거나 같은지 알 수 없음"
+                              f"(제안 {proposer[0]}:{proposer[1] or '기본'}, 검증 {verifier[0]}:{verifier[1] or '기본'}) — "
+                              "같은 모델 두 번은 교차 검증이 아님. 모델 이름을 명시하세요")
     if not checklist_id and not use_llm:
         raise ConfigError("체크리스트 없이 실행하려면 --llm 이 필요함(자율 탐색은 LLM 제안에 의존함)")
     scope = audit_config.load_scope(cfg.home)

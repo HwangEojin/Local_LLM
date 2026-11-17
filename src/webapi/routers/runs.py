@@ -611,18 +611,16 @@ def list_reports(run_ref: str, cfg=Depends(get_cfg), conn=Depends(get_conn), use
     out = []
     for p in files:
         a = approved.get(p.name)
-        edited_after = None
-        if a:
-            edited_after = conn.execute(
-                "SELECT count(*) AS n FROM finding_revisions fr JOIN findings f ON f.id = fr.finding_id "
-                "WHERE f.run_id=%s AND fr.changed_at > %s", (run["id"], a["approved_at"])).fetchone()["n"]
+        changes = reporting.changes_since(conn, run["id"], a["approved_at"]) if a else None
         out.append({
             "file": p.name, "size": p.stat().st_size,
             "modified_at": datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).isoformat(),
             "approved_by": a.get("approved_by") if a else None,
             "approved_at": a.get("approved_at") if a else None,
-            "stale": bool(edited_after),  # G3 D6: 승인 이후 finding 이 편집됐으면 재생성 필요
-            "edited_after_approval": edited_after or 0,
+            # G3 D6 + H4: 승인 이후 편집·판정 변경·새 finding 이 하나라도 있으면 재생성 필요
+            "stale": bool(changes and changes["total"]),
+            "edited_after_approval": changes["total"] if changes else 0,
+            "changes_after_approval": changes,
         })
     return out
 

@@ -139,8 +139,11 @@ def verify_llm_finding(ctx, *, vuln_class: str, title: str, target_id: str, loca
                        evidence_rows: list[dict]) -> dict:
     """G2: 다른 모델(run.verifier_model)이 같은 증거만 보고 독립적으로 판정한다. 1차 모델의 rationale 은
     넘기지 않는다(앵커링 방지). 반환: {"verdict", "rationale", "evidence_ids"}(인용은 제공한 증거의
-    부분집합으로 Python 이 걸러낸다 — LLM 이 지어낸 id 는 버림). 호출·검증 실패(LLMError)는 INSUFFICIENT
-    로 취급하고 rationale 에 사유를 남긴다 — 상태를 바꾸지 않는 쪽이 안전하다.
+    부분집합으로 Python 이 걸러낸다 — LLM 이 지어낸 id 는 버림).
+
+    H3: CONFIRMS 인데 유효한 인용(제공한 증거 중 실제 id)이 하나도 없으면 INSUFFICIENT 로 낮춘다 — 근거 없는
+    동의로 확정되지 않게. 호출·검증 실패(LLMError)는 ERROR 로 돌려준다(표에 그대로 남아 "판단 불가"와 구분되고,
+    상태는 바꾸지 않는다).
     """
     claim = {"vuln_class": vuln_class, "title": title, "target_id": target_id, "locator": locator}
     ev_blocks = [{"id": str(r["id"]), "tool": r["tool"],
@@ -158,10 +161,13 @@ def verify_llm_finding(ctx, *, vuln_class: str, title: str, target_id: str, loca
         out = llm.structured_chat([{"role": "system", "content": system}, {"role": "user", "content": user}],
                                   _VERIFY_SCHEMA, "llm_cross_check")
     except LLMError as e:
-        return {"verdict": "INSUFFICIENT", "rationale": f"검증 모델 호출 실패: {e}", "evidence_ids": [],
+        return {"verdict": "ERROR", "rationale": f"검증 모델 호출 실패: {e}", "evidence_ids": [],
                 "model": spec or "unknown"}
     cited = [i for i in out.get("evidence_ids", []) if i in provided_ids]
-    return {"verdict": out["verdict"], "rationale": out["rationale"], "evidence_ids": cited, "model": llm.model}
+    verdict, rationale = out["verdict"], out["rationale"]
+    if verdict == "CONFIRMS" and not cited:
+        verdict, rationale = "INSUFFICIENT", f"유효한 증거 인용 없음(동의했으나 제공한 증거를 인용하지 않음): {rationale}"
+    return {"verdict": verdict, "rationale": rationale, "evidence_ids": cited, "model": llm.model}
 
 
 class _ModelLog:
@@ -623,7 +629,8 @@ def _report_llm_finding(ctx, fnd: dict, assets: dict, known: set[str]) -> None:
 
 def _cross_check_llm_finding(ctx, fnd: dict, fid, evidence_ids: list[str], proposer_model: str) -> None:
     """G2: 다른 모델이 같은 증거만 보고 독립적으로 동의할 때만 확정한다(D4: 여기 오는 건 verifier_model 이
-    있을 때뿐). REFUTES/INSUFFICIENT/검증 모델 오류는 NEEDS_REVIEW 로 사람에게 남긴다 — 알림 없음."""
+    있을 때뿐). REFUTES/INSUFFICIENT/ERROR(검증 모델 오류)는 NEEDS_REVIEW 로 사람에게 남긴다 — 알림 없음.
+    H3: 확정은 promote_llm_proposed 가 그 finding 이 아직 LLM_PROPOSED/NEEDS_REVIEW 일 때만 한다."""
     conn, run_id = ctx.conn, ctx.run["id"]
     rows = conn.execute("SELECT * FROM evidence WHERE id = ANY(%s::uuid[])", (evidence_ids,)).fetchall()
     ev_rows = [{"id": r["id"], "tool": r["tool"], "data": evidence.read_bytes(r, ctx.cfg.evidence_dir)} for r in rows]
@@ -637,8 +644,8 @@ def _cross_check_llm_finding(ctx, fnd: dict, fid, evidence_ids: list[str], propo
               "verdict": result["verdict"]})
     if result["verdict"] == "CONFIRMS":
         actor = f"llm:{proposer_model}+llm:{result['model']}"
-        worker.promote_llm_proposed(conn, fid, actor=actor, reason=f"교차 검증 동의: {result['rationale']}")
-        notify.notify_finding_confirmed(conn, ctx.cfg, run_id, fid, title=fnd["title"], actor=actor)
+        if worker.promote_llm_proposed(conn, fid, actor=actor, reason=f"교차 검증 동의: {result['rationale']}"):
+            notify.notify_finding_confirmed(conn, ctx.cfg, run_id, fid, title=fnd["title"], actor=actor)
     else:
         conn.execute(
             "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "

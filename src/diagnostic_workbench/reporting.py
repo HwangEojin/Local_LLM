@@ -216,6 +216,27 @@ def _m_text(v) -> str:
 _KIND_BY_PLATFORM = {"WEB": "web"}  # audit.pentest_report 가 지원하는 결과보고서 템플릿 유형
 
 
+def changes_since(conn, run_id, since) -> dict:
+    """H4(G3 D6 확장): 승인 시각(since) 이후 이 실행의 보고서 내용을 바꿀 수 있는 변경을 종류별로 센다.
+
+    - text_edits: 검토자 편집(finding_revisions — 제목·근거·대응방안)
+    - history_changes: finding_review_history 의 모든 기록 — 사람의 확정·기각, 수동 병합/해제, D3 재오픈, 교차 검증
+      확정, 같은 지점 재관찰(증거 추가) 등. 상태가 그대로인 기록도 증거 목록·이력이 바뀌므로 센다.
+    - new_findings: 승인 뒤 새로 생긴 finding
+    G 계획서(D6)는 text_edits 만 셌다 — 승인 뒤 판정이 바뀌어도 "재생성 필요"가 안 뜨던 빈틈(H4)."""
+    row = conn.execute(
+        "SELECT "
+        " (SELECT count(*) FROM finding_revisions fr JOIN findings f ON f.id = fr.finding_id "
+        "   WHERE f.run_id=%(r)s AND fr.changed_at > %(t)s) AS text_edits, "
+        " (SELECT count(*) FROM finding_review_history h JOIN findings f ON f.id = h.finding_id "
+        "   WHERE f.run_id=%(r)s AND h.changed_at > %(t)s) AS history_changes, "
+        " (SELECT count(*) FROM findings f WHERE f.run_id=%(r)s AND f.created_at > %(t)s) AS new_findings",
+        {"r": run_id, "t": since}).fetchone()
+    out = {k: int(row[k]) for k in ("text_edits", "history_changes", "new_findings")}
+    out["total"] = sum(out.values())
+    return out
+
+
 def default_kind(conn, run: dict) -> str | None:
     """실행 대상의 platform 으로 결과보고서 템플릿 유형을 고른다. 지원하는 템플릿이 없으면 None."""
     kinds = {_KIND_BY_PLATFORM.get(r["platform"]) for r in conn.execute(

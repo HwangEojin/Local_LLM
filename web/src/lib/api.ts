@@ -530,8 +530,9 @@ export type ReportFile = {
   modified_at: string;
   approved_by: string | null;
   approved_at: string | null;
-  stale: boolean; // G3 D6: 승인 이후 finding 이 편집됐으면 true — 재생성 필요
-  edited_after_approval: number;
+  stale: boolean; // G3 D6 + H4: 승인 이후 편집·판정 변경·새 finding 이 있으면 true — 재생성 필요
+  edited_after_approval: number; // 아래 세 종류의 합
+  changes_after_approval: { text_edits: number; history_changes: number; new_findings: number; total: number } | null;
 };
 
 export type ToolInfo = {

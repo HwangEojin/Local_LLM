@@ -447,14 +447,27 @@ def create_llm_finding(conn, cfg, run_id, asset_id, *, title, vuln_class, ration
     return fid, created
 
 
-def promote_llm_proposed(conn, finding_id, *, actor, reason) -> None:
-    """G2: 교차 검증에 동의(CONFIRMS)했을 때 LLM_PROPOSED/NEEDS_REVIEW 상태의 finding 을 확정한다."""
-    f = conn.execute("SELECT status FROM findings WHERE id=%s", (finding_id,)).fetchone()
+def promote_llm_proposed(conn, finding_id, *, actor, reason) -> bool:
+    """G2: 교차 검증에 동의(CONFIRMS)했을 때 LLM_PROPOSED/NEEDS_REVIEW 상태의 finding 을 확정한다.
+
+    H3: 행을 잠그고 **아직 LLM_PROPOSED/NEEDS_REVIEW 일 때만** 확정한다 — 그 사이 사람이 기각·확정했거나 다른
+    경로로 상태가 바뀌었으면 덮어쓰지 않고 이력만 남긴다. 반환: 실제로 확정했는지(알림 여부 판단용)."""
+    f = conn.execute("SELECT status, verification FROM findings WHERE id=%s FOR UPDATE", (finding_id,)).fetchone()
+    if f is None or f["verification"] != "LLM_PROPOSED" or f["status"] != "NEEDS_REVIEW":
+        if f is not None:
+            conn.execute(
+                "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
+                "VALUES (%s,%s,%s,%s,%s,'{}')",
+                (finding_id, f["status"], f["status"],
+                 f"교차 검증 동의했으나 상태가 이미 바뀌어 확정하지 않음({f['verification']}/{f['status']}): {reason}",
+                 actor))
+        return False
     conn.execute("UPDATE findings SET verification='LLM_CONFIRMED', status='CONFIRMED', reviewed_at=now(), "
                 "review_reason=%s WHERE id=%s", (reason, finding_id))
     conn.execute(
         "INSERT INTO finding_review_history (finding_id, old_status, new_status, reason, actor, evidence_ids) "
         "VALUES (%s,%s,'CONFIRMED',%s,%s,'{}')", (finding_id, f["status"], reason, actor))
+    return True
 
 
 def record_llm_vote(conn, run_id, finding_id, model, stage, verdict, rationale, evidence_ids) -> None:

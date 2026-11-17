@@ -966,7 +966,7 @@ raw GET    classify=SQLI  raw_req found: False  compute: (None, None, {})       
   실패(4 FAIL·1 ERROR)하고 고친 뒤 전부 통과함을 확인.**
 - 미검증: `/runs/compare` 화면 렌더링(NOT CHECKED — 타입 검사만 통과).
 
-### H3. 교차 검증 게이트 구멍 (G2) — 중간
+### H3. 교차 검증 게이트 구멍 (G2) — 중간 — **구현 완료(2026-11-17)**
 
 **증상**
 - `explore.verify_llm_finding()` 은 검증 모델이 지어낸 증거 id 를 걸러내지만(`cited`) **verdict 는 CONFIRMS 그대로**
@@ -990,7 +990,19 @@ raw GET    classify=SQLI  raw_req found: False  compute: (None, None, {})       
 **테스트**: `test_llm_cross_check.py` — 위조 인용 CONFIRMS 가 NEEDS_REVIEW 로 남는지, 호출 실패 시 표에 ERROR,
 프로파일 이름과 모델 spec 이 같은 모델이면 422, 사람이 먼저 기각한 finding 이 교차 검증으로 확정되지 않는지.
 
-### H4. 승인 후 변경 경고 범위 (G3/D6) — 중간
+**구현 결과(2026-11-17)**
+- `explore.verify_llm_finding`: CONFIRMS + 유효 인용 0건 → INSUFFICIENT(사유 앞에 "유효한 증거 인용 없음"), `LLMError` →
+  `ERROR`(표에 그대로 기록, 상태는 NEEDS_REVIEW 유지).
+- `worker.promote_llm_proposed`: 행 잠금 후 `LLM_PROPOSED/NEEDS_REVIEW` 일 때만 확정하고 `True` 반환. 이미 바뀌었으면
+  이력만 남기고 `False` — 호출자는 `True` 일 때만 확정 알림.
+- `runs._resolved_model` / `_same_model_or_unclear`: spec(빈 값=실행 기본, `ollama:<모델>`, 프로파일 이름)을 실제
+  (종류, 모델)로 해석해 비교. Ollama `:latest` 유무는 같게 본다. 종류가 다르면 다른 모델, 같은 종류인데 한쪽 모델
+  이름을 모르면(예: claude_cli 기본) 같다고 보고 거부(§8-4). 계획서의 "해석 실패 시 거부"를 이 규칙으로 구체화.
+- 테스트(`test_llm_cross_check.py`): 위조 인용 CONFIRMS 가 확정·알림되지 않음, 호출 실패는 ERROR, 사람 기각 뒤 동의가
+  와도 REJECTED 유지, 해석 규칙(기본 모델 vs 같은 `ollama:` spec, `:latest`, 같은 모델 프로파일, 다른 모델, 다른 종류,
+  같은 종류·이름 모름) — Ollama 없이 실행. 기존 `create_run` 거부 테스트는 Ollama 필요로 여전히 건너뜀.
+
+### H4. 승인 후 변경 경고 범위 (G3/D6) — 중간 — **구현 완료(2026-11-17)**
 
 **증상**: `GET /runs/{run}/report` 의 `stale` 은 `finding_revisions`(제목·근거·대응방안 편집)만 센다
 (`webapi/routers/runs.py` `list_reports`). 승인 뒤 일어나는 다음 변경은 보고서 내용을 바꾸는데 경고가 안 뜬다:
@@ -1002,6 +1014,17 @@ G 계획서가 범위를 좁게 잡은 탓이다.
 `new_findings`)도 같이 넣어 화면 배지 문구를 구체화("승인 이후 판정 변경 3건·새 발견 1건 — 재생성 필요").
 
 **테스트**: `test_report_api.py` — 승인 뒤 상태 변경만 있어도, 병합만 있어도, 새 finding 만 생겨도 stale.
+
+**구현 결과(2026-11-17)**
+- `reporting.changes_since(conn, run_id, since)` → `{text_edits, history_changes, new_findings, total}`. `history_changes`
+  는 `finding_review_history` 전부(확정·기각·병합/해제·재오픈·교차 검증 확정·재관찰) — 상태가 같은 기록도 증거·이력을
+  바꾸므로 센다.
+- `GET /runs/{run}/report`: `stale = total > 0`, `edited_after_approval = total`, `changes_after_approval` 추가(기존 필드 유지).
+  화면 배지: "⚠ 승인 이후 변경 N건 (편집 a · 판정·이력 b · 새 발견 c) — 재생성 필요".
+- 테스트: 템플릿 없이 도는 `test_changes_since_counts_status_merge_and_new_findings` 추가(승인 전 변경 0, 승인 뒤 기각 1,
+  새 finding 1). **기존 D6 테스트는 회사 템플릿이 있어야 돌아 이 환경에서는 건너뜀(NOT CHECKED)** — 보스 PC 에서 확인 필요.
+- 참고: PostgreSQL `now()` 는 트랜잭션 시작 시각이라, 같은 트랜잭션 안에서 승인 시각을 읽고 상태를 바꾸면 집계에서
+  빠진다. 실제로는 승인과 이후 변경이 별도 요청이라 문제없고, 테스트도 트랜잭션을 나눴다.
 
 ### H5. 리다이렉트 범위 재검사 누락 (§8-9) — 높음 — **구현 완료(2026-11-17)**
 

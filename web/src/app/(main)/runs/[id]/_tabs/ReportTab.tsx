@@ -91,7 +91,12 @@ export function ReportTab({ runId, completed }: { runId: string; completed: bool
                 </div>
                 {f.stale && (
                   <div className="mt-1 text-xs font-medium text-warn">
-                    ⚠ 승인 이후 finding {f.edited_after_approval}건 편집됨 — 재생성 필요
+                    ⚠ 승인 이후 변경 {f.edited_after_approval}건
+                    {f.changes_after_approval && (
+                      <> (편집 {f.changes_after_approval.text_edits} · 판정·이력 {f.changes_after_approval.history_changes} ·
+                        새 발견 {f.changes_after_approval.new_findings})</>
+                    )}{" "}
+                    — 재생성 필요
                   </div>
                 )}
               </div>

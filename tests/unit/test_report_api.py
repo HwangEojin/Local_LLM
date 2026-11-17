@@ -110,6 +110,36 @@ class ReportApiTest(unittest.TestCase):
                           if r["file"] == filename)
         self.assertTrue(after_edit["stale"])
         self.assertEqual(after_edit["edited_after_approval"], 1)
+        self.assertEqual(after_edit["changes_after_approval"]["text_edits"], 1)
+
+    def test_changes_since_counts_status_merge_and_new_findings(self):
+        """H4: 템플릿 없이 집계 함수만 확인 — 승인 뒤 텍스트 편집뿐 아니라 판정 변경·이력(병합 등)·새 finding 도
+        보고서를 바꾸므로 센다. 승인 전 변경은 세지 않는다."""
+        import time
+        from diagnostic_workbench import reporting
+        run = self._completed_run()
+        asset_id = self.conn.execute(
+            "SELECT asset_id FROM run_assets WHERE run_id=%s", (run["id"],)).fetchone()["asset_id"]
+        def finding(title):
+            return self.conn.execute(
+                "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification) "
+                "VALUES (%s,%s,%s,'근거','대응','RULE_CONFIRMED') RETURNING id", (run["id"], asset_id, title)
+            ).fetchone()["id"]
+        before = finding("승인 전 finding")
+        worker.edit_finding(self.conn, before, {"title": "승인 전 편집"}, "승인 전", actor="reviewer:pytest")
+        self.conn.commit()
+        approved_at = self.conn.execute("SELECT clock_timestamp() AS t").fetchone()["t"]
+        self.conn.commit()  # 승인과 이후 변경은 실제로도 별도 요청(트랜잭션) — now() 는 트랜잭션 시작 시각이다
+        time.sleep(0.01)
+        self.assertEqual(reporting.changes_since(self.conn, run["id"], approved_at)["total"], 0)
+        worker.set_finding_status(self.conn, before, "REJECTED", "승인 뒤 기각", actor="reviewer:pytest")
+        self.conn.commit()
+        c = reporting.changes_since(self.conn, run["id"], approved_at)
+        self.assertEqual((c["text_edits"], c["history_changes"], c["new_findings"]), (0, 1, 0))
+        finding("승인 뒤 새 finding")
+        self.conn.commit()
+        c = reporting.changes_since(self.conn, run["id"], approved_at)
+        self.assertEqual((c["history_changes"], c["new_findings"], c["total"]), (1, 1, 2))
 
     def test_report_requires_confirm(self):
         run = self._completed_run()
