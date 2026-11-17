@@ -854,7 +854,7 @@ G 의 단계는 모두 구현됐고 결정 D1~D7 도 반영됐지만, **G1·G2·
 | H6 | 중간 | 가드레일 §8-8 | 같은 두 경로가 OS 의 `HTTP(S)_PROXY` 환경 변수를 **암묵적으로** 따른다 — 시스템 프록시가 설정된 PC 에서는 진단 트래픽이 의도치 않게 그 프록시를 경유한다 |
 | H7 | 낮음 | 품질 | Next.js 보안 패치, lint 오류 6, 환경 의존 테스트, 건너뜀 개수 미보고 |
 
-### H1. Fingerprint 매개변수 추출 결함 (G1) — 높음
+### H1. Fingerprint 매개변수 추출 결함 (G1) — 높음 — **구현 완료(2026-11-17)**
 
 **증상**
 - `fingerprint.locate()` 의 `params` 는 `signals.injection_params()` 가 돌려주는 **도구 인자 키 이름**이다. Burp
@@ -903,6 +903,26 @@ raw GET    classify=SQLI  raw_req found: False  compute: (None, None, {})       
 `url` 형식에서 매개변수별로 fp 가 달라지는지, 퍼센트 인코딩 값, 원시 GET 인식, 매개변수 특정 실패 시 fp None.
 `test_finding_dedup_db.py` 의 `test_different_params_makes_different_finding` 을 실제 매개변수 차이로 고치고,
 경로 차이 테스트는 이름을 바꿔 남긴다. 버전 1/2 행이 서로 병합되지 않는지 DB 테스트 추가.
+
+**구현 결과(2026-11-17)**
+- `fingerprint.py` v2(`FINGERPRINT_VERSION = 2`): 자체 `_METHOD_LINE`(GET/HEAD/OPTIONS 포함)으로 원시 요청을 찾고,
+  요청 줄 쿼리·form 본문·JSON 키 경로(`a.b`)·multipart `name`·이름 없는 본문(`body`)·경로 세그먼트(`path:<n>`)·
+  헤더(`header:<이름>`)·쿠키(`cookie:<이름>`) 중 값(원문 + `unquote_plus` 1회)에 주입 패턴이 걸리는 이름만 뽑는다.
+  URL 인자는 쿼리·경로 세그먼트, 구조화 dict 인자는 키 이름(원시 요청·URL 문자열 자체는 제외).
+- 매개변수를 특정하지 못하면 fingerprint None(locator_hash 만) — 단 CSRF 는 요청 구조 판정이라 메서드·경로만으로 만든다.
+  해시 입력에 `v2|` 접두를 넣어 v1 값과 절대 겹치지 않게 했다.
+- 같은 매개변수면 도구가 달라도 같은 지점: Burp 원시 GET `?id=` 와 Playwright `url` 의 `?id=` 가 같은 fingerprint.
+- 마이그레이션 `0032_fingerprint_v2.sql`: `findings.fingerprint_v`(기존 행 1), 부분 UNIQUE 인덱스를
+  `(run_id, fingerprint_v, fingerprint)` 로 교체. `upsert_exploration_finding` 은 v2 행끼리만 병합.
+- `worker.refingerprint_run()` + CLI `finding refingerprint <run> [--apply]`(HD2): v1 행을 updatable / split /
+  conflict / unresolved 로 분류. `--apply` 는 updatable 만 갱신하고 `finding_refingerprinted` 감사 이벤트를 남긴다.
+- 쓰지 않게 된 `signals.injection_params()`(G1 v1 전용) 삭제.
+- 테스트: `test_finding_fingerprint.py` 18건(위 형식 전부, 도구 간 동일성, 매개변수 미특정, CSRF),
+  `test_finding_dedup_db.py` 에 경로 차이·매개변수 차이(실제 Burp form 형식)·v1/v2 비병합·refingerprint 분류 4건.
+  `test_run_compare_api.py` 픽스처는 페이로드 없는 URL 을 써서 v2 에서 전부 "비교 불가"가 됐으므로 실제 주입
+  매개변수(`?q=`)를 넣도록 수정(비교 로직 자체는 H2).
+- 미검증: 실제 Burp/Playwright 가 남긴 증거 인자 형식이 위 픽스처와 같은지(NOT CHECKED — 로컬 MCP 없음).
+  `content` 외 다른 Burp 도구 인자 형식(HTTP/2 요청 등).
 
 ### H2. 실행 비교 오분류 (G6) — 높음
 

@@ -76,17 +76,75 @@ class FindingDedupDB(unittest.TestCase):
             "SELECT count(*) AS n FROM finding_review_history WHERE finding_id=%s", (fid1,)).fetchone()["n"]
         self.assertEqual(hist_n, 1)  # 최초 생성 이력은 이 헬퍼가 안 남김 — 재관찰 이력 1건만
 
-    def test_different_params_makes_different_finding(self):
-        run, asset_id = self._run_and_asset("pytest-dedup-diffparam")
+    def test_different_paths_make_different_findings(self):
+        run, asset_id = self._run_and_asset("pytest-dedup-diffpath")
         eid1 = self._evidence(run["id"], asset_id)
         eid2 = self._evidence(run["id"], asset_id)
         fid1, _ = self._upsert(run["id"], asset_id, vuln_class="SQLI",
-                               args={"url": "http://x/user/1"}, evidence_kind="RULE",
+                               args={"url": "http://x/user/1?q=' OR '1'='1"}, evidence_kind="RULE",
                                title="A", evidence_ids=[eid1])
         fid2, _ = self._upsert(run["id"], asset_id, vuln_class="SQLI",
-                               args={"url": "http://x/user/2"}, evidence_kind="RULE",
+                               args={"url": "http://x/user/2?q=' OR '1'='1"}, evidence_kind="RULE",
                                title="B", evidence_ids=[eid2])
         self.assertNotEqual(fid1, fid2)  # D1: 경로 원문이 다르므로 다른 finding
+
+    def test_different_params_on_same_path_make_different_findings(self):
+        """H1: Burp 원시 요청(content 하나)에서 id 와 name 의 SQLi 는 서로 다른 finding 이어야 한다."""
+        run, asset_id = self._run_and_asset("pytest-dedup-diffparam")
+        def burp(body):
+            return {"content": "POST /item HTTP/1.1\r\nHost: x\r\n"
+                               "Content-Type: application/x-www-form-urlencoded\r\n\r\n" + body}
+        eid1 = self._evidence(run["id"], asset_id)
+        eid2 = self._evidence(run["id"], asset_id)
+        fid1, c1 = self._upsert(run["id"], asset_id, vuln_class="SQLI", args=burp("id=1' OR '1'='1"),
+                                evidence_kind="RULE", title="id", evidence_ids=[eid1])
+        fid2, c2 = self._upsert(run["id"], asset_id, vuln_class="SQLI", args=burp("name=1' OR '1'='1"),
+                                evidence_kind="RULE", title="name", evidence_ids=[eid2])
+        self.assertTrue(c1 and c2)
+        self.assertNotEqual(fid1, fid2)
+        v = self.conn.execute("SELECT fingerprint_v FROM findings WHERE id=%s", (fid1,)).fetchone()["fingerprint_v"]
+        self.assertEqual(v, 2)
+
+    def test_v1_row_is_never_merged_with_v2(self):
+        """옛 규칙(v1) 행은 같은 fingerprint 값이라도 v2 upsert 의 병합 대상이 아니다."""
+        from diagnostic_workbench import fingerprint as fpmod
+        run, asset_id = self._run_and_asset("pytest-dedup-v1v2")
+        args = {"url": "http://x/item?id=1' OR '1'='1"}
+        fp, _, _ = fpmod.compute(asset_id, "SQLI", args)
+        old = self.conn.execute(
+            "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification, vuln_class, "
+            "fingerprint, fingerprint_v) VALUES (%s,%s,'v1','근거','조치','RULE_CONFIRMED','SQLI',%s,1) RETURNING id",
+            (run["id"], asset_id, fp)).fetchone()["id"]
+        eid = self._evidence(run["id"], asset_id)
+        fid, created = self._upsert(run["id"], asset_id, vuln_class="SQLI", args=args, evidence_kind="RULE",
+                                    title="v2", evidence_ids=[eid])
+        self.assertTrue(created)
+        self.assertNotEqual(fid, old)
+
+    def test_refingerprint_classifies_v1_rows(self):
+        """HD2: 자동 재계산 없이 목록만 — 증거가 둘 이상 지점이면 split, 하나면 updatable(--apply 로 갱신)."""
+        import json as _json
+        run, asset_id = self._run_and_asset("pytest-dedup-refp")
+        def v1_finding(title, arg_list):
+            fid = self.conn.execute(
+                "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification, vuln_class, "
+                "fingerprint, fingerprint_v) VALUES (%s,%s,%s,'근거','조치','RULE_CONFIRMED','SQLI',md5(%s),1) "
+                "RETURNING id", (run["id"], asset_id, title, title)).fetchone()["id"]
+            for a in arg_list:
+                eid = self._evidence(run["id"], asset_id, _json.dumps(a))
+                self.conn.execute("INSERT INTO finding_evidence VALUES (%s,%s)", (fid, eid))
+            return str(fid)
+        split = v1_finding("v1 합쳐진 것", [{"url": "http://x/a?id=1' OR '1'='1"}, {"url": "http://x/a?name=1' OR '1'='1"}])
+        single = v1_finding("v1 하나", [{"url": "http://x/b?id=1' OR '1'='1"}])
+        dry = worker.refingerprint_run(self.conn, run["id"], apply=False)
+        self.assertEqual([i["finding_id"] for i in dry["split"]], [split])
+        self.assertEqual([i["finding_id"] for i in dry["updatable"]], [single])
+        v = self.conn.execute("SELECT fingerprint_v FROM findings WHERE id=%s", (single,)).fetchone()["fingerprint_v"]
+        self.assertEqual(v, 1)  # dry-run 은 아무것도 안 바꾼다
+        worker.refingerprint_run(self.conn, run["id"], apply=True)
+        rows = {str(r["id"]): r["fingerprint_v"] for r in self.conn.execute(
+            "SELECT id, fingerprint_v FROM findings WHERE id = ANY(%s::uuid[])", ([split, single],)).fetchall()}
+        self.assertEqual(rows, {split: 1, single: 2})  # 갈라지는 건 그대로 둔다
 
     def test_different_runs_do_not_merge_even_with_same_fingerprint(self):
         run_a, asset_a = self._run_and_asset("pytest-dedup-runA")

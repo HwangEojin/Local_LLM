@@ -532,6 +532,25 @@ def cmd_finding(args):
                 print(f"    최근 {retests[f['id']]}")
         print(f"{len(rows)}건")
         return 0
+    if args.action == "refingerprint":
+        # H1/HD2: v1(옛 규칙) fingerprint 를 v2 로 다시 계산해 본다. 기본은 목록만(dry-run), --apply 는 갈라지지
+        # 않고 충돌도 없는 행만 갱신한다. 증거를 자동으로 다시 나누지는 않는다.
+        res = worker.refingerprint_run(conn, run["id"], apply=args.apply)
+        labels = {"updatable": "v2 로 갱신 가능" + ("(갱신함)" if args.apply else ""),
+                  "split": "증거가 둘 이상 지점으로 갈림 — 수동 해제·병합 필요",
+                  "conflict": "같은 v2 finding 이 이미 있음 — 수동 병합 검토",
+                  "unresolved": "v2 매개변수 특정 불가 — 그대로 둠"}
+        for key, label in labels.items():
+            print(f"[{label}] {len(res[key])}건")
+            for it in res[key]:
+                locs = "; ".join(f"{l['method']} {l['path']} {l['params']}" for l in it["locators"]) or "-"
+                extra = f" (같음: {it['same_as'][:8]})" if "same_as" in it else ""
+                print(f"    {it['finding_id'][:8]} {it['vuln_class']:<5} {it['title'][:40]} | {locs}{extra}")
+        if args.apply:
+            conn.commit()
+        else:
+            print("dry-run: 바뀐 것 없음. 갱신하려면 --apply")
+        return 0
     if args.action == "retest":
         if not (args.finding_id and args.reason and args.reviewer):
             print("finding retest 에는 <finding_id> --reason .. --reviewer .. 가 필요합니다", file=sys.stderr)
@@ -822,14 +841,17 @@ def build_parser():
     qd.add_argument("question_id", nargs="?", help="answer: 대상 질문 id(앞부분만으로도 특정 가능)")
     qd.add_argument("--answer", help="answer 필수")
     qd.add_argument("--operator", help="answer 필수")
-    fd = sub.add_parser("finding", help="findings 목록(list) / 확정·기각 검토(review) / 추가 검증 요청(retest)")
-    fd.add_argument("action", choices=["list", "review", "retest"])
+    fd = sub.add_parser("finding", help="findings 목록(list) / 확정·기각 검토(review) / 추가 검증 요청(retest) / "
+                                         "옛 규칙 fingerprint 재계산 점검(refingerprint)")
+    fd.add_argument("action", choices=["list", "review", "retest", "refingerprint"])
     fd.add_argument("run")
     fd.add_argument("finding_id", nargs="?", help="review/retest: 대상 finding id(앞부분만으로도 특정 가능)")
     fd.add_argument("status", nargs="?", choices=worker.FINDING_STATUSES, help="review: 새 상태")
     fd.add_argument("--reason", help="review/retest 필수")
     fd.add_argument("--reviewer", help="review/retest 필수")
     fd.add_argument("--evidence", help="review: 추가로 연결할 증적 id(쉼표로 구분), CONFIRMED 에 필요할 수 있음")
+    fd.add_argument("--apply", action="store_true",
+                    help="refingerprint: 갈라지지 않고 충돌 없는 finding 만 v2 로 실제 갱신(기본은 목록만)")
     ev = sub.add_parser("evidence", help="증적 목록과 파일 해시 대조")
     ev.add_argument("run")
     c = sub.add_parser("collect", help="등록된 도구를 한 번 실행해 항목에 증적 추가(판정은 바꾸지 않음)")

@@ -40,15 +40,19 @@ class RunCompareTest(unittest.TestCase):
     def _asset(self, run):
         return self.conn.execute("SELECT asset_id FROM run_assets WHERE run_id=%s", (run["id"],)).fetchone()["asset_id"]
 
+    # H1(v2): fingerprint 는 실제 주입 매개변수가 있어야 만들어진다 — 픽스처도 페이로드가 든 매개변수(q)를 쓴다.
+    PAYLOAD = "?q=' OR '1'='1"
+
     def _finding(self, run_id, asset_id, path, *, status="CONFIRMED", vuln_class="SQLI"):
-        fp, loc_hash, locator = fingerprint.compute(asset_id, vuln_class, {"url": f"http://localhost{path}"})
+        fp, loc_hash, locator = fingerprint.compute(asset_id, vuln_class,
+                                                    {"url": f"http://localhost{path}{self.PAYLOAD}"})
         f = self.conn.execute(
             "INSERT INTO findings (run_id, asset_id, title, rationale, remediation, verification, status) "
             "VALUES (%s,%s,%s,'근거','대응','RULE_CONFIRMED',%s) RETURNING *",
             (run_id, asset_id, f"비교 테스트 {path}", status)).fetchone()
         self.conn.execute(
-            "UPDATE findings SET vuln_class=%s, fingerprint=%s, locator=%s, locator_hash=%s WHERE id=%s",
-            (vuln_class, fp, Jsonb(locator), loc_hash, f["id"]))
+            "UPDATE findings SET vuln_class=%s, fingerprint=%s, fingerprint_v=%s, locator=%s, locator_hash=%s "
+            "WHERE id=%s", (vuln_class, fp, fingerprint.FINGERPRINT_VERSION, Jsonb(locator), loc_hash, f["id"]))
         return self.conn.execute("SELECT * FROM findings WHERE id=%s", (f["id"],)).fetchone()
 
     def _mark_fixed_retest(self, finding_id):
@@ -61,7 +65,7 @@ class RunCompareTest(unittest.TestCase):
         return self.conn.execute(
             "INSERT INTO evidence (run_id, asset_id, requirement_id, tool, args, success, rel_path, sha256, size) "
             "VALUES (%s,%s,'compare-test','test.fixture',%s,true,'x','x',1) RETURNING id",
-            (run_id, asset_id, Jsonb({"url": f"http://localhost{path}"}))).fetchone()["id"]
+            (run_id, asset_id, Jsonb({"url": f"http://localhost{path}{self.PAYLOAD}"}))).fetchone()["id"]
 
     def test_new_classification(self):
         base, head = self._run(), self._run()

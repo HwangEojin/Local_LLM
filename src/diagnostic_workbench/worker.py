@@ -254,8 +254,9 @@ def upsert_exploration_finding(conn, cfg, run_id, asset_id, *, vuln_class, args,
         if fp is None:
             return None
         return conn.execute(
-            "SELECT id, status, evidence_kinds, title FROM findings WHERE run_id=%s AND fingerprint=%s "
-            "AND duplicate_of IS NULL FOR UPDATE", (run_id, fp)).fetchone()
+            "SELECT id, status, evidence_kinds, title FROM findings WHERE run_id=%s AND fingerprint_v=%s "
+            "AND fingerprint=%s AND duplicate_of IS NULL FOR UPDATE",
+            (run_id, fingerprint.FINGERPRINT_VERSION, fp)).fetchone()
 
     existing = find_existing()
     if existing is None:
@@ -263,9 +264,10 @@ def upsert_exploration_finding(conn, cfg, run_id, asset_id, *, vuln_class, args,
             with conn.transaction():
                 fid = insert_fn(conn)
                 conn.execute(
-                    "UPDATE findings SET vuln_class=%s, fingerprint=%s, locator=%s, locator_hash=%s, "
-                    "evidence_kinds=%s WHERE id=%s",
-                    (vuln_class, fp, Jsonb(locator), loc_hash, [evidence_kind], fid))
+                    "UPDATE findings SET vuln_class=%s, fingerprint=%s, fingerprint_v=%s, locator=%s, "
+                    "locator_hash=%s, evidence_kinds=%s WHERE id=%s",
+                    (vuln_class, fp, fingerprint.FINGERPRINT_VERSION, Jsonb(locator), loc_hash, [evidence_kind],
+                     fid))
         except UniqueViolation:
             existing = find_existing()
             if existing is None:
@@ -305,6 +307,55 @@ def upsert_exploration_finding(conn, cfg, run_id, asset_id, *, vuln_class, args,
         "UPDATE findings SET evidence_kinds = array(SELECT DISTINCT unnest(evidence_kinds || %s::text[])) "
         "WHERE id=%s", ([evidence_kind], fid))
     return fid, False
+
+
+def refingerprint_run(conn, run_id, *, apply: bool) -> dict:
+    """H1/HD2: 옛 규칙(v1)으로 계산된 finding 을 v2 로 다시 계산해 보고, 결과를 분류해 돌려준다.
+
+    자동으로 증거를 다시 나누지 않는다 — v1 에서 서로 다른 매개변수가 이미 한 finding 으로 합쳐졌다면 기계적으로
+    되돌릴 근거가 없기 때문이다. 대신 사람이 수동 해제·병합으로 정리할 수 있게 목록을 준다.
+
+    - updatable: 연결된 증거가 모두 같은 v2 fingerprint 로 모인다 → apply=True 면 그 값으로 갱신(fingerprint_v=2)
+    - split: 증거가 둘 이상의 v2 fingerprint 로 갈린다 → 옛 규칙이 서로 다른 지점을 합친 것. 손대지 않음
+    - conflict: v2 값이 이 실행의 다른 v2 finding 과 같다 → 갱신하면 유일성 위반. 수동 병합 검토 대상
+    - unresolved: 어느 증거에서도 v2 매개변수를 특정하지 못함 → 손대지 않음
+    """
+    rows = conn.execute(
+        "SELECT id, asset_id, vuln_class, title FROM findings WHERE run_id=%s AND fingerprint_v=1 "
+        "AND duplicate_of IS NULL AND vuln_class IS NOT NULL ORDER BY created_at", (run_id,)).fetchall()
+    out = {"updatable": [], "split": [], "conflict": [], "unresolved": [], "applied": apply}
+    for f in rows:
+        computed = {}
+        for e in conn.execute(
+                "SELECT e.args FROM finding_evidence fe JOIN evidence e ON e.id = fe.evidence_id "
+                "WHERE fe.finding_id=%s ORDER BY e.collected_at, e.id", (f["id"],)).fetchall():
+            fp, loc_hash, locator = fingerprint.compute(f["asset_id"], f["vuln_class"], e["args"] or {})
+            if fp is not None:
+                computed.setdefault(fp, (loc_hash, locator))
+        item = {"finding_id": str(f["id"]), "title": f["title"], "vuln_class": f["vuln_class"],
+                "locators": [loc for _, loc in computed.values()]}
+        if not computed:
+            out["unresolved"].append(item)
+            continue
+        if len(computed) > 1:
+            out["split"].append(item)
+            continue
+        (fp, (loc_hash, locator)), = computed.items()
+        clash = conn.execute(
+            "SELECT id FROM findings WHERE run_id=%s AND fingerprint_v=%s AND fingerprint=%s "
+            "AND duplicate_of IS NULL AND id<>%s", (run_id, fingerprint.FINGERPRINT_VERSION, fp, f["id"])).fetchone()
+        if clash:
+            out["conflict"].append({**item, "same_as": str(clash["id"])})
+            continue
+        out["updatable"].append(item)
+        if apply:
+            conn.execute(
+                "UPDATE findings SET fingerprint=%s, fingerprint_v=%s, locator=%s, locator_hash=%s WHERE id=%s",
+                (fp, fingerprint.FINGERPRINT_VERSION, Jsonb(locator), loc_hash, f["id"]))
+            db.audit(conn, run_id, "finding_refingerprinted",
+                     {"finding_id": str(f["id"]), "fingerprint_v": fingerprint.FINGERPRINT_VERSION,
+                      "locator": locator})
+    return out
 
 
 def create_retest(conn, run_id, finding_id, *, operator, reason) -> list:
