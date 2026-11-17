@@ -280,6 +280,8 @@ export type RunCompareResult = {
   recurred: { base: Finding; head: Finding }[];
   mitigated_presumed: Finding[];
   unconfirmed: Finding[];
+  // H2: 기각(REJECTED)된 finding 은 위 집계에서 빠지고 여기로 따로 온다(base·head 각각).
+  rejected: { base: Finding[]; head: Finding[] };
   incomparable: Finding[];
 };
 

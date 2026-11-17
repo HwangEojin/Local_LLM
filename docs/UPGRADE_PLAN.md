@@ -924,7 +924,7 @@ raw GET    classify=SQLI  raw_req found: False  compute: (None, None, {})       
 - 미검증: 실제 Burp/Playwright 가 남긴 증거 인자 형식이 위 픽스처와 같은지(NOT CHECKED — 로컬 MCP 없음).
   `content` 외 다른 Burp 도구 인자 형식(HTTP/2 요청 등).
 
-### H2. 실행 비교 오분류 (G6) — 높음
+### H2. 실행 비교 오분류 (G6) — 높음 — **구현 완료(2026-11-17)**
 
 **증상**
 - `compare._head_hit_same_locator()` 는 head 실행 증거의 `locator_hash` 만 맞춰 본다. `locator_hash` 에는
@@ -950,6 +950,21 @@ raw GET    classify=SQLI  raw_req found: False  compute: (None, None, {})       
 
 **테스트**: `test_run_compare_api.py` — 같은 경로·다른 매개변수, 같은 위치·다른 분류는 "미확인", 신호 판정 기록이
 없는 증거는 "미확인", base REJECTED 가 지속으로 안 잡히는지, head REJECTED 가 신규로 안 잡히는지.
+
+**구현 결과(2026-11-17)**
+- `compare.py` 재작성: "다시 시험됨" = head 의 `exploration_signal_checked`(matched=false) → `exploration_anchors`(fact→증거)
+  → 증거 원 인자 + **판정한 분류**로 v2 fingerprint 재계산 → base fingerprint 와 일치. 신호 판정 기록이 없는 증거,
+  다른 분류·다른 매개변수 요청은 "미확인". head 증거를 한 번만 훑어 집합으로 만든다(O(n·m) 제거).
+- 비교 대상: `duplicate_of IS NULL AND status <> 'REJECTED'` 이고 `fingerprint_v = 2`. REJECTED 는 `rejected: {base, head}`
+  묶음으로 분리. v1·fingerprint 없음은 "비교 불가".
+- head 에서 같은 지점이 다시 잡혔지만 기각된 경우 base 는 "미확인"(고쳐졌다는 증거가 아님).
+- `재발` 판정에서 "base 가 REJECTED 가 아니어야" 조건은 REJECTED 가 집계에서 빠지면서 자연히 충족 — 기존
+  `test_recurred_not_applied_when_base_rejected` 는 새 규칙(기각은 rejected 묶음)으로 바꿔 `test_rejected_findings_are_set_aside_not_counted`.
+- 웹: `RunCompareResult.rejected` 타입, `/runs/compare` 에 "기각됨" 묶음과 설명 문구 갱신.
+- 테스트: `test_run_compare_api.py` 13건(신규 5: 다른 분류·다른 매개변수는 미확인, 판정 기록 없는 증거는 미확인,
+  head 기각은 조치 추정 아님, 기각은 별도 묶음, v1 은 비교 불가). **고치기 전 compare.py 로 돌리면 신규 5건이
+  실패(4 FAIL·1 ERROR)하고 고친 뒤 전부 통과함을 확인.**
+- 미검증: `/runs/compare` 화면 렌더링(NOT CHECKED — 타입 검사만 통과).
 
 ### H3. 교차 검증 게이트 구멍 (G2) — 중간
 

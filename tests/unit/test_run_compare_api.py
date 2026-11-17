@@ -1,4 +1,4 @@
-"""G6: 실행 간 비교(compare.compare_runs, /api/compare, UPGRADE_PLAN.md)를 확인한다.
+"""G6: 실행 간 비교(compare.compare_runs, /api/compare, UPGRADE_PLAN.md)를 확인한다(H2 규칙 포함).
 
 - 신규/지속/재발/미재현(조치 추정)/미확인 5종 분류와, fingerprint 가 NULL 인 finding 은 "비교 불가"로
   따로 빠지는지(자동 분류하지 않음).
@@ -67,6 +67,21 @@ class RunCompareTest(unittest.TestCase):
             "VALUES (%s,%s,'compare-test','test.fixture',%s,true,'x','x',1) RETURNING id",
             (run_id, asset_id, Jsonb({"url": f"http://localhost{path}{self.PAYLOAD}"}))).fetchone()["id"]
 
+    def _checked_evidence(self, run_id, asset_id, url, vuln_class, *, matched=False):
+        """head 가 실제로 요청을 보내고 결정론적 신호 판정까지 한 흔적(worker._run_exploration 과 같은 모양):
+        evidence → fact 노드(exploration_anchors) → audit_events.exploration_signal_checked."""
+        eid = self.conn.execute(
+            "INSERT INTO evidence (run_id, asset_id, requirement_id, tool, args, success, rel_path, sha256, size) "
+            "VALUES (%s,%s,'compare-test','test.fixture',%s,true,'x','x',1) RETURNING id",
+            (run_id, asset_id, Jsonb({"url": url}))).fetchone()["id"]
+        fact = self.conn.execute(
+            "INSERT INTO exploration_nodes (run_id, kind, state, origin, payload) "
+            "VALUES (%s,'fact','RECORDED','worker','{}') RETURNING id", (run_id,)).fetchone()["id"]
+        self.conn.execute("INSERT INTO exploration_anchors (node_id, evidence_id) VALUES (%s,%s)", (fact, eid))
+        db.audit(self.conn, run_id, "exploration_signal_checked",
+                 {"fact": str(fact), "vuln_class": vuln_class, "matched": matched, "reason": "test"})
+        return eid
+
     def test_new_classification(self):
         base, head = self._run(), self._run()
         asset = self._asset(base)
@@ -96,25 +111,71 @@ class RunCompareTest(unittest.TestCase):
         self.assertIn((bf["id"], hf["id"]), pairs)
         self.assertNotIn((bf["id"], hf["id"]), [(p["base"]["id"], p["head"]["id"]) for p in result["persistent"]])
 
-    def test_recurred_not_applied_when_base_rejected(self):
-        """base 가 REJECTED 면 FIXED 재검증 이력이 있어도 재발이 아니라 지속으로 본다(스펙: "REJECTED 가 아니라")."""
+    def test_rejected_findings_are_set_aside_not_counted(self):
+        """H2: 기각(REJECTED)된 오탐은 신규·지속·재발 집계에 들어가지 않고 rejected 묶음으로 따로 나온다."""
         base, head = self._run(), self._run()
         asset = self._asset(base)
-        bf = self._finding(base["id"], asset, "/rejected-but-refound", status="REJECTED")
+        bf = self._finding(base["id"], asset, "/rejected-in-base", status="REJECTED")
         self._mark_fixed_retest(bf["id"])
-        hf = self._finding(head["id"], asset, "/rejected-but-refound")
+        hf = self._finding(head["id"], asset, "/rejected-in-base")
+        hr = self._finding(head["id"], asset, "/rejected-in-head", status="REJECTED")
         result = compare.compare_runs(self.conn, base["id"], head["id"])
-        self.assertIn((bf["id"], hf["id"]), [(p["base"]["id"], p["head"]["id"]) for p in result["persistent"]])
+        self.assertIn(bf["id"], [x["id"] for x in result["rejected"]["base"]])
+        self.assertIn(hr["id"], [x["id"] for x in result["rejected"]["head"]])
+        self.assertIn(hf["id"], [x["id"] for x in result["new"]])  # base 의 유효 finding 이 없으므로 신규
+        self.assertNotIn(hr["id"], [x["id"] for x in result["new"]])
+        self.assertEqual(result["persistent"], [])
         self.assertEqual(result["recurred"], [])
 
     def test_mitigated_presumed_via_head_evidence_no_signal(self):
         base, head = self._run(), self._run()
         asset = self._asset(base)
         bf = self._finding(base["id"], asset, "/mitigated-evidence-path")
-        self._evidence_at(head["id"], asset, "/mitigated-evidence-path")  # 같은 지점을 때렸으나 finding 없음
+        self._checked_evidence(head["id"], asset, f"http://localhost/mitigated-evidence-path{self.PAYLOAD}", "SQLI")
         result = compare.compare_runs(self.conn, base["id"], head["id"])
         self.assertIn(bf["id"], [x["id"] for x in result["mitigated_presumed"]])
         self.assertNotIn(bf["id"], [x["id"] for x in result["unconfirmed"]])
+
+    def test_same_path_other_class_or_param_is_not_mitigation(self):
+        """H2 재현: base 의 /item q SQLi 가 head 에서 같은 경로의 다른 분류(XSS)·다른 매개변수 요청으로
+        '조치 추정'이 되면 안 된다 — 그 지점은 다시 시험되지 않았다."""
+        base, head = self._run(), self._run()
+        asset = self._asset(base)
+        bf = self._finding(base["id"], asset, "/item")
+        self._checked_evidence(head["id"], asset, "http://localhost/item?q=<script>alert(1)</script>", "XSS")
+        self._checked_evidence(head["id"], asset, "http://localhost/item?other=' OR '1'='1", "SQLI")
+        result = compare.compare_runs(self.conn, base["id"], head["id"])
+        self.assertIn(bf["id"], [x["id"] for x in result["unconfirmed"]])
+        self.assertNotIn(bf["id"], [x["id"] for x in result["mitigated_presumed"]])
+
+    def test_evidence_without_signal_check_is_not_mitigation(self):
+        """같은 지점에 요청은 갔지만 신호 판정 기록이 없으면(판정 안 됨) 미확인."""
+        base, head = self._run(), self._run()
+        asset = self._asset(base)
+        bf = self._finding(base["id"], asset, "/sent-but-not-judged")
+        self._evidence_at(head["id"], asset, "/sent-but-not-judged")
+        result = compare.compare_runs(self.conn, base["id"], head["id"])
+        self.assertIn(bf["id"], [x["id"] for x in result["unconfirmed"]])
+
+    def test_head_rejected_same_point_is_not_mitigation(self):
+        """head 에서 같은 지점이 다시 잡혔는데 사람이 기각했다면, 고쳐졌다는 증거가 아니다."""
+        base, head = self._run(), self._run()
+        asset = self._asset(base)
+        bf = self._finding(base["id"], asset, "/head-rejected")
+        self._finding(head["id"], asset, "/head-rejected", status="REJECTED")
+        self._checked_evidence(head["id"], asset, f"http://localhost/head-rejected{self.PAYLOAD}", "SQLI")
+        result = compare.compare_runs(self.conn, base["id"], head["id"])
+        self.assertIn(bf["id"], [x["id"] for x in result["unconfirmed"]])
+
+    def test_v1_rows_are_incomparable(self):
+        base, head = self._run(), self._run()
+        asset = self._asset(base)
+        bf = self._finding(base["id"], asset, "/old-rule")
+        self.conn.execute("UPDATE findings SET fingerprint_v=1 WHERE id=%s", (bf["id"],))
+        self._finding(head["id"], asset, "/old-rule")
+        result = compare.compare_runs(self.conn, base["id"], head["id"])
+        self.assertIn(bf["id"], [x["id"] for x in result["incomparable"]])
+        self.assertEqual(result["persistent"], [])
 
     def test_mitigated_presumed_via_fixed_retest_without_head_evidence(self):
         base, head = self._run(), self._run()

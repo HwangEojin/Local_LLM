@@ -135,7 +135,7 @@ export default function RunComparePage() {
 
           <Section
             title={`미재현 — 조치 추정 (${result.mitigated_presumed.length})`}
-            hint="head 가 같은 지점을 실제로 다시 때렸는데 신호가 안 뜨거나, FIXED 재검증 이력이 있음. 확정은 아님 — 사람이 확인해야 합니다."
+            hint="head 가 같은 분류·같은 지점(경로·매개변수)을 실제로 다시 보내 신호 판정까지 했는데 신호가 안 떴거나, FIXED 재검증 이력이 있음. 확정은 아님 — 사람이 확인해야 합니다."
           >
             {result.mitigated_presumed.length === 0 ? <Empty title="조치 추정 finding 이 없습니다" /> : (
               <Card className="divide-y divide-line">
@@ -146,7 +146,7 @@ export default function RunComparePage() {
 
           <Section
             title={`이번 실행에서 미확인 (${result.unconfirmed.length})`}
-            hint="head 가 이 지점을 아예 다시 때리지 않음 — 고쳐졌다는 증거가 없습니다(관찰되지 않음 ≠ 조치됨)."
+            hint="head 가 이 지점을 같은 분류로 다시 판정하지 않았거나, 다시 잡혔지만 기각됨 — 고쳐졌다는 증거가 없습니다(관찰되지 않음 ≠ 조치됨)."
           >
             {result.unconfirmed.length === 0 ? <Empty title="미확인 finding 이 없습니다" /> : (
               <Card className="divide-y divide-line">
@@ -155,8 +155,20 @@ export default function RunComparePage() {
             )}
           </Section>
 
+          {result.rejected.base.length + result.rejected.head.length > 0 && (
+            <Section
+              title={`기각됨 (${result.rejected.base.length + result.rejected.head.length})`}
+              hint="사람이 오탐으로 기각한 finding — 신규·지속·재발 집계에 넣지 않습니다."
+            >
+              <Card className="divide-y divide-line">
+                {result.rejected.base.map((f) => <FindingRow key={f.id} f={f} run_code={result.base_run.run_code} />)}
+                {result.rejected.head.map((f) => <FindingRow key={f.id} f={f} run_code={result.head_run.run_code} />)}
+              </Card>
+            </Section>
+          )}
+
           {result.incomparable.length > 0 && (
-            <Section title={`비교 불가 (${result.incomparable.length})`} hint="위치(method/path/params)를 못 뽑아 fingerprint 가 없는 과거 finding — 자동 분류하지 않습니다.">
+            <Section title={`비교 불가 (${result.incomparable.length})`} hint="위치·매개변수를 특정하지 못했거나 옛 규칙(v1)으로 계산된 finding — 자동 분류하지 않습니다(finding refingerprint 로 정리 가능).">
               <Card className="divide-y divide-line">
                 {result.incomparable.map((f) => <FindingRow key={f.id} f={f} />)}
               </Card>
