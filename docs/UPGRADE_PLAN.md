@@ -822,3 +822,297 @@ API 호출 변경 없음(순수 이동). 백엔드(Python) 변경이 없어 전�
 각 단계는 CLAUDE.md §16 형식(PASS/FAIL/NOT CHECKED/BLOCKED/PARTIAL)으로 보고하고, 이 섹션의 해당 항목에
 "구현 완료(날짜)"와 실제로 바뀐 점(계획과 달라진 부분 포함)을 덧붙인다. 적용된 마이그레이션은 수정하지 않고
 번호를 새로 추가한다(README §8).
+
+---
+
+## H. G 구현 점검 결과와 결함 수정 계획 (2026-11-17 작성, 미구현)
+
+`ebca5bb` 기준으로 G-S~G6 구현을 계획서와 한 줄씩 대조하고, 실제 PostgreSQL 16 로 전체 테스트를 돌려 확인했다.
+G 의 단계는 모두 구현됐고 결정 D1~D7 도 반영됐지만, **G1·G2·G6 이 막으려던 문제를 다시 만드는 결함**과,
+점검 중 새로 드러난 **가드레일 위반(§8-9) 1건**이 있다. 아래 "재현"은 전부 실제로 실행해 확인한 것이다.
+
+### H0. 점검 시 실행한 검증 (재현 가능하도록 기록)
+
+| 항목 | 결과 | 비고 |
+|---|---|---|
+| Python 전체 테스트(`unittest discover`, PG16, `WORKBENCH_PG_DSN` 지정) | PASS — 359 실행·30 건너뜀 | 실패 3건은 환경 원인: 프록시 테스트 2건은 셸의 `HTTPS_PROXY` 때문(H6 와 같은 뿌리), 1건은 frida MCP 미설치(H7) |
+| 같은 테스트를 DB 없이 실행 | 138 실행·71 건너뜀·실패 0 | DB 테스트는 연결 실패 시 **조용히 건너뛴다** — 통과 개수만 보고하면 DB 미연결을 놓친다(H7) |
+| `tsc --noEmit` | PASS | |
+| `npm run lint` | FAIL — 오류 6 | H7 |
+| `npm run build` | FAIL — 컴파일 성공 후 Next.js 보안 점검에서 중단 | `next@16.4.2` 가 GHSA-mfr8-8qww-v76h(moderate, 16.3.0~16.4.4) 해당. `use cache`/`unstable_cache` 미사용이라 실제 노출은 낮음(H7) |
+| 건너뛴 30건 | NOT CHECKED | 회사 템플릿·가져온 체크리스트 없음 22, Ollama 없음 3, testssl 없음 1 등 |
+
+### H-결함 요약
+
+| ID | 심각도 | 영역 | 한 줄 요약 |
+|---|---|---|---|
+| H1 | 높음 | G1 | 원시 HTTP 요청·URL 인자에서 **실제 HTTP 매개변수 이름을 못 뽑아** 서로 다른 매개변수의 같은 취약점이 자동 병합되고, **원시 GET 요청은 위치 추출 자체가 실패**한다 |
+| H2 | 높음 | G6 | 위치 해시에 취약점 분류가 없고 H1 을 물려받아, **상관없는 요청 하나로 "미재현(조치 추정)"** 이 된다. 분류 시 finding 상태(REJECTED)를 보지 않는다 |
+| H3 | 중간 | G2 | 검증 모델이 **유효한 인용 없이 CONFIRMS** 해도 확정된다. 호출 실패가 ERROR 가 아니라 INSUFFICIENT 로 기록된다. 같은 모델 검사가 문자열 비교뿐이다 |
+| H4 | 중간 | G3/D6 | "승인 후 편집됨" 경고가 텍스트 편집만 센다 — 승인 뒤 확정·기각·병합·재오픈·교차 검증 확정은 보고서를 바꾸는데 경고가 안 뜬다(계획서 자체의 빈틈) |
+| H5 | **높음** | 가드레일 §8-9 | 진단 프록시(`proxy._fetch`)와 내장 `net.http_head` 가 **리다이렉트를 범위 재검사 없이 따라간다** — 범위 안 주소의 302 한 번으로 범위 밖 호스트에 요청이 나가고 그 응답이 증거로 저장된다 |
+| H6 | 중간 | 가드레일 §8-8 | 같은 두 경로가 OS 의 `HTTP(S)_PROXY` 환경 변수를 **암묵적으로** 따른다 — 시스템 프록시가 설정된 PC 에서는 진단 트래픽이 의도치 않게 그 프록시를 경유한다 |
+| H7 | 낮음 | 품질 | Next.js 보안 패치, lint 오류 6, 환경 의존 테스트, 건너뜀 개수 미보고 |
+
+### H1. Fingerprint 매개변수 추출 결함 (G1) — 높음
+
+**증상**
+- `fingerprint.locate()` 의 `params` 는 `signals.injection_params()` 가 돌려주는 **도구 인자 키 이름**이다. Burp
+  `send_http1_request` 는 원시 요청 전체를 `content` 하나에 담으므로 `id` 의 SQLi 와 `name` 의 SQLi 가 둘 다
+  `params: ["content"]` → **같은 fingerprint → 자동 병합**된다. Playwright `browser_navigate` 의 `url` 도 같다
+  (`params: ["url"]`, 쿼리는 `strip_query` 로 버려짐).
+- 원시 요청 탐지를 `signals._raw_http_request()` 에 맡기는데, 그 함수가 쓰는 `signals._METHOD_LINE` 은 CSRF 판정용이라
+  `POST|PUT|DELETE|PATCH` 만 인식한다. **원시 GET 요청은 위치를 못 뽑아 fingerprint 가 NULL** — 중복 제거가 전혀 안 된다.
+- D1("잘못 합치느니 중복을 감수")과 정반대 동작이 주력 도구 경로에서 일어난다.
+- 테스트가 못 잡은 이유: `test_different_params_makes_different_finding` 은 이름과 달리 **경로**(`/user/1` vs
+  `/user/2`)만 비교한다. 원시 GET 테스트는 없다. `test_from_raw_http_request` 주석은 이 동작을 의도로 기록했다.
+
+**재현(2026-11-17 실행)**
+```
+body id    loc={'method':'POST','path':'/item','params':['content']} fp=10d61d6f
+body name  loc={'method':'POST','path':'/item','params':['content']} fp=10d61d6f   ← 같은 fp
+url id     loc={'method':'GET','path':'/item','params':['url']}     fp=5b6836f3
+url name   loc={'method':'GET','path':'/item','params':['url']}     fp=5b6836f3   ← 같은 fp
+raw GET    classify=SQLI  raw_req found: False  compute: (None, None, {})          ← 위치 없음
+```
+
+**수정**
+- `fingerprint.py` 에 자체 요청 파서 추가(DB·LLM 의존 없는 순수 함수 유지):
+  - 원시 요청 탐지는 fingerprint 의 `_METHOD_LINE`(GET/HEAD/OPTIONS 포함)으로 `signals._flatten_strings(args)` 를
+    직접 훑는다. `signals._raw_http_request` 는 CSRF 전용으로 그대로 둔다(동작 변경 금지).
+  - `http_param_names(raw_or_url) -> list[str]`: 요청 줄의 쿼리, 본문(`application/x-www-form-urlencoded`,
+    `application/json` 최상위·중첩 키를 `a.b` 경로로, `multipart/form-data` 의 `name=`)에서 **값에 주입 패턴이 걸리는
+    HTTP 매개변수 이름**만 뽑는다. 값은 `urllib.parse.unquote_plus` 후 검사(퍼센트 인코딩된 페이로드 대응).
+    경로 세그먼트·헤더·쿠키에 페이로드가 있으면 `path:<n>`, `header:<name>`, `cookie:<name>` 으로 표기.
+  - URL 인자(`url` 류 키)는 쿼리를 파싱해 같은 규칙으로 이름을 뽑는다.
+  - 구조화 인자(`{"params": {"id": ...}}` 처럼 이미 이름이 있는 dict)는 지금처럼 키 이름을 쓴다.
+  - 어느 방법으로도 HTTP 매개변수를 특정하지 못하면 **fingerprint 를 만들지 않는다**(locator_hash 만 남김) —
+    "모르면 합치지 않는다" 원칙을 매개변수 수준까지 적용.
+- **알고리즘 버전**: 기존 행의 fingerprint 는 옛 규칙으로 계산돼 새 행과 섞이면 안 된다.
+  - 마이그레이션 `0032_fingerprint_v2.sql`: `findings.fingerprint_v smallint NOT NULL DEFAULT 1`. 새 계산은 `2`.
+    부분 UNIQUE 인덱스 `findings_run_fingerprint_live` 를 `(run_id, fingerprint_v, fingerprint)` 로 교체.
+  - `upsert_exploration_finding` 과 G6 비교는 **같은 버전끼리만** 맞춘다. 버전이 다르면 G6 에서 "비교 불가".
+  - 기존 행 재계산은 자동으로 하지 않는다(옛 규칙으로 이미 합쳐진 finding 은 증거를 기계적으로 다시 나눌 수 없음).
+    대신 CLI `finding refingerprint <run> --dry-run` 으로 "v2 로 다시 계산하면 둘 이상으로 갈라질 finding" 목록을
+    보여 주고, 사람이 수동 해제·병합으로 정리한다. `--apply` 는 갈라지지 않는 행만 v2 로 갱신.
+- 원시 요청이 퍼센트 인코딩돼 있을 때 `signals.classify_payload` 가 SQLI 를 못 알아보는 경우가 있다(재현:
+  `id=1'%20OR%20'1'='1` → None). 이번 범위에서는 **기록만** 하고 고치지 않는다 — 신호 판정 변경은 RULE_CONFIRMED
+  범위를 바꾸므로 별도 결정 필요(H-결정 HD1).
+
+**테스트**: `test_finding_fingerprint.py` — Burp `content` 형식(GET 쿼리·POST form·POST JSON·multipart)과 Playwright
+`url` 형식에서 매개변수별로 fp 가 달라지는지, 퍼센트 인코딩 값, 원시 GET 인식, 매개변수 특정 실패 시 fp None.
+`test_finding_dedup_db.py` 의 `test_different_params_makes_different_finding` 을 실제 매개변수 차이로 고치고,
+경로 차이 테스트는 이름을 바꿔 남긴다. 버전 1/2 행이 서로 병합되지 않는지 DB 테스트 추가.
+
+### H2. 실행 비교 오분류 (G6) — 높음
+
+**증상**
+- `compare._head_hit_same_locator()` 는 head 실행 증거의 `locator_hash` 만 맞춰 본다. `locator_hash` 에는
+  **취약점 분류가 없다**(D2 용도로 설계됨). H1 까지 겹쳐, base 의 `/item` `id` SQLi 가 head 에서 `/item` `q` 에
+  XSS 페이로드 하나 보낸 것만으로 "미재현(조치 추정)" 이 된다.
+- `compare_runs()` 는 finding **상태를 보지 않는다** — base 에서 REJECTED(오탐) 된 것이 "지속", head 에서 REJECTED 된
+  것이 "신규"로 셈해진다.
+- "관찰되지 않음 ≠ 고쳐짐"(CLAUDE.md §3/§15) 이 G6 의 핵심 원칙인데 이 경로로 깨진다.
+
+**재현(2026-11-17 실행)**: `base SQLi(id) locator_hash == head XSS(q) locator_hash: True`
+
+**수정**(`src/diagnostic_workbench/compare.py`)
+- "같은 지점을 다시 때렸다" 판정을 `fingerprint`(분류 포함, H1 의 v2)로 바꾼다: head 증거마다
+  `signals.classify_payload(args)` 로 분류를 구하고 `fingerprint.compute(asset, 그 분류, args)` 가 base finding 의
+  fingerprint 와 같을 때만 "다시 때림". 버전이 다르면 판단하지 않는다(→ 미확인).
+- 추가로 그 증거에 대해 신호 판정이 실제로 수행됐고(`audit_events.event='exploration_signal_checked'` 의
+  `matched=false`) 실행이 성공했을 때만 "미재현(조치 추정)". 판정 기록이 없으면 "미확인".
+- 상태 처리: 비교 대상은 `duplicate_of IS NULL AND status <> 'REJECTED'`. REJECTED 는 새 묶음 `rejected`
+  (base·head 각각, 사유 포함)로 따로 보여 주고 신규/지속/재발 집계에서 뺀다. 화면(`runs/compare/page.tsx`)에
+  묶음 하나 추가.
+- 성능: 지금은 base finding 마다 head 증거 전체를 다시 계산한다(O(n·m)). head 증거를 한 번만 훑어
+  `{fingerprint: evidence_id}` 사전을 만든 뒤 조회.
+
+**테스트**: `test_run_compare_api.py` — 같은 경로·다른 매개변수, 같은 위치·다른 분류는 "미확인", 신호 판정 기록이
+없는 증거는 "미확인", base REJECTED 가 지속으로 안 잡히는지, head REJECTED 가 신규로 안 잡히는지.
+
+### H3. 교차 검증 게이트 구멍 (G2) — 중간
+
+**증상**
+- `explore.verify_llm_finding()` 은 검증 모델이 지어낸 증거 id 를 걸러내지만(`cited`) **verdict 는 CONFIRMS 그대로**
+  돌려준다 → `_cross_check_llm_finding()` 이 그대로 확정. 계획서 G2 는 "부분집합이 아니면 INSUFFICIENT"였다.
+  `test_forged_citation_outside_provided_evidence_is_dropped` 는 걸러진 id 만 확인하고 확정 여부는 보지 않는다.
+- `LLMError` 를 `INSUFFICIENT` 로 기록한다 — `finding_llm_votes.verdict` 에 `ERROR` 값이 있는데 쓰이지 않아,
+  나중에 모델별 일치율에서 "호출 실패"와 "판단 불가"를 구분할 수 없다.
+- 같은 모델 검사(`runs.create_run`)가 설정 문자열만 비교한다 — 프로파일 이름과 `ollama:<모델>` 처럼 표기만 다르고
+  실제 모델이 같으면 통과한다. 제안 모델이 비어 기본 모델을 쓰는 경우도 못 막는다.
+- `worker.promote_llm_proposed()` 가 현재 상태를 확인하지 않고 덮어쓴다(행 잠금 없음).
+
+**수정**
+- `verify_llm_finding`: `verdict == "CONFIRMS" and not cited` → `INSUFFICIENT`, rationale 앞에 "유효한 증거 인용 없음"
+  을 붙인다. `LLMError` → `verdict="ERROR"` 로 반환하고 `_cross_check_llm_finding` 은 ERROR 를 INSUFFICIENT 와 같이
+  NEEDS_REVIEW 로 남긴다(표에는 ERROR 로 기록).
+- `runs.create_run`: 두 spec 을 실제 모델 이름으로 해석(프로파일 → 모델, 빈 값 → 기본 모델)한 뒤 비교. 해석에
+  실패하면 거부(§8-4 "불명확 시 거부").
+- `promote_llm_proposed`: `SELECT ... FOR UPDATE` 로 `verification='LLM_PROPOSED' AND status='NEEDS_REVIEW'` 인
+  경우에만 확정, 아니면 이력만 남기고 상태 유지.
+
+**테스트**: `test_llm_cross_check.py` — 위조 인용 CONFIRMS 가 NEEDS_REVIEW 로 남는지, 호출 실패 시 표에 ERROR,
+프로파일 이름과 모델 spec 이 같은 모델이면 422, 사람이 먼저 기각한 finding 이 교차 검증으로 확정되지 않는지.
+
+### H4. 승인 후 변경 경고 범위 (G3/D6) — 중간
+
+**증상**: `GET /runs/{run}/report` 의 `stale` 은 `finding_revisions`(제목·근거·대응방안 편집)만 센다
+(`webapi/routers/runs.py` `list_reports`). 승인 뒤 일어나는 다음 변경은 보고서 내용을 바꾸는데 경고가 안 뜬다:
+사람의 확정·기각, 수동 병합/해제(`finding_review_history` 에 기록됨), D3 재오픈, 교차 검증 확정, 새 finding 생성.
+G 계획서가 범위를 좁게 잡은 탓이다.
+
+**수정**: 승인 시각 이후의 (a) `finding_revisions`, (b) `finding_review_history`, (c) 그 실행의 새 `findings` 행
+(`created_at` 기준) 을 합산해 `edited_after_approval` 로 돌려준다. 응답에 종류별 건수(`text_edits`, `status_changes`,
+`new_findings`)도 같이 넣어 화면 배지 문구를 구체화("승인 이후 판정 변경 3건·새 발견 1건 — 재생성 필요").
+
+**테스트**: `test_report_api.py` — 승인 뒤 상태 변경만 있어도, 병합만 있어도, 새 finding 만 생겨도 stale.
+
+### H5. 리다이렉트 범위 재검사 누락 (§8-9) — 높음
+
+**증상**: `proxy._fetch()`(`proxy.py:43-50`)와 `audit/adapters/net_tools.py` `http_head` 가
+`urllib.request.urlopen` 기본 opener 를 쓴다 → 3xx 를 **자동으로 따라가고, 따라간 목적지는 정책 계층을 거치지
+않는다**. 정책 검사(`policy.decide`)는 첫 URL 에만 적용된다. CLAUDE.md §8-9 "리다이렉트/최종 목적지 재검증" 위반.
+
+**재현(2026-11-17 실행)**: 범위 안으로 둔 `127.0.0.1` 이 `302 → http://127.0.0.2:<port>/secret` 을 돌려주면
+`_fetch` 가 그대로 따라가 `status 200`, 본문 `OUT-OF-SCOPE-CONTENT`, 범위 밖 서버 접근 기록 `['/secret']`.
+
+**수정**
+- 두 경로 모두 리다이렉트를 **자동으로 따라가지 않는** 전용 opener 를 쓴다(`HTTPRedirectHandler` 를 무력화한
+  하위 클래스). 프록시는 3xx 응답을 그대로 클라이언트(Burp/Playwright 등)에 돌려준다 — 클라이언트가 Location 을
+  따라가면 그 요청이 다시 프록시를 지나며 **범위 검사를 새로 받는다**(이게 올바른 재검증 지점).
+- `net.http_head` 는 3xx 의 `Location` 을 결과에 기록만 하고 따라가지 않는다. 따라가야 한다면 LLM 이 새 작업으로
+  제안해 정책을 다시 통과하게 한다.
+- 감사 로그: 3xx 를 받으면 `redirect_not_followed {from, location, in_scope: <정책 판정 결과>}` 를 남긴다(판정만 하고
+  실행은 안 함 — 운영자가 범위 밖 유도를 볼 수 있게).
+- 다른 경로 점검: MCP 도구(Playwright 브라우저 등)의 리다이렉트는 도구 내부에서 일어나 정책 계층이 못 본다 —
+  이미 `config/mcp_servers.json` 의 Playwright 설명에 `--allowed-origins` 권고가 있다. 이번 수정 범위 밖이지만 G7 보류표에 "브라우저
+  내부 리다이렉트는 `--allowed-origins` 필수화 검토"로 추가.
+
+**테스트**: 신규 `tests/unit/test_redirect_scope.py` — 위 재현을 그대로 테스트로(프록시·http_head 둘 다):
+범위 밖 서버에 요청이 0건이고, 3xx 가 그대로 돌아오며, 감사 이벤트가 남는지.
+
+### H6. 환경 프록시 암묵 사용 (§8-8) — 중간
+
+**증상**: 같은 두 경로가 기본 opener 를 써서 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` 환경 변수를 그대로 따른다.
+시스템 프록시가 설정된 PC 에서는 진단 대상 트래픽이 그 프록시를 거쳐 나가고(목적지 DNS 해석도 프록시가 함),
+점검 중 테스트 2건이 이 때문에 실패했다.
+
+**수정**: H5 의 전용 opener 를 `ProxyHandler({})` 로 만들어 환경 프록시를 끈다. 업스트림 프록시가 정말 필요하면
+`config/workbench.json` 에 `upstream_proxy` 를 **명시적으로** 두고(기본 없음), 쓰일 때 `doctor` 와 실행 시작 감사
+이벤트에 표시한다. `notify.py` 웹훅은 진단 트래픽이 아니므로 대상에서 제외(환경 프록시 유지).
+
+**테스트**: `HTTPS_PROXY` 를 엉뚱한 주소로 설정한 상태에서 `test_proxy.py` 가 통과하는지(현재는 실패).
+
+### H7. 품질 정리 — 낮음
+
+- `web/package.json` `next` 16.4.2 → **16.4.6 이상**(GHSA-mfr8-8qww-v76h). `npm run build` 가 통과하는지 확인.
+- lint 오류 6건: `commands/page.tsx:58`, `runs/compare/page.tsx:69`(G6 신규), `settings/AgentsSection.tsx:89`
+  (react-hooks/set-state-in-effect), `settings/AgentsSection.tsx:650` 두 건(react/no-unescaped-entities),
+  `settings/page.tsx:346`. 경고 10건은 이번 범위 밖.
+- `test_autonomous_run.test_explore_propose_bootstraps_without_prior_evidence` 가 frida MCP 설치 여부에 의존 —
+  가짜 LLM 이 제안하는 도구를 내장 도구(`net.http_head` 등)로 바꾸거나, 도구가 없으면 SkipTest.
+- 결과 보고 규칙: 테스트 결과는 "실행/통과/건너뜀" 세 숫자를 함께 적는다(DB 미연결 시 DB 테스트가 조용히
+  건너뛰므로). `tests/unit/__init__.py` 가 격리 스키마를 못 만들면 stderr 에 한 줄 경고를 내게 한다.
+
+### H-결정. 구현 전 사용자 확인 필요
+
+| ID | 질문 | 제안 기본값 |
+|---|---|---|
+| HD1 | 퍼센트 인코딩된 페이로드를 `signals.classify_payload` 가 알아보게 할지(RULE_CONFIRMED 범위가 넓어짐) | 이번엔 하지 않고 H1 만 진행. 신호 변경은 별도 단계에서 오탐 테스트와 함께 |
+| HD2 | H1 이후 옛 규칙(v1)으로 합쳐진 finding 정리 방식 | 자동 재계산 안 함. `refingerprint --dry-run` 목록을 보고 사람이 정리 |
+| HD3 | H5 에서 프록시가 3xx 를 클라이언트에 그대로 돌려주는 방식(클라이언트가 다시 프록시로 요청 → 재검사) | 채택. 프록시가 대신 따라가 주는 방식은 정책 경로가 둘이 되므로 안 함(§8-1) |
+
+### H8. 작업 순서
+
+| 순서 | 작업 | 마이그레이션 | 이유 |
+|---|---|---|---|
+| 1 | H5 + H6 (같은 opener 로 함께) | — | 가드레일 위반이 가장 먼저 |
+| 2 | H1 | 0032 | H2 의 전제 |
+| 3 | H2 | — | H1 의 v2 fingerprint 사용 |
+| 4 | H3 | — | 독립 |
+| 5 | H4 | — | 독립 |
+| 6 | H7 | — | 언제든(빌드 통과는 배포 전 필수) |
+
+HD1~HD3 은 2026-11-17 사용자가 "작업 시작"으로 진행을 지시해 **제안 기본값으로 확정**한다(HD1: 신호 변경 안 함,
+HD2: 자동 재계산 안 함·dry-run 목록 제공, HD3: 3xx 를 클라이언트로 그대로 반환).
+
+---
+
+## I. 레퍼런스(artex-global)·상용 AI 진단 도구 조사와 기능 후보 (2026-11-17 작성, 미착수)
+
+H 를 끝낸 뒤 고를 다음 작업 후보다. **이 섹션은 조사 기록이며 구현 결정이 아니다** — 항목마다 착수 전에 G/H 처럼
+결정 표를 따로 만든다.
+
+### I0. 조사 범위와 확인 수준
+
+| 대상 | 방법 | 확인 수준 |
+|---|---|---|
+| `github.com/jiwoochris/artex-global` (`133f3cf`, 2026-11-10) | 저장소를 받아 README·CHANGELOG·API 라우트 목록·`agent/`·`server/`·`sidequestion/` 의 파일 머리 주석 확인 | 기능 존재와 책임은 확인. **각 기능의 내부 동작 세부는 미확인**(코드 본문 대부분 미열람) |
+| XBOW, Horizon3 NodeZero, Burp Suite(Burp AI·Burp AT), PlexTrac, PentAGI, Shannon(Keygraph), Strix, Escape, RunSybil | 공식 문서·제품 페이지·저장소 README 웹 조사 | 공개 문서상 기능만. 실제 제품 사용 검증 없음 |
+| 로컬 artex(`C:\Users\Owner\Documents\Work\artex`) | 사용자 PC 미연결로 **미확인** | 기존 E/F 섹션 기록만 참고 |
+
+**주의(법률 자문 아님)**
+- artex-global 과 Shannon Lite 는 **AGPL-3.0**. 코드(화면 JSX 포함)를 그대로 옮기면 공개 저장소인 이 프로젝트에도 AGPL 의무가
+  생길 수 있다. CLAUDE.md §4-1 "구조 비교, 코드 이식 아님" 을 계속 지키고, F 섹션의 "코드~UI 완전 동일" 은 "레이아웃
+  참고·코드는 재구현" 의미로 읽는다.
+- artex-global README 최상단에, 2026-10 국내 언론이 원본 ARTEX 가 국내 금융기관 개인정보 유출 공격에 쓰인 정황을 조사
+  당국이 포착했다고 보도했고 수사가 진행 중이라는 경고가 있다(README 기재 내용, 별도 확인 안 함). 이 프로젝트가 공개
+  저장소에서 레퍼런스로 명시하는 대상이라 평판 측면에서 알아 둘 것.
+
+### I1. 추가 후보
+
+| 우선 | 기능 | 근거(조사) | 현재 상태 | 비고 |
+|---|---|---|---|---|
+| P1 | **인증 세션 관리**(테스트 계정 보관, 로그인 절차 녹화·재생, TOTP) | Shannon: 2FA/TOTP·SSO 로그인을 사람 개입 없이 처리. Burp AI: 인증 설정 자동화(녹화 로그인) | 계정 보관 기능 없음. LLM 이 `question` 으로 운영자에게 물어보는 경로뿐 | 비밀값은 DB 평문 금지 — 환경 변수 이름 참조(`env_from`, E 섹션 MCP 패턴) 재사용 |
+| P1 | **다중 계정 권한 테스트**(IDOR/BOLA, 테넌트 격리, 권한 상승) | Escape: 인증 요청을 다른 사용자 컨텍스트로 재전송·객체 ID 열거로 BOLA/테넌트 격리/권한 상승 탐지. Shannon·Strix 도 Authz 범주 보유 | `signals.SIGNALS` 에 권한 분류 없음 | 인증 세션 관리가 전제. 판정은 "A 계정 응답과 B 계정 응답 비교"라는 결정론적 신호로 설계 가능 |
+| P1 | **PoC 재현 패키지 내보내기**(원시 요청·curl·재현 절차·응답 발췌) | Shannon: 보고서에 복사·붙여넣기 PoC 만. artex: `finding_traffic_export` | 증거는 있으나 묶어서 내보내는 기능 없음 | 작은 작업. G5 출처 체인 API 재사용 |
+| P2 | **커버리지 그래프 화면**(자산별 테스트함/대기/미시도) | artex `GET /api/tasks/{id}/coverage`, `coverage-graph` | `reporting.coverage()` 표만 있음 | CLAUDE.md §10 "실행하지 않은 영역"의 화면 버전 |
+| P2 | **작업별 운영 제약**(문장형 allow/deny) | artex `task_constraints` 를 planner/worker 시스템 프롬프트 최상단에 주입 | 범위·인터셉트 규칙만 | **프롬프트 지시일 뿐 정책 강제가 아님**을 화면에 명시(§8 "프롬프트 규칙만으로 통제 완료로 보지 않음") |
+| P2 | **외부 콜백(OOB) 수신기** | 블라인드 SSRF/XXE/명령 주입 확정에 필요(Burp Collaborator 계열) | 없음. `verify_ssrf` 는 응답 본문만 봄 | 로컬 원칙상 자체 호스팅 수신기. 새 결정론적 신호(콜백 수신 = 확정) |
+| P3 | **소스·패치 diff 기반 화이트박스 모드** | Shannon: 소스 분석으로 공격 벡터 도출 → 실제 익스플로잇 → 코드 위치까지 추적 | Ghidra/JADX MCP(바이너리)만 | 공개·패치된 CVE 의 1-day 연구 흐름(패치 diff → 공격 지점)과 직결 |
+| P3 | 실행 아카이브 패키지(결과·증거·감사 로그 묶음 내보내기/가져오기) | artex `task_archive_package` | 없음 | 증거 SHA-256 포함한 무결성 매니페스트 |
+| P3 | 인가된 진단 트래픽 식별 헤더(설정형, 기본 꺼짐) | 방어 측이 진단 트래픽을 실제 공격과 구분(디컨플릭션). artex 탐지 규칙도 도구 고유 흔적을 기준으로 함 | 없음 | 계약서 상 요구가 있을 때 켬 |
+| P3 | 범용 자산 가져오기(CSV, nmap XML) | artex 는 ScopeSentry 전용 동기화 | `scope.json` 수동 편집 | 특정 제품 전용 동기화는 가져오지 않음 |
+
+### I2. 개선 후보(이미 있는 기능 강화)
+
+| 우선 | 기능 | 근거 | 현재 상태 | 비고 |
+|---|---|---|---|---|
+| P1 | **작업 단위 다단계 루프** | artex worker 는 의도 하나를 여러 도구 호출로 끝까지 진행. Strix: 에이전트들이 발견 공유·취약점 연결 | 작업 1건 = 도구 1개(+첫 정찰 최대 3회) | 단계마다 `policy.decide()` 단일 경로 유지(§8-1). 순차 실행 결정은 유지 |
+| P2 | **공격 체인 목록 유지**(라운드를 가로지르는 공유 todolist) | artex planner todolist | `depends_on` 은 한 응답 안에서만 | 체인 단계 완료 판정은 fact 존재로(Python) |
+| P2 | **컨텍스트 압축** | artex cold-graph digest(오래된 노드 묶음 요약) | TOOLS 블록 글자수 절단(`a59faf9`)이 이미 압박 신호 | 작은 컨텍스트의 로컬 모델에 특히 중요. 요약은 inferred 로 표시(관찰과 구분) |
+| P2 | **일괄 재검증**("조치 확인" 실행 단위 버튼) | NodeZero 1-Click Verify, Escape 회귀 테스트 에이전트 | finding 단위 `create_retest` 만 | H2(실행 비교)와 같은 판정 규칙 재사용 |
+| P2 | 정렬 기준 재정의 | 상용 도구는 익스플로잇 가능성·영향 기준 정렬 | D7 이후 기준 없음 | D7 유지: "판정 강도(사람 > 규칙 > LLM 교차 > LLM 단독) + 증거 수 + 최근 관찰" |
+| P3 | worker 간 과정 검색 | artex `search_all_worker_traces` | 증거·fact 만 공유 | |
+| P3 | 종료 직전 정리(wrap-up) | artex: 단계·시간 소진 직전 미기록 결과 저장 | 벽시계 타임아웃 시 그대로 종료 | |
+| P3 | 실시간 스트림(SSE)·곁질문(`/btw`)·알림 채널·전송 이력 | artex activity/log stream, sidequestion, notify | 폴링·웹훅 | |
+
+### I3. 수정 후보
+
+- H1~H7(섹션 H).
+- 도구 위험도 등급 흔적: `864daaa` 에서 read/write/dangerous 를 없앴는데 `explore.py` 모듈 설명("dangerous 도구는 자율 제안에서
+  뺀다"), `audit/models.py` `RISK_LEVELS`, `config/mcp_servers.json` 도구 설명의 write/dangerous 표기가 남아 있다. 동작은
+  `read_only` 기준으로 맞으나 문서·주석이 어긋나 LLM 프롬프트로 흘러들 위험이 있다.
+
+### I4. 도입하지 않을 것 / 삭제 후보
+
+| 대상 | 판단 | 사유 |
+|---|---|---|
+| artex "LLM 대체 승인"(intercept judge) | 도입 안 함 | 승인 필요 작업을 모델이 대신 승인 — §8-4(불명확 시 거부)·§10(최종 승인은 사람)과 충돌 |
+| artex worker 동시 실행(기본 3) | 도입 안 함 | Worker 순차 실행 결정 유지. 깊이는 I2 다단계 루프로 |
+| artex ScopeSentry 동기화 | 도입 안 함 | 특정 제품 전용 — I1 범용 자산 가져오기로 대체 |
+| llmpool, selfupdate | 계속 제외 | E 섹션 사유 그대로 |
+| 알림 `min_severity`(스키마 폐지 표시), `RISK_LEVELS` | 다음 정리 주기에 삭제 | 폐지 표시 기간 후 완전 제거 |
+
+### I5. 조사 출처
+
+- artex-global: https://github.com/jiwoochris/artex-global
+- XBOW 검증 에이전트: https://xbow.com/blog/ai-pentesting-strengths-weaknesses-xbow-fills-gaps
+- NodeZero Find–Fix–Verify: https://horizon3.ai/intelligence/blogs/fix-what-matters-most-six-new-nodezero-capabilities-that-redefine-risk-based-vulnerability-management/
+- Burp AI / Burp AT: https://portswigger.net/burp/documentation/burp-ai , https://portswigger.net/blog/introducing-burp-at
+- PlexTrac: https://plextrac.com/platform/overview/
+- PentAGI: https://github.com/vxcontrol/pentagi
+- Shannon: https://github.com/KeygraphHQ/shannon
+- Strix: https://pypi.org/project/strix-agent/1.3.0/
+- Escape 다중 사용자 테스트: https://docs.escape.tech/documentation/dast/multi-user-testing/ , AI Pentesting: https://docs.escape.tech/documentation/validate/
