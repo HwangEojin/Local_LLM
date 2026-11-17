@@ -69,6 +69,8 @@ def cmd_doctor(args):
     check("진단 범위(scope)", lambda: f"대상 {len(audit_config.load_scope(cfg.home)['targets'])}개, "
                                     f"제외 {len(cfg.exclude)}개, 중지 스위치 {'켜짐' if cfg.stop_file.exists() else '꺼짐'}")
     check("증적 디렉터리", lambda: str(cfg.evidence_dir))
+    # H6: 진단 트래픽은 OS 의 HTTP(S)_PROXY 를 따르지 않는다. 업스트림 프록시는 workbench.json 에 명시할 때만.
+    check("진단 프록시 업스트림", lambda: cfg.upstream_proxy or "없음(직접 연결, OS 환경 변수 프록시 무시)")
 
     def notify_min_severity():
         stale = [c["name"] for c in notify.load_all_channels(cfg.home / "config" / "notify.json") if c.get("min_severity")]

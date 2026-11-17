@@ -835,7 +835,7 @@ G 의 단계는 모두 구현됐고 결정 D1~D7 도 반영됐지만, **G1·G2·
 
 | 항목 | 결과 | 비고 |
 |---|---|---|
-| Python 전체 테스트(`unittest discover`, PG16, `WORKBENCH_PG_DSN` 지정) | PASS — 359 실행·30 건너뜀 | 실패 3건은 환경 원인: 프록시 테스트 2건은 셸의 `HTTPS_PROXY` 때문(H6 와 같은 뿌리), 1건은 frida MCP 미설치(H7) |
+| Python 전체 테스트(`unittest discover`, PG16, `WORKBENCH_PG_DSN` 지정) | PASS — 359 실행·30 건너뜀 | 실패 3건은 환경 원인: 프록시 테스트 2건은 **테스트 클라이언트**가 셸의 `no_proxy`(localhost 포함) 때문에 진단 프록시를 건너뛰고 직접 연결한 것(H6 와는 별개 — 2026-11-17 H6 수정 중 정정), 1건은 frida MCP 미설치(H7) |
 | 같은 테스트를 DB 없이 실행 | 138 실행·71 건너뜀·실패 0 | DB 테스트는 연결 실패 시 **조용히 건너뛴다** — 통과 개수만 보고하면 DB 미연결을 놓친다(H7) |
 | `tsc --noEmit` | PASS | |
 | `npm run lint` | FAIL — 오류 6 | H7 |
@@ -968,7 +968,7 @@ G 계획서가 범위를 좁게 잡은 탓이다.
 
 **테스트**: `test_report_api.py` — 승인 뒤 상태 변경만 있어도, 병합만 있어도, 새 finding 만 생겨도 stale.
 
-### H5. 리다이렉트 범위 재검사 누락 (§8-9) — 높음
+### H5. 리다이렉트 범위 재검사 누락 (§8-9) — 높음 — **구현 완료(2026-11-17)**
 
 **증상**: `proxy._fetch()`(`proxy.py:43-50`)와 `audit/adapters/net_tools.py` `http_head` 가
 `urllib.request.urlopen` 기본 opener 를 쓴다 → 3xx 를 **자동으로 따라가고, 따라간 목적지는 정책 계층을 거치지
@@ -992,17 +992,39 @@ G 계획서가 범위를 좁게 잡은 탓이다.
 **테스트**: 신규 `tests/unit/test_redirect_scope.py` — 위 재현을 그대로 테스트로(프록시·http_head 둘 다):
 범위 밖 서버에 요청이 0건이고, 3xx 가 그대로 돌아오며, 감사 이벤트가 남는지.
 
-### H6. 환경 프록시 암묵 사용 (§8-8) — 중간
+### H6. 환경 프록시 암묵 사용 (§8-8) — 중간 — **구현 완료(2026-11-17)**
 
 **증상**: 같은 두 경로가 기본 opener 를 써서 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` 환경 변수를 그대로 따른다.
-시스템 프록시가 설정된 PC 에서는 진단 대상 트래픽이 그 프록시를 거쳐 나가고(목적지 DNS 해석도 프록시가 함),
-점검 중 테스트 2건이 이 때문에 실패했다.
+시스템 프록시가 설정된 PC 에서는 진단 대상 트래픽이 그 프록시를 거쳐 나간다(목적지 DNS 해석도 프록시가 함).
+재현(2026-11-17): `HTTP_PROXY=http://127.0.0.1:9`, `no_proxy` 없음 상태에서 고치기 전의 `urlopen` 이 로컬 대상에 직접
+가지 않고 그 프록시로 연결을 시도해 실패. (처음 작성 때 "점검 중 테스트 2건이 이 때문에 실패"라고 적었으나, 실제
+원인은 테스트 클라이언트의 `no_proxy` 우회였다 — H0 정정.)
 
 **수정**: H5 의 전용 opener 를 `ProxyHandler({})` 로 만들어 환경 프록시를 끈다. 업스트림 프록시가 정말 필요하면
 `config/workbench.json` 에 `upstream_proxy` 를 **명시적으로** 두고(기본 없음), 쓰일 때 `doctor` 와 실행 시작 감사
 이벤트에 표시한다. `notify.py` 웹훅은 진단 트래픽이 아니므로 대상에서 제외(환경 프록시 유지).
 
 **테스트**: `HTTPS_PROXY` 를 엉뚱한 주소로 설정한 상태에서 `test_proxy.py` 가 통과하는지(현재는 실패).
+
+**구현 결과(2026-11-17)**
+- 신규 `src/audit/safe_http.py`: `opener(upstream_proxy=None, ssl_context=None)` — `_NoRedirect`(3xx 를 HTTPError 로 그대로) +
+  `ProxyHandler({})`(환경 변수 프록시 끔). 두 경로(H5·H6)가 같은 opener 를 쓴다.
+- `proxy.py`: `_fetch` 가 `safe_http.opener(cfg.upstream_proxy, UPSTREAM_SSL_CONTEXT)` 사용, 3xx 는 클라이언트에 그대로
+  반환(HD3). `_note_redirect` 가 감사 이벤트 `redirect_not_followed {method, from, location, in_scope}` 기록(판정만).
+  `serve()` 는 업스트림 프록시가 설정된 경우 `proxy_upstream_configured` 감사 이벤트를 남긴다.
+  `UPSTREAM_SSL_CONTEXT`(기본 None = 시스템 신뢰 저장소로 검증)는 테스트가 자체 CA 를 신뢰시킬 때만 바꾼다 — 전역
+  `install_opener()` 가 더는 프록시에 영향을 주지 않기 때문.
+- `audit/adapters/net_tools.py` `net.http_head`: 같은 opener, 3xx 면 결과 JSON 에 `redirect_not_followed`(절대 URL) 기록.
+- `config.py`: `workbench.json` 의 `upstream_proxy`(스키마 `^https?://host[:port]/?$`) → `Config.upstream_proxy`.
+  `doctor` 에 "진단 프록시 업스트림" 행 추가. `net.http_head` 는 업스트림 프록시를 쓰지 않는다(항상 직접 연결).
+- 테스트: 신규 `tests/unit/test_redirect_scope.py` 6건(opener 단위 3, 실제 프록시+DB 3 — 302 반환·범위 밖 서버 접근 0·
+  감사 이벤트 in_scope=false, 클라이언트가 Location 을 따라가면 프록시가 403, 환경 프록시 무시). `test_proxy.py` 는
+  클라이언트 `no_proxy` 우회 방지(setUp 에서 비움)와 `UPSTREAM_SSL_CONTEXT` 설정으로 수정 — 셸 프록시 환경 변수가
+  있는 상태에서도 통과.
+- 검증: 전체 365 실행·30 건너뜀·실패 1(frida MCP 미설치 환경 의존, H7). macOS 는 127.0.0.2 바인딩이 기본으로 안 되므로
+  "범위 밖 호스트"는 같은 서버를 `127.0.0.1` 이름으로 가리켜 만든다(범위 검사는 호스트 문자열 기준).
+- 미검증: 실제 Burp/Playwright 클라이언트가 3xx 를 받아 Location 을 프록시로 재요청하는 흐름(NOT CHECKED — 로컬
+  MCP 없음). Windows 실 PC 실행(NOT CHECKED).
 
 ### H7. 품질 정리 — 낮음
 

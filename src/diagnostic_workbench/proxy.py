@@ -7,6 +7,10 @@ evidence 로 남긴 뒤 실제 목적지로는 새 TLS 연결을 열어 전달�
 설치하지 않으면 그 호스트 하나만 핸드셰이크 실패로 끊기고(평문 HTTP 쪽은 계속 동작), 운영자의
 다른 트래픽에는 영향이 없다. 범위 밖 호스트는 HTTP 든 CONNECT 든 거부한다(CLAUDE.md §8 "리다이렉트
 및 최종 네트워크 목적지를 다시 검증한다").
+
+업스트림 요청은 `audit.safe_http.opener()` 로만 보낸다(H5·H6): 3xx 는 따라가지 않고 클라이언트에 그대로
+돌려주므로, 클라이언트가 Location 으로 다시 요청하면 그 요청이 이 프록시의 범위 검사를 새로 받는다. OS 의
+HTTP(S)_PROXY 환경 변수는 무시하고, 업스트림 프록시는 `workbench.json` 의 `upstream_proxy` 로만 지정한다.
 """
 from __future__ import annotations
 
@@ -14,13 +18,15 @@ import http.client
 import socketserver
 import ssl
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlsplit
 
+from audit import safe_http
 from audit.models import ToolOutput
 
-from . import evidence, tls_ca
+from . import db, evidence, tls_ca
 
 
 def _in_scope(ctx, host: str) -> bool:
@@ -40,14 +46,36 @@ def _record(method, url, headers, body, status, resp_headers, resp_body) -> byte
         "\r\n".join(f"{k}: {v}" for k, v in resp_headers.items()).encode() + b"\r\n\r\n" + resp_body
 
 
-def _fetch(method, url, headers, body):
+# 업스트림 TLS 검증 컨텍스트. None = 기본(시스템 신뢰 저장소로 인증서 검증). 테스트가 자체 CA 를 신뢰하게
+# 할 때만 바꾼다 — 전역 urllib opener(install_opener)는 safe_http.opener 에 영향을 주지 않으므로.
+UPSTREAM_SSL_CONTEXT = None
+
+
+def _fetch(method, url, headers, body, upstream_proxy=None):
+    """업스트림으로 한 번만 보낸다. 3xx 는 따라가지 않고 그대로 돌려준다(H5) — HTTPError 로 올라온 3xx 의
+    본문·상태·Location 헤더가 그대로 클라이언트에 전달된다. 환경 변수 프록시는 쓰지 않는다(H6)."""
     req = urllib.request.Request(url, data=body, method=method,
                                  headers={k: v for k, v in headers.items() if k.lower() != "host"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with safe_http.opener(upstream_proxy, UPSTREAM_SSL_CONTEXT).open(req, timeout=15) as resp:
             return resp.read(1_000_000), resp.status, dict(resp.headers)
     except urllib.error.HTTPError as e:
         return e.read(1_000_000), e.code, dict(e.headers or {})
+
+
+def _note_redirect(ctx, method, url, status, resp_headers) -> None:
+    """3xx 를 받았으면 따라가지 않았다는 사실과, Location 이 범위 안인지(판정만, 실행은 안 함)를 감사 로그에
+    남긴다 — 운영자가 범위 밖으로 유도하는 응답을 볼 수 있게(H5)."""
+    if not 300 <= status < 400:
+        return
+    location = next((v for k, v in resp_headers.items() if k.lower() == "location"), None)
+    if not location:
+        return
+    target = urllib.parse.urljoin(url, location)
+    db.audit(ctx.conn, ctx.run["id"], "redirect_not_followed",
+             {"method": method, "from": url, "location": target,
+              "in_scope": _in_scope(ctx, urlsplit(target).hostname or "")})
+    ctx.conn.commit()
 
 
 def _make_handler(ctx):
@@ -93,9 +121,10 @@ def _make_handler(ctx):
             netloc = host if port == 443 else f"{host}:{port}"
             url = f"https://{netloc}{path}"
             try:
-                resp_body, status, resp_headers = _fetch(method, url, headers, body)
+                resp_body, status, resp_headers = _fetch(method, url, headers, body, ctx.cfg.upstream_proxy)
             except (urllib.error.URLError, OSError) as e:
                 resp_body, status, resp_headers = str(e).encode(), 502, {}
+            _note_redirect(ctx, method, url, status, resp_headers)
             asset_id = _asset_id_for_host(ctx, host)
             if asset_id is not None:
                 record = _record(method, url, headers, body, status, resp_headers, resp_body)
@@ -121,10 +150,12 @@ def _make_handler(ctx):
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length else None
             try:
-                resp_body, status, resp_headers = _fetch(method, self.path, self.headers, body)
+                resp_body, status, resp_headers = _fetch(method, self.path, self.headers, body,
+                                                         ctx.cfg.upstream_proxy)
             except (urllib.error.URLError, OSError) as e:
                 self.send_error(502, str(e))
                 return
+            _note_redirect(ctx, method, self.path, status, resp_headers)
             asset_id = _asset_id_for_host(ctx, host)
             if asset_id is not None:
                 record = _record(method, self.path, self.headers, body, status, resp_headers, resp_body)
@@ -156,6 +187,9 @@ def serve(ctx, port: int, *, server_cls=socketserver.ThreadingTCPServer) -> None
     """포그라운드로 블로킹 실행한다(Ctrl+C 로 종료). HTTP/HTTPS 요청·응답 모두 evidence 로 남는다.
     HTTPS 는 `tls_ca.ca_cert_path(ctx.cfg)` 의 루트 CA 를 클라이언트가 신뢰해야 복호화된다."""
     server = server_cls(("127.0.0.1", port), _make_handler(ctx))
+    if ctx.cfg.upstream_proxy:  # 명시적으로 설정한 경우만(H6) — 운영자가 나중에 확인할 수 있게 남긴다
+        db.audit(ctx.conn, ctx.run["id"], "proxy_upstream_configured", {"upstream_proxy": ctx.cfg.upstream_proxy})
+        ctx.conn.commit()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

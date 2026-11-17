@@ -30,6 +30,8 @@ WORKBENCH = {
         "testssl_path": {"type": "string", "minLength": 1},
         "enrich_enabled": {"type": "boolean"},  # 기본 꺼짐: 켜면 매 계획 주기마다 host/url 자산에
                                                  # DNS 조회/HTTP HEAD 를 자동으로 건다(enrich.py)
+        # H6: 진단 프록시의 업스트림 프록시. 없으면 직접 연결(OS 의 HTTP(S)_PROXY 환경 변수는 따르지 않는다).
+        "upstream_proxy": {"type": "string", "pattern": "^https?://[^\\s/]+(:\\d+)?/?$"},
         "budget": BUDGET,
     },
 }
@@ -52,6 +54,7 @@ class Config:
     testssl_path: str | None = None  # testssl.sh 스크립트 경로(없으면 재협상 점검 도구를 등록하지 않음)
     enrich_enabled: bool = False  # 기본 꺼짐: 기존 실행·테스트의 동작을 바꾸지 않는다(명시적 옵트인)
     intercept_rules: list = None  # config/intercept_rules.json(선택). None 이면 load() 가 [] 로 채운다
+    upstream_proxy: str | None = None  # H6: 진단 프록시의 업스트림 프록시(명시할 때만). 환경 변수는 안 따름
 
     @property
     def stop_file(self) -> Path:  # 전체 중지 스위치: 이 파일이 있으면 모든 도구 호출을 거부한다
@@ -90,7 +93,8 @@ def load(home: str | None) -> Config:
     return Config(root, settings, dsn, wb.get("exclude", []), wb.get("lease_s", 300),
                   wb.get("max_attempts", 2), wb.get("approval_ttl_h", 24), budget,
                   wb.get("min_call_interval_ms", 0), wb.get("nmap_path"), wb.get("testssl_path"),
-                  wb.get("enrich_enabled", False), audit_config.load_intercept_rules(root))
+                  wb.get("enrich_enabled", False), audit_config.load_intercept_rules(root),
+                  wb.get("upstream_proxy"))
 
 
 def validate_budget(budget: dict) -> dict:

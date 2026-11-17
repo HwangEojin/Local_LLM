@@ -6,11 +6,13 @@
   진짜 TLS 핸드셰이크를 완료하고, 복호화된 내용이 evidence(tool='proxy.https')로 남는 것까지 확인한다.
 """
 import json
+import os
 import socketserver
 import ssl
 import threading
 import unittest
 import urllib.request
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
@@ -30,6 +32,13 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
 
 
 class ProxyDB(unittest.TestCase):
+    def setUp(self):
+        # urllib 의 ProxyHandler 는 프록시를 명시해도 환경 변수 no_proxy 에 localhost 가 있으면 건너뛴다 —
+        # 그러면 클라이언트가 진단 프록시를 안 거치고 직접 연결해 테스트가 엉뚱하게 실패한다.
+        patcher = mock.patch.dict(os.environ, {"no_proxy": "", "NO_PROXY": ""})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @classmethod
     def setUpClass(cls):
         try:
@@ -85,6 +94,13 @@ class ProxyDB(unittest.TestCase):
 
 
 class ProxyHTTPSDB(unittest.TestCase):
+    def setUp(self):
+        # urllib 의 ProxyHandler 는 프록시를 명시해도 환경 변수 no_proxy 에 localhost 가 있으면 건너뛴다 —
+        # 그러면 클라이언트가 진단 프록시를 안 거치고 직접 연결해 테스트가 엉뚱하게 실패한다.
+        patcher = mock.patch.dict(os.environ, {"no_proxy": "", "NO_PROXY": ""})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     """실제 TLS 핸드셰이크로 HTTPS CONNECT 가 복호화돼 기록되는지 확인한다(블라인드 터널링이 아님)."""
 
     @classmethod
@@ -124,13 +140,18 @@ class ProxyHTTPSDB(unittest.TestCase):
         # 캐시되므로(HTTPSHandler 가 생성 시점에 기본 컨텍스트를 즉시 확정함 — ssl 모듈의 지연 평가가
         # 아님), ssl._create_default_https_context 를 바꾸는 것만으로는 이미 만들어진 전역 opener 에
         # 영향을 줄 수 없다. install_opener() 로 이 CA 를 신뢰하는 opener 를 직접 설치해 확실히 쓰게 한다.
+        # H5·H6 이후 프록시는 전역 opener 대신 audit.safe_http.opener 를 쓰므로, 신뢰 CA 는
+        # proxy.UPSTREAM_SSL_CONTEXT 로 넘긴다(전역 opener 도 기존처럼 같이 설치해 둔다).
         cls._orig_opener = urllib.request._opener
         trust_ctx = ssl.create_default_context(cafile=str(tls_ca.ca_cert_path(cls.cfg)))
         urllib.request.install_opener(build_opener(HTTPSHandler(context=trust_ctx)))
+        cls._orig_upstream_ctx = proxy.UPSTREAM_SSL_CONTEXT
+        proxy.UPSTREAM_SSL_CONTEXT = trust_ctx
 
     @classmethod
     def tearDownClass(cls):
         urllib.request._opener = cls._orig_opener
+        proxy.UPSTREAM_SSL_CONTEXT = cls._orig_upstream_ctx
         cls.proxy_server.shutdown()
         cls.proxy_server.server_close()
         cls.upstream.shutdown()
