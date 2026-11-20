@@ -92,6 +92,7 @@ def run_loop(cfg, conn, run: dict, log=print) -> dict:
     run_id, name = run["id"], f"{socket.gethostname()}:{os.getpid()}"
     _set_status(conn, run_id, "RUNNING")
     deadline = time.monotonic() + run["budget"]["timeout_s"]  # ponytail: 'run start' 한 번 기준의 시간 예산
+    ctx.deadline = deadline
     stop, first = None, True
     try:
         while True:

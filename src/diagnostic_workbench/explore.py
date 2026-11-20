@@ -335,8 +335,12 @@ def _context(ctx) -> tuple[str, set[str]]:
     tried = conn.execute(
         "SELECT payload FROM backlog_items WHERE run_id=%s AND kind='exploration' "
         "UNION ALL "  # 거부된 제안도 보여준다 — 그래야 같은 걸 다음 라운드에 또 제안하지 않는다(CLAUDE.md §6)
-        "SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='intent' AND state='REJECTED'",
-        (run_id, run_id)).fetchall()
+        "SELECT payload FROM exploration_nodes WHERE run_id=%s AND kind='intent' AND state='REJECTED' "
+        "UNION ALL "  # J: 작업 안에서 Worker 가 이어서 실행한 단계(2단계 이후)도 — 백로그 payload 에는 안 남는다
+        "SELECT jsonb_build_object('tool', ti.tool, 'args', ti.args) FROM tool_invocations ti "
+        "JOIN backlog_items b ON b.id = ti.backlog_item_id WHERE ti.run_id=%s AND b.kind='exploration' "
+        "AND ti.step_no > 1",
+        (run_id, run_id, run_id)).fetchall()
     present_types = {t.type for t in ctx.targets.values()}  # 이 실행의 대상 유형(path/host/url)
     from . import runs as wb_runs  # 지연 import: runs.py 가 explore 를 임포트해서 순환 참조가 됨
     candidates = prompts.visible_tools(ctx.registry, "planner", wb_runs.tool_overrides(ctx.cfg))

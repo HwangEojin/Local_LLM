@@ -1208,3 +1208,116 @@ H 를 끝낸 뒤 고를 다음 작업 후보다. **이 섹션은 조사 기록�
 - Shannon: https://github.com/KeygraphHQ/shannon
 - Strix: https://pypi.org/project/strix-agent/1.3.0/
 - Escape 다중 사용자 테스트: https://docs.escape.tech/documentation/dast/multi-user-testing/ , AI Pentesting: https://docs.escape.tech/documentation/validate/
+
+---
+
+## J. 작업 단위 다단계 루프 (I2 P1, 2026-11-21 작성, JD1~JD4 확정, 구현 완료)
+
+사용자가 I 후보 중 "작업 단위 다단계 루프"를 다음 작업으로 골랐다(2026-11-21). I 섹션 규칙대로 구현 전에 현재 구조·설계·
+결정 표를 먼저 남긴다.
+
+### J0. 현재 구조 (코드로 확인함)
+
+- 탐색 작업 1건(`backlog_items.kind='exploration'`) = `worker._run_exploration()`: `_worker_decide()`(Worker LLM 이 같은
+  대상·read 전용 도구 안에서 Planner 제안을 바꿀 수 있음) → `run_tool()` **1회** → fact 노드 1개(`yields`) →
+  `_promote_exploration_finding()`(결정론적 신호 판정) → `_resolve_retest()`. 다음 행동은 fact 가 남긴 change_event 로
+  coordinator 가 깨어나 `planner.plan()` → `explore.propose()`(LLM 호출, 최대 3제안)를 다시 거쳐야 생긴다.
+- 즉 "로그인 폼 발견 → 같은 폼에 매개변수 바꿔 재요청 → 응답 비교" 같은 한 의도 안의 후속 단계가 매번 **전체
+  재계획 1회**(컨텍스트 재구성 + Planner LLM 호출 + 정책 사전판정 + 큐 점유)를 거친다.
+- 이미 있는 다단계 선례: `explore._bootstrap_probes()` — 첫 라운드에 한해 LLM 이 read 전용 도구를 한 턴에 하나씩
+  최대 3회 직접 실행(`PROBE_LOG` 로 직전 결과를 보여 줌, 빈 tool = 중단), 모든 호출은 `worker.run_tool()` →
+  `policy.decide()` 를 그대로 거친다. 이번 설계의 뼈대로 쓴다.
+- 스키마는 이미 다단계를 받는다: `tool_invocations.step_no`(체크리스트 작업은 이미 한 작업에 여러 단계),
+  `traces.get_worker_trace(backlog_item_id, step_nos)`, 실행 기록 탭의 `#step_no` 표시. **새 마이그레이션 불필요.**
+- 놓치면 안 되는 지점 2개:
+  1. 임대: `lease_s` 기본 300초. 단계마다 LLM 호출(로컬 Ollama 수십 초) + 도구 호출이 쌓이면 300초를 넘길 수 있고,
+     `backlog.reclaim_expired()` 가 실행 중인 작업을 READY 로 되돌린다(웹 백그라운드 스레드 + CLI 동시 실행 시).
+  2. 중복 제안: `explore._context()` 의 ALREADY_TRIED 는 `backlog_items.payload`(Planner 제안)만 본다 — 작업 안에서
+     추가로 실행한 단계는 Planner 에게 안 보여 같은 호출을 다음 라운드에 또 제안할 수 있다(§6).
+- 레퍼런스: artex-global 은 "worker 가 의도 하나를 여러 도구 호출로 끝까지 진행"한다는 것까지만 확인(I0, 내부 동작
+  미확인). 로컬 artex 는 이 PC 에 없어 **미확인**. 설계는 레퍼런스 이식이 아니라 우리 probe 루프 선례의 확장이다.
+
+### J1. 설계(제안)
+
+`_run_exploration()` 의 1단계(지금 동작 그대로) 뒤에 **같은 의도·같은 자산** 안의 후속 단계 루프를 붙인다.
+
+1. 단계 2..N 마다 Worker LLM 에 `INTENT`(rationale·expected_evidence·stop_condition) + `STEP_LOG`(이 작업에서 이미
+   실행한 단계의 tool/args/성공 여부/발췌 600자/evidence_id — 신뢰 불가 데이터로 표시) + `TOOLS`(worker 역할에 보이는
+   read 전용 도구만)를 주고 `{tool, args, rationale}` 하나를 받는다. 빈 tool = 의도 달성 또는 더 할 것 없음 → 종료.
+2. 실행은 **`run_tool(ctx, it, wr, step_no, "explore", tool, args)` 단일 경로**(§8-1). 대상은 그 작업의 `asset_id`
+   고정 — 다른 자산은 Planner 경로로만(새 대상 확장은 다음 라운드 계획의 몫).
+3. 단계마다 지금과 같은 fact 노드(`yields`, 같은 intent) + 신호 판정 + 출처 체인 — G5 provenance, H2 실행 비교,
+   finding 중복 제거가 **수정 없이** 그대로 적용된다(3단계에서 뜬 SQLi 도 정상 finding).
+4. 종료 조건(하나라도): 빈 tool / 단계 상한(JD1) / read 전용·등록·worker 가시 도구가 아님(거부 기록 후 종료) /
+   `policy.decide()` 가 ALLOW 아님(승인 필요·범위 밖 — 작업 안에서 해결 불가, 기존 승인 경로로 넘김) / 같은
+   tool+args 반복(§6) / 연속 실패 2회 / LLM 오류(조용히 1단계 결과로 끝냄, §7) / 실행 CANCELLED·중지 스위치·
+   벽시계 마감(coordinator 의 `_stop_reason` 과 같은 검사를 단계 사이에 수행). 종료 사유는 `audit_events`
+   (`task_steps_finished`)에 남긴다.
+5. 임대 갱신: 단계마다 `lease_until = now() + lease_s`(`lease_owner` 일치 조건) — 실행 중 회수 방지.
+6. ALREADY_TRIED 보강: `explore._context()` 에 "이 실행에서 실제로 실행한 탐색 단계(tool_invocations, step_no>1)"를
+   추가해 Planner 가 작업 안에서 이미 한 호출을 다시 제안하지 않게 한다.
+7. 작업 상태: 한 단계라도 증거를 냈으면 SUCCEEDED, 하나도 못 냈으면 지금처럼 FAILED.
+8. 적용 제외(1단계만, 지금과 동일): 재검증 작업(`retest_of_finding` — 원래 호출을 그대로 재현해야 의미가 있음),
+   read 전용이 아닌 도구로 시작한 작업(승인이 정확한 tool+args 해시에 묶임), 체크리스트 작업, LLM 없는 실행.
+
+가드레일 대조(§4-1 4단계): 실행 경로는 `run_tool()` 하나뿐이고 단계마다 `policy.decide()`(중지 스위치·범위·인터셉트
+포함)를 다시 받는다. write/승인 필요 도구는 루프에서 고를 수 없어 승인 우회 경로가 생기지 않는다. LLM 출력은
+스키마 검증 후 등록 도구·인자로만 쓰이고 셸/SQL 로 직접 가지 않는다(§8-7). 단계 출력은 신뢰 불가 데이터로 표시해
+프롬프트에 넣는다(§8-5/6).
+
+### J-결정. 구현 전 사용자 확인 필요
+
+| ID | 질문 | 제안 기본값 |
+|---|---|---|
+| JD1 | 작업 1건 안의 단계 수 상한을 둘지. §5/§8-10 은 "자율 탐색은 하드 리밋 없음"인데, 이건 실행 전체 예산이 아니라 **작업 하나의 내부 루프**가 끝없이 돌지 않게 하는 종료 장치(§6, probe 루프의 "최대 3"과 같은 성격)다 | 상한 둠. `workbench.json` 의 `max_task_steps`(기본 5, 1 이면 지금 동작). 실행 전체 탐색 수는 계속 무제한 |
+| JD2 | 기본으로 켤지 | 켬(LLM 사용 실행에 한해). 끄려면 `max_task_steps: 1` |
+| JD3 | 단계 2..N 의 도구 선택 범위 | 같은 자산, worker 역할에 보이는 read 전용 도구만(`_worker_decide` 와 동일 범위) |
+| JD4 | 정책이 ALLOW 가 아닌 단계(승인 필요·범위 밖)를 만나면 | 그 단계는 기존처럼 SKIPPED·거부 증적으로 남기고 루프 종료. 승인 대기 작업으로 자동 전환하지 않음(승인은 Planner→백로그 경로로만) |
+
+**사용자 확정(2026-11-21)**:
+- JD1 = **상한 없음**(제안 기본값과 다름). 종료는 빈 tool / 같은 tool+args 반복 / 연속 실패 2회 / 정책 비허용 / 등록·가시
+  도구 아님 / LLM 오류 / 취소·중지 스위치·벽시계 마감뿐. 그래서 J1-4 의 "단계 상한"과 J-작업순서의 `max_task_steps` 는
+  만들지 않았고, 켜고 끄는 건 불리언 `multi_step_tasks` 로 바꿨다.
+- JD2 = 켬(기본 `multi_step_tasks: true`).
+- JD3 = "**도구 범위 기능을 삭제**" — 루프 안 단계의 read 전용 제한을 두지 않는 것으로 해석했다. worker 역할에 보이는
+  등록 도구 전부가 후보이고 실행 여부는 단계마다 `policy.decide()`(인터셉트 규칙 포함) 하나가 정한다. "같은 자산"
+  고정은 도구 범위가 아니라 정책의 범위 판정 기준이라 유지했다. 기존 기능(1단계 `_worker_decide` 의 read 제한,
+  F3a 의 역할별 `hidden_from` 가시성)은 건드리지 않았다 — 더 넓은 의미였다면 별도 작업으로 다시 정한다.
+- JD4 = 거부 기록 후 루프 종료(제안 기본값).
+
+**구현 완료(2026-11-21)** — 마이그레이션 없음.
+- `worker.py`: `_run_exploration` 을 `_explore_step`(단계 하나 = run_tool → fact(`yields`, payload 에 `step`) → 신호 판정)
+  + `_continue_steps`(루프)로 나눔. 단계마다 임대 갱신, `_steps_stop_reason`(중지 스위치·`ctx.deadline`·CANCELLED),
+  종료 사유는 `audit_events.task_steps_finished`(steps·reason·model). 재검증 작업·1단계 정책 비허용·설정 꺼짐·LLM 없음이면
+  1단계만. 한 단계라도 증거를 내면 SUCCEEDED.
+- 루프의 TOOLS 메뉴는 그 실행의 `allowed_tools` 로도 거른다(차단은 여전히 policy.decide). 실제 실행 검증 중에 발견:
+  기존 planner/probe/`_worker_decide` 의 TOOLS 메뉴는 `--tools` 로 제외한 도구(예: `mcp:burp/send_http1_request`,
+  Ghidra MCP 도구 전부)를 그대로 보여 줘서, 모델이 그걸 제안 → 정책 DENY → 라운드 낭비가 반복됐다. 이번엔 새 코드에만
+  적용했고, 기존 세 경로의 같은 수정은 **후속 과제**로 남긴다.
+- `runs.RunContext.deadline`(coordinator 가 채움), `config.multi_step_tasks`, `prompts.catalog` 에 `worker_step_system`
+  ("작업 안 후속 단계(J)", 웹 에이전트 화면에서 편집 가능), `explore._context` ALREADY_TRIED 에 2단계 이후 실행분 추가,
+  `config/workbench.example.json` 에 옵션 표기.
+- 단계 프롬프트는 실제 모델로 골랐다: 기록된 실제 요청을 qwen2.5:7b 로 재생해 보니 처음 문구는 기대 증거(HTTP 응답
+  헤더)가 아직 없는데도 5/5 멈췄다. "기대 증거가 STEP_LOG 에 없으면 멈추지 말 것"을 넣은 문구는 5/5 `net.http_head` 를
+  골랐고, 이미 다 모은 상태에선 두 문구 모두 1단계와 똑같은 호출을 골라 Python 반복 차단으로 끝났다(종료를 모델 판단에만
+  맡기지 않는 이유).
+- 테스트 `tests/unit/test_task_steps.py` 16개: 다단계 진행·단계별 fact·임대 갱신, 2단계 증거의 반사형 XSS 신호가
+  RULE_CONFIRMED finding 으로 연결됨, 상한 없음(9단계), 반복 차단, 미등록
+  도구, 실행 허용 목록 밖 도구, 비 read 도구 허용(JD3), 정책 비허용 종료(JD4), 연속 실패 2회, 벽시계 마감, 중지 스위치,
+  실행 취소, LLM 오류 폴백, 재검증 제외, 설정 꺼짐, ALREADY_TRIED 반영. 전체 382 통과(실패 0).
+- 실제 실행 확인(로컬 Ollama qwen2.5:7b, 대상 `localhost`, 도구 `net.http_head`/`net.dns_resolve`): 작업 하나가
+  `net.dns_resolve` → `net.http_head :3000`(연결 거부 — 프런트 서버가 꺼져 있었음) → `net.http_head :8420` 3단계로 진행 후
+  반복 차단으로 종료, 다른 작업은 `/api` → `:8420` → `/api/v1` → `/api/v2` 4단계로 모델이 스스로 이어 감. 전 단계
+  `ALLOW`, 실행 기록 탭에 `#1`~`#4` 표시를 브라우저로 확인. 검증용 실행 3건은 소프트 삭제로 정리.
+- **BLOCKED**: J-작업순서 4의 본래 대상(baseline-demo, `localhost:9999` docker-compose)은 Docker Desktop 이 꺼져 있고 demo
+  저장소가 이 PC 작업 폴더에 없어 확인 못 함. 2단계 이후 신호 → finding 은 가짜 도구 단위 테스트로만 확인했고, 실제
+  취약 대상에서 실제 모델이 그 단계까지 가는 것은 **미확인**.
+
+### J-작업 순서(결정 후)
+
+| 순서 | 작업 | 마이그레이션 |
+|---|---|---|
+| 1 | `config.py` `max_task_steps` + `worker._run_exploration` 루프(종료 조건·임대 갱신·감사 기록) + Worker 단계 프롬프트(`prompts` 등록, 웹에서 편집 가능) | — |
+| 2 | `explore._context` ALREADY_TRIED 보강 | — |
+| 3 | 테스트 `test_task_steps.py`: 다단계 진행·빈 tool 종료·상한·반복 차단·비 read 도구 거부·정책 비허용 시 종료·재검증 제외·임대 갱신·각 단계 fact/신호 판정·ALREADY_TRIED 반영 | — |
+| 4 | 실제 로컬 대상(baseline-demo)으로 브라우저 확인(실행 기록 탭에 `#2`, `#3` 단계 표시) | — |

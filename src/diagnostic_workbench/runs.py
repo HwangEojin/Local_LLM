@@ -433,6 +433,7 @@ class RunContext:
     target_ids: dict          # asset_id -> scope target_id
     llm: object = None
     last_call: float = 0.0    # 마지막 도구 호출 시각(monotonic), 호출 간격 제한용
+    deadline: float | None = None  # 벽시계 마감(monotonic). coordinator.run_loop 가 채운다 — 작업 안 단계 루프(J)도 본다
 
 
 def build_context(cfg, conn, run: dict) -> RunContext:
