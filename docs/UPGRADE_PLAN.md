@@ -1324,7 +1324,7 @@ H 를 끝낸 뒤 고를 다음 작업 후보다. **이 섹션은 조사 기록�
 
 ---
 
-## K. 자체 HTTP 요청 도구와 인증 세션 (2026-11-24 작성, KD1~KD4 확정, 구현 PARTIAL — 실제 실행 검증 막힘)
+## K. 자체 HTTP 요청 도구와 인증 세션 (2026-11-24 작성, KD1~KD4 확정, 구현 완료)
 
 2026-11-24 현업 관점 평가의 1순위("페이로드를 보낼 수단이 없다", "로그인 뒤를 시험할 수 없다")다. I1 의 P1 "인증
 세션 관리"와 같은 항목이며, 다중 계정 권한 테스트(IDOR/BOLA)의 전제다.
@@ -1402,3 +1402,20 @@ H 를 끝낸 뒤 고를 다음 작업 후보다. **이 섹션은 조사 기록�
 Planner 가 매 라운드 이 실행에서 허용되지 않은 `mcp:burp/send_http1_request` 만 제안해 정책 DENY 가 반복됐다. 원인은 J 에서
 후속 과제로 남긴 "planner/probe/`_worker_decide` 의 TOOLS 메뉴가 실행 허용 목록으로 걸러지지 않음"이며, 이제 http.request
 의 실사용을 직접 막는다. 60~80B 모델로도 아직 확인하지 않았다(이 PC 에 없음).
+
+**막힘 해소(2026-11-24, 사용자 지시 "지금 고쳐줘")** — LLM 도구 메뉴 수정 두 가지:
+1. `prompts.visible_tools(..., allowed)` 로 planner(`explore._context` — 최초 정찰 프로브도 같은 TOOLS 를 씀)·
+   `_worker_decide`·J 단계 루프 메뉴를 실행의 `allowed_tools` 로 거른다(J 에서 루프에만 넣었던 걸 한 곳으로 모음).
+2. 별개의 원인을 함께 발견: planner 가 도구를 `set(scope_args 종류) <= 대상 유형` 으로 글자 그대로 비교해서 host 대상
+   실행에서 url 인자 도구(`http.request`, `net.http_head`)가 **메뉴에서 통째로 빠지고 있었다**. 정책은 host 대상에
+   url 인자를(그 반대도) 받으므로 `prompts.scope_kinds_fit()`(path↔path, host/url↔host/url)로 바꿨다.
+- 테스트 `test_tool_menu.py` 4개(판정 표, 허용 목록 필터, 실제 `_context` 의 TOOLS 에 host 대상에서도 url 도구가 나오고
+  허용 목록 밖은 빠짐). 전체 404 통과(실패 0).
+- 실제 실행 재확인(qwen2.5:7b, `--tools http.request`, 대상 localhost:3000): 막히기 전 0건이던 제안이 받아들여지고(accepted 1)
+  작업 하나가 `http.request` 9단계를 전부 ALLOW 로 실행, 단계마다 본 증거(응답 13,236바이트) + 파생 증거(보낸 요청,
+  `message/http`)가 저장됨을 DB 로 확인. 검증용 실행은 소프트 삭제.
+- 실측으로 드러난 한계(후속): 7B 모델이 같은 `GET /login` 을 브라우저 헤더만 바꿔 8번 더 보냈다 — 반복 차단은 tool+args
+  완전 일치만 보므로 헤더만 다른 사실상 같은 요청을 못 막고, 단계 상한이 없어(JD1) 그만큼 낭비된다. 최초 정찰 프로브는
+  read 전용만 받아 `http.request` 를 거부한다(다음 라운드 planner 가 대신 제안함 — 의도된 동작).
+- 인증 세션(static/form/json)은 로컬 HTTP 서버 단위 테스트로만 확인했다 — 실제 로그인이 필요한 대상으로 모델 실행은
+  **미확인**(baseline-demo 가 꺼져 있음).

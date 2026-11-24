@@ -74,12 +74,24 @@ def delete_profile(conn, profile_id: int) -> bool:
     return conn.execute("DELETE FROM agent_profiles WHERE id=%s", (profile_id,)).rowcount > 0
 
 
-def visible_tools(tools: dict, role: str, overrides: dict) -> dict:
+def visible_tools(tools: dict, role: str, overrides: dict, allowed: list | None = None) -> dict:
     """role 에게 제안 후보로 보여줄 도구만 남긴다(config/tools.local.json 의 hidden_from). disabled 와 달리
     도구를 레지스트리에서 빼지 않으므로 실행 권한에는 영향 없음 — policy.decide() 는 이 필터와 무관하게
-    전체 레지스트리 기준으로 그대로 판정한다."""
+    전체 레지스트리 기준으로 그대로 판정한다.
+
+    allowed 를 주면(그 실행의 allowed_tools) 그 밖의 도구도 뺀다 — 어차피 policy.decide() 가 DENY 하는 도구를
+    메뉴에 보여 주면 모델이 그걸 계속 제안해 라운드만 낭비한다(K 실제 실행에서 확인). 메뉴만 줄일 뿐 차단은 정책이 한다."""
     hidden = overrides.get("hidden_from", {})
-    return {name: spec for name, spec in tools.items() if role not in hidden.get(name, [])}
+    return {name: spec for name, spec in tools.items()
+            if role not in hidden.get(name, []) and (allowed is None or name in allowed)}
+
+
+def scope_kinds_fit(kinds, target_types) -> bool:
+    """도구의 범위 검사 인자 종류가 이 실행의 대상 유형으로 판정 가능한가. path 인자는 path 대상에서만, host/url
+    인자는 host·url 대상 어느 쪽에서도 판정된다(Policy.check_host/check_url 이 둘 다 받음)."""
+    types = {t for t in target_types}  # 이 모듈은 set() 이라는 함수를 따로 정의하므로 내장 set 을 부르지 않는다
+    net = bool(types & {"host", "url"})
+    return all((k == "path" and "path" in types) or (k in ("host", "url") and net) for k in kinds)
 
 
 def set(conn, name: str, text: str, *, operator: str) -> None:

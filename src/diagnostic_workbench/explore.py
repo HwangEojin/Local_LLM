@@ -344,12 +344,15 @@ def _context(ctx) -> tuple[str, set[str]]:
         (run_id, run_id, run_id)).fetchall()
     present_types = {t.type for t in ctx.targets.values()}  # 이 실행의 대상 유형(path/host/url)
     from . import runs as wb_runs  # 지연 import: runs.py 가 explore 를 임포트해서 순환 참조가 됨
-    candidates = prompts.visible_tools(ctx.registry, "planner", wb_runs.tool_overrides(ctx.cfg))
+    candidates = prompts.visible_tools(ctx.registry, "planner", wb_runs.tool_overrides(ctx.cfg),
+                                       ctx.run.get("allowed_tools"))
     # 위험도 분류 삭제(2026-11) — 등록된 도구는 전부 제안 후보다. 실제 실행은 policy.decide()/인터셉트
     # 규칙(config/intercept_rules.json)이 여전히 똑같이 승인을 요구한다(shell.* 등도 그 규칙으로 걸림).
+    # 대상 유형으로 판정할 수 없는 도구는 항상 거부되므로 뺀다. 예전엔 `{"url"} <= {"host"}` 처럼 종류를 글자 그대로
+    # 비교해서 host 대상에서 url 인자 도구(http.request, net.http_head)가 메뉴에서 통째로 빠졌다(K 에서 발견).
     tools = {name: {"args_schema": spec.args_schema, "scope_checked_args": spec.scope_args}
              for name, spec in candidates.items()
-             if set(spec.scope_args.values()) <= present_types}  # 대상 유형이 안 맞는 도구는 항상 거부되므로 뺀다
+             if prompts.scope_kinds_fit(spec.scope_args.values(), present_types)}
     past = traces.search_all_worker_traces(conn, status="FAILED", exclude_run=run_id, limit=5)
     known = {i for r in results for i in r["evidence_ids"]} | {f["evidence_id"] for f in facts}
     fact_entries = [{"evidence_ids": [f["evidence_id"]], **f["payload"]} for f in facts]  # 출력 스키마와 키 이름을 맞춘다

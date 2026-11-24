@@ -846,7 +846,8 @@ def _worker_decide(ctx, it) -> tuple[str, dict]:
     if not ctx.llm or spec is None or not spec.read_only:
         return tool, args
     from . import runs as wb_runs  # 지연 import: runs.py -> explore.py -> worker.py 순환 참조를 피함
-    candidates = prompts.visible_tools(ctx.registry, "worker", wb_runs.tool_overrides(ctx.cfg))
+    candidates = prompts.visible_tools(ctx.registry, "worker", wb_runs.tool_overrides(ctx.cfg),
+                                       ctx.run.get("allowed_tools"))
     read_tools = {name: {"args_schema": s.args_schema} for name, s in candidates.items() if s.read_only}
     tried = ctx.conn.execute(
         "SELECT payload FROM backlog_items WHERE run_id=%s AND kind='exploration' AND asset_id=%s "
@@ -935,10 +936,8 @@ def _continue_steps(ctx, it, wr, step_log: list) -> bool:
     """
     from . import runs as wb_runs  # 지연 import: runs.py -> explore.py -> worker.py 순환 참조를 피함
     conn = ctx.conn
-    candidates = prompts.visible_tools(ctx.registry, "worker", wb_runs.tool_overrides(ctx.cfg))
-    allowed = ctx.run.get("allowed_tools")  # 메뉴만 줄인다 — 실제 차단은 여전히 policy.decide() 가 한다
-    if allowed is not None:
-        candidates = {n: s for n, s in candidates.items() if n in allowed}
+    candidates = prompts.visible_tools(ctx.registry, "worker", wb_runs.tool_overrides(ctx.cfg),
+                                       ctx.run.get("allowed_tools"))  # 메뉴만 줄인다 — 차단은 policy.decide()
     tools_desc = {name: {"args_schema": s.args_schema} for name, s in candidates.items()}
     intent = conn.execute(
         "SELECT payload->>'rationale' AS rationale, payload->>'expected_evidence' AS expected_evidence, "
