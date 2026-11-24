@@ -48,7 +48,39 @@ _ORIGIN_HEADER = re.compile(r"^(?:Origin|Referer):\s*([^\r\n]+)", re.M | re.I)
 _COOKIE_HEADER = re.compile(r"^Cookie:\s*([^\r\n]+)", re.M | re.I)
 
 
+_HTTP_TOOL_KEYS = ("method", "headers", "body", "session", "raw")
+
+
+def http_request_text(args: dict) -> str | None:
+    """http.request(UPGRADE_PLAN.md K) 인자를 원시 HTTP 요청 문자열로 그린다 — 기존 원시 요청 파서(CSRF 분류,
+    fingerprint v2)가 이 도구에도 그대로 적용되게 한다. `url` 과 K 전용 키가 함께 있을 때만(다른 도구의 url 인자는
+    건드리지 않음). Host 는 항상 url 의 호스트다(실행 시에도 그렇게 고정). 세션 값은 모르므로 자리표시자 쿠키를 넣는다
+    — CSRF 분류가 '인증된 요청'임을 알아보게."""
+    if not isinstance(args, dict) or not isinstance(args.get("url"), str) or \
+            not any(k in args for k in _HTTP_TOOL_KEYS):
+        return None
+    u = urllib.parse.urlsplit(args["url"])
+    if isinstance(args.get("raw"), str) and args["raw"].strip():
+        text = args["raw"].replace("\r\n", "\n").lstrip("\n")
+        head, _, body = text.partition("\n\n")
+        lines = head.split("\n")
+        headers = [ln for ln in lines[1:] if ln.split(":", 1)[0].strip().lower() != "host"]
+        first = lines[0]
+    else:
+        target = (u.path or "/") + (f"?{u.query}" if u.query else "")
+        first = f"{str(args.get('method') or 'GET').upper()} {target} HTTP/1.1"
+        hdrs = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        headers = [f"{k}: {v}" for k, v in hdrs.items() if str(k).lower() != "host"]
+        body = args.get("body") if isinstance(args.get("body"), str) else ""
+    if args.get("session"):
+        headers.append(f"Cookie: wb_session={{{{session:{args['session']}}}}}")
+    return "\r\n".join([first, f"Host: {u.netloc}", *headers]) + "\r\n\r\n" + body
+
+
 def _raw_http_request(args: dict) -> str | None:
+    rendered = http_request_text(args)
+    if rendered is not None:
+        return rendered if _METHOD_LINE.search(rendered) else None
     for value in _flatten_strings(args):
         if _METHOD_LINE.search(value):
             return value

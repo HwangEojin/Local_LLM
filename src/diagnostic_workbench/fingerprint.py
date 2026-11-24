@@ -163,6 +163,14 @@ def locate(args: dict) -> dict | None:
     """도구 호출 인자에서 {method, path, params} 를 뽑는다. 메서드·경로를 못 얻으면 None."""
     if not isinstance(args, dict):
         return None
+    rendered = signals.http_request_text(args)  # http.request(K): 인자 전체가 요청 하나 — 매개변수는 그 요청에서만 뽑는다
+    if rendered is not None:
+        m = _METHOD_LINE.search(rendered)
+        if m is None:
+            return None
+        target = m.group(2)
+        path = strip_query(urllib.parse.urlsplit(target).path or "/") if "://" in target else strip_query(target)
+        return {"method": m.group(1), "path": path, "params": sorted(_raw_param_names(rendered, target))}
     raw = _find_raw_request(args)
     url = _url_arg(args)
     skip: set[str] = set()

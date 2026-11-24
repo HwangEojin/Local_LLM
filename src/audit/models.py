@@ -68,6 +68,9 @@ class ToolOutput:
     tool_version: str
     truncated: bool = False
     meta: dict = field(default_factory=dict)
+    # (이름, MIME, 확장자, 바이트) — 본 증거에서 파생된 별도 증거로 저장한다(예: http.request 가 실제로 보낸 요청).
+    # 신호 판정은 data 만 본다 — 요청에 든 페이로드가 '응답에 반사됐다'로 잘못 잡히지 않게 분리한다.
+    attachments: list = field(default_factory=list)
 
 
 class ToolError(AuditError):

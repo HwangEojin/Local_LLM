@@ -23,7 +23,7 @@ from audit.models import AuditError, PolicyDenied, ToolError, ToolOutput
 from audit.policy import mask_secrets, redact, secret_values
 from audit.verdict import decide, evaluate_rule
 
-from . import backlog, db, evidence, fingerprint, notify, policy, prompts, tools
+from . import backlog, db, evidence, fingerprint, http_tool, notify, policy, prompts, tools
 
 _LEGACY_TO_DB = {"MANUAL_REVIEW": "NEEDS_REVIEW"}
 _WORKER_PICK_SCHEMA = {
@@ -572,6 +572,9 @@ def run_tool(ctx, it, worker_run_id, step, req_id, tool, args):
             for mime, ext, raw in evidence.mcp_images(out.data):
                 evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, media_type=mime, ext=ext, derived_from=eid,
                                output=ToolOutput(raw, out.tool_version), **{**common, "requirement_id": f"{req_id}:image"})
+        for label, mime, ext, raw in out.attachments:  # 예: http.request 가 실제로 보낸 요청(K)
+            evidence.store(ctx.conn, ctx.cfg.evidence_dir, args=d.args, media_type=mime, ext=ext, derived_from=eid,
+                           output=ToolOutput(raw, out.tool_version), **{**common, "requirement_id": f"{req_id}:{label}"})
         record_invocation(ctx, it, worker_run_id, step, tool, d, "SUCCEEDED", started=started, evidence_id=eid,
                           tool_version=out.tool_version, outcome_text=out.data[:4000].decode("utf-8", "replace"))
         _observe_assets(ctx, it, tool, d.args, out, eid)
@@ -886,7 +889,9 @@ def _explore_step(ctx, it, wr, step_no, tool, args):
     eid, out = run_tool(ctx, it, wr, step_no, "explore", tool, args)
     payload = {"tool": tool, "success": out is not None, "step": step_no}
     if out is not None:  # 발췌는 다음 계획의 참고 자료다(신뢰할 수 없는 데이터, 비밀 값은 가린다)
-        payload["excerpt"] = mask_secrets(out.data[:600].decode("utf-8", errors="replace"))
+        # K: 세션 쿠키·토큰·자격 증명처럼 이 프로세스가 아는 비밀 값은 패턴에 안 걸려도 그대로 가린다
+        payload["excerpt"] = redact(out.data[:600].decode("utf-8", errors="replace"),
+                                    http_tool.store_for(ctx.cfg).known_secrets())
         payload["truncated"] = out.truncated or len(out.data) > 600
     fact = ctx.conn.execute(
         "INSERT INTO exploration_nodes (run_id, kind, state, origin, payload) VALUES (%s,'fact','RECORDED','worker',%s) "

@@ -1321,3 +1321,84 @@ H 를 끝낸 뒤 고를 다음 작업 후보다. **이 섹션은 조사 기록�
 | 2 | `explore._context` ALREADY_TRIED 보강 | — |
 | 3 | 테스트 `test_task_steps.py`: 다단계 진행·빈 tool 종료·상한·반복 차단·비 read 도구 거부·정책 비허용 시 종료·재검증 제외·임대 갱신·각 단계 fact/신호 판정·ALREADY_TRIED 반영 | — |
 | 4 | 실제 로컬 대상(baseline-demo)으로 브라우저 확인(실행 기록 탭에 `#2`, `#3` 단계 표시) | — |
+
+---
+
+## K. 자체 HTTP 요청 도구와 인증 세션 (2026-11-24 작성, KD1~KD4 확정, 구현 PARTIAL — 실제 실행 검증 막힘)
+
+2026-11-24 현업 관점 평가의 1순위("페이로드를 보낼 수단이 없다", "로그인 뒤를 시험할 수 없다")다. I1 의 P1 "인증
+세션 관리"와 같은 항목이며, 다중 계정 권한 테스트(IDOR/BOLA)의 전제다.
+
+### K0. 현재 구조 (코드로 확인함)
+
+- 내장 HTTP 도구는 `net.http_head`(HEAD 만, `audit/adapters/net_tools.py`) 하나. 메서드·헤더·본문을 지정한 요청은
+  Burp MCP `send_http1_request`(Burp 실행 중일 때만, 매번 승인)에만 의존한다.
+- 재사용할 것: `audit.safe_http.opener()`(리다이렉트 안 따라감·환경 변수 프록시 무시, H5/H6), 인터셉트 규칙의
+  `arg_pattern`(인자 JSON 정규식 — 메서드별 승인이 규칙만으로 가능), `fingerprint.locate()`·`signals.classify_csrf()`
+  의 원시 HTTP 요청 파서(G1/H1).
+- 비어 있는 것: 계정·세션 저장/로그인 절차 없음. `audit.policy.mask_secrets` 는 `Cookie`/`Set-Cookie` 값을 가리지
+  않는다 — 세션을 붙이면 세션 값이 증거 인자·LLM 발췌로 그대로 흘러간다.
+- `test_intercept_rules_cover_nonread_tools` 는 "비읽기 도구마다 빈 인자로도 걸리는 규칙"을 요구한다 — 메서드별
+  조건부 규칙을 쓰면 이 테스트의 기준을 "그 도구를 이름으로 지정한 규칙이 있다"로 바꿔야 한다.
+
+### K1. `http.request` 도구 (설계)
+
+- 인자: `{url(절대 URL, 범위 검사), method(enum), headers(객체, 선택), body(문자열, 선택), session(세션 이름, 선택)}`.
+  응답: `{status, headers, body(최대 max_bytes), redirect_not_followed?}` 를 원시 HTTP 응답 형태 텍스트로 증거 저장.
+- 실행은 `safe_http.opener()` 그대로(3xx 는 따라가지 않고 Location 만 기록 — 따라가려면 새 호출이 정책을 다시 받음).
+- `read_only=False`(POST 재시도 방지). 승인은 인터셉트 규칙으로만(KD1).
+- `signals`/`fingerprint` 에 구조화 인자 → 원시 요청 문자열 렌더러 하나를 추가해 기존 신호 판정·fingerprint v2·CSRF
+  분류가 이 도구에도 그대로 적용되게 한다.
+- `Host` 헤더는 인자로 덮어쓸 수 없다(URL 의 호스트로 고정) — 평가 3절의 가상호스트 우회 우려를 이 도구에서는 막는다.
+
+### K2. 인증 세션 (설계)
+
+- 설정 `config/auth_sessions.json`(비밀값 없음, Git 추적 가능): 세션 이름마다 `target_id`, 방식, 자격 증명을 담은
+  **환경 변수 이름**(`env_from`, E 섹션 MCP 패턴). DB·설정 파일에 비밀번호·토큰 평문을 두지 않는다.
+- 방식(KD3): `static`(운영자가 직접 로그인해 얻은 쿠키/헤더 값을 환경 변수로 넘김 — SSO·MFA 대상도 커버),
+  `form`/`json`(로그인 요청 템플릿 + `{{username}}`/`{{password}}` 치환, 응답의 Set-Cookie 또는 JSON 토큰 경로를 세션으로
+  저장). 로그인 요청도 범위 검사·증거·감사 로그를 남긴다.
+- 세션 상태는 실행 프로세스 메모리에만(재시작하면 다시 로그인). LLM 에게는 세션 **이름**만 보인다.
+- 마스킹: 세션 값·자격 증명 값은 알려진 비밀로 등록해 증거 인자·발췌·LLM 프롬프트에서 가린다(KD4).
+- 범위 밖(이번에 안 함): TOTP, 브라우저 녹화 로그인(Playwright), 다중 계정 비교 신호(IDOR/BOLA) — 세션이 생긴 뒤 별도 항목.
+
+### K-결정. 구현 전 사용자 확인 필요
+
+| ID | 질문 | 제안 기본값 |
+|---|---|---|
+| KD1 | 메서드별 승인 | GET/HEAD/OPTIONS 는 자동, POST/PUT/PATCH/DELETE 는 인터셉트 규칙으로 사람 승인 |
+| KD2 | 인자 형식 | 구조화 인자(method/url/headers/body) — 작은 로컬 모델이 원시 요청보다 정확히 만든다 |
+| KD3 | 세션 획득 방식(1차) | `static` + `form`/`json` 둘 다 |
+| KD4 | 증거 원본 파일의 세션 값 | 자리표시자(`{{session:이름}}`)로 바꿔 저장, 응답의 Set-Cookie 값도 가림 |
+
+**사용자 확정(2026-11-24)**:
+- KD1 = **모두 자동**(제안 기본값과 다름) — http.request 에 인터셉트 규칙을 두지 않는다. `read_only=False` 는 재시도
+  안전성(POST 를 다시 보내지 않음) 때문에 유지하고, `test_intercept_rules_cover_nonread_tools` 에 결정 근거와 함께 예외로
+  명시했다(다른 도구의 규칙 깜빡임은 계속 잡힘). 운영자가 나중에 `intercept_rules.json` 에 규칙을 추가하면 바로 적용된다.
+- KD2 = "60~80B 모델이 감당 가능한 수준" — 사용할 모델이 60~80B 급이라 **구조화 인자와 원시 요청(`raw`) 둘 다** 받는
+  것으로 해석했다. `url` 은 항상 필수이고 유일한 범위 기준이며, Host 는 항상 `url` 에서 온다(raw 로도 못 바꿈).
+- KD3 = static + form/json. KD4 = **원본 그대로**(보낸 요청 증거에 세션 값이 남음). LLM 발췌·DB 인자에서는 가린다.
+
+**구현(2026-11-24)** — 마이그레이션 없음.
+- `src/diagnostic_workbench/http_tool.py`: `http.request`(safe_http 그대로 — 리다이렉트 안 따라감·환경 프록시 무시,
+  Host 고정, raw 절대 대상이 다른 호스트면 거부, `insecure` 로만 TLS 검증 끔, 브라우저 UA 기본) + `SessionStore`
+  (`config/auth_sessions.json`, 예시 `config/auth_sessions.example.json`; static/form/json, 로그인 1회 후 재사용, 재발급
+  쿠키 반영, 로그인 URL·요청 URL 이 세션 대상 범위 안인지 확인, 프로세스당 홈별 저장소 하나).
+- 증거: 본 증거 = **응답만**, 보낸 요청(+로그인 교환, 비밀번호 제외) = `ToolOutput.attachments` → `run_tool` 이
+  `derived_from` 파생 증거(`<req>:request`, `message/http`)로 저장. 설계 중 발견: 요청과 응답을 한 덩어리로 두면 XSS
+  검사(`text.find(probe)`)가 요청 속 페이로드를 늘 '반사'로 잡는다 — **Burp MCP `send_http1_request` 출력도 요청+응답을
+  함께 담고 있어 같은 오판 가능성이 있다(미확인, 후속 점검 대상)**.
+- 파서 연동: `signals.http_request_text()` 가 http.request 인자를 원시 요청으로 그려 CSRF 분류·fingerprint v2 가 그대로
+  적용된다(fingerprint 는 이 경우 그 요청에서만 매개변수를 뽑는다 — url/body 키 이름이 매개변수로 섞이지 않게).
+- 마스킹: `mask_secrets` 에 `Cookie`/`Set-Cookie`/`Authorization` 값(원시 헤더 줄·JSON 둘 다) 추가. 세션 값·자격 증명·
+  토큰은 알려진 비밀로 등록돼 fact 발췌(`worker._explore_step`)와 교차 검증 증거(`explore.verify_llm_finding`)에서 가린다.
+- 테스트: `test_http_request_tool.py` 17개(로컬 HTTP 서버·임시 설정 홈 — 응답/요청 분리, Host 고정, raw 다른 호스트
+  거부, 리다이렉트 미추적, POST·raw, 범위 밖 URL 거부, static/form/json 세션, 로그인 실패, 쿠키 재발급, 세션 대상 밖
+  거부(요청 전에 막음), 환경 변수 누락, XSS 신호가 요청이 아닌 응답만 봄, fingerprint 매개변수, CSRF 분류, 쿠키 마스킹)
+  + `test_http_request_worker.py` 1개(실제 DB: 파생 증거 저장, 발췌 가림). 전체 400 통과(실패 0).
+- 구현 중 발견·수정: static 쿠키를 `이름=값` 통째로만 비밀 등록해 값만 되돌아오면 발췌에서 안 가려지던 것.
+
+**미확인(BLOCKED)**: 실제 모델 실행 검증. qwen2.5:7b 로 `--tools http.request` 실행을 15분 돌렸으나 도구 호출 0건 —
+Planner 가 매 라운드 이 실행에서 허용되지 않은 `mcp:burp/send_http1_request` 만 제안해 정책 DENY 가 반복됐다. 원인은 J 에서
+후속 과제로 남긴 "planner/probe/`_worker_decide` 의 TOOLS 메뉴가 실행 허용 목록으로 걸러지지 않음"이며, 이제 http.request
+의 실사용을 직접 막는다. 60~80B 모델로도 아직 확인하지 않았다(이 PC 에 없음).

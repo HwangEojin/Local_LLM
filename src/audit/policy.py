@@ -16,6 +16,9 @@ _SECRET_PATTERNS = [
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AKIA****"),
     (re.compile(r"(?i)((?:\w*[_-])?(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)"
                 r"[\"']?\s*[=:]\s*[\"']?)[^\s\"',;}]+"), r"\1****"),
+    # K(UPGRADE_PLAN.md): 세션 쿠키·인증 헤더 값. 원시 헤더 줄 형태와 JSON(헤더 객체) 형태 둘 다.
+    (re.compile(r"(?im)^((?:set-)?cookie\s*:\s*|(?:proxy-)?authorization\s*:\s*)[^\r\n]+"), r"\1****"),
+    (re.compile(r"(?i)(\"(?:set-)?cookie\"\s*:\s*\"|\"(?:proxy-)?authorization\"\s*:\s*\")[^\"]*"), r"\1****"),
 ]
 
 

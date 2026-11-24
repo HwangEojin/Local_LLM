@@ -30,7 +30,7 @@ from pathlib import Path
 
 from audit.models import ToolError, ToolOutput, ToolSpec
 
-from . import tls_inspect
+from . import http_tool, tls_inspect
 
 _KILL_POLL_S = 0.2
 
@@ -178,7 +178,7 @@ def parse_nmap_xml(data: bytes) -> list[dict]:
 
 
 def make_tools(cfg) -> dict[str, ToolSpec]:
-    tools: dict[str, ToolSpec] = {}
+    tools: dict[str, ToolSpec] = {"http.request": http_tool.make_tool(cfg)}  # K: nmap 유무와 무관하게 항상 등록
     timeout = 300
 
     def inspect_tls(args):

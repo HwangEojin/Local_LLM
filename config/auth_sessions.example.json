@@ -1,0 +1,32 @@
+{
+  "sessions": [
+    {
+      "name": "user-a",
+      "target_id": "baseline-demo",
+      "type": "static",
+      "headers_from": {"Cookie": "WB_SESSION_USER_A_COOKIE"}
+    },
+    {
+      "name": "user-b",
+      "target_id": "baseline-demo",
+      "type": "form",
+      "login_url": "http://localhost:9999/login",
+      "fields": {"username": "{{username}}", "password": "{{password}}"},
+      "username_from": "WB_USER_B_ID",
+      "password_from": "WB_USER_B_PW",
+      "success_status": [200, 302]
+    },
+    {
+      "name": "api-admin",
+      "target_id": "baseline-demo",
+      "type": "json",
+      "login_url": "http://localhost:9999/api/login",
+      "fields": {"email": "{{username}}", "password": "{{password}}"},
+      "username_from": "WB_API_ADMIN_ID",
+      "password_from": "WB_API_ADMIN_PW",
+      "token_path": "data.token",
+      "token_header": "Authorization",
+      "token_prefix": "Bearer "
+    }
+  ]
+}
